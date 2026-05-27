@@ -25,6 +25,13 @@ ONNX). The Go inference layer (`onnxruntime_go`), OPA integration, in-memory gra
 (Memgraph/FalkorDB), online RTEC and INT8/TensorRT are **out of scope** here but the
 code is structured to enable them (static shapes, masking, ego-network/bucketing).
 
+## Overview (v2 - Temporal Graph Network)
+
+A second experimental model has been introduced to analyze continuous, real-time data streams using **Temporal Graph Networks (TGN)**.
+Unlike the static GAE, the TGN maintains a historical "memory" of node behavior (IPs and Users) and evaluates every new interaction sequentially.
+- **Unsupervised Anomaly Detection**: The TGN is trained purely on benign streaming interactions via Negative Sampling (predicting structural and contextual edge likelihood).
+- **Zero Trust Edge Features**: Contextual data like `JA3_trust` and `Snort` alerts are injected directly as edge features, allowing the network to penalize anomalous requests instantly.
+
 ## Setup
 
 System Python is 3.14 (no torch wheels yet); use Python 3.12.
@@ -57,8 +64,11 @@ python -m graphagate.export_onnx        # -> public/model_{S,M,L}.onnx
 Per semplificare l'esecuzione sono stati predisposti dei profili in `docker-compose.yml`:
 
 ```bash
-# Esegue il training del modello
+# Esegue il training del modello statico GAE
 docker compose --profile training up
+
+# Esegue il training del modello streaming temporale TGN
+docker compose --profile training-tgn up
 
 # Esegue l'inferenza (valutazione ed export ONNX)
 docker compose --profile inference up
@@ -78,9 +88,12 @@ docker run --rm --gpus all -v "$PWD/public:/app/public" graphagate graphagate.ex
 src/config.py            # hyper-parameters, static buckets (S/M/L), paths
 src/data/schema.py       # node/edge types, fixed-size feature layout (shared contract)
 src/data/synthetic.py    # benign IAM graph generator + anomaly injection + to_dense()
+src/data/stream_synthetic.py # streaming mock data generator (structural/contextual anomalies)
 src/model/gae.py         # DenseGCN encoder + structure/attribute decoders (DOMINANT)
+src/model/tgn.py         # Temporal Graph Network architecture (TGNMemory + LinkPredictor)
 src/model/losses.py      # reconstruction loss + per-node anomaly score
-src/train.py             # unsupervised training on benign graphs
+src/train.py             # unsupervised training on benign graphs (GAE)
+src/train_tgn.py         # unsupervised self-supervised training loop for the TGN model
 src/score.py             # inference, [0,1] calibration, ROC/PR-AUC evaluation
 src/export_onnx.py       # ONNX export per bucket (dynamo=True) + parity check
 docker/Dockerfile        # CPU image for train / score / export
