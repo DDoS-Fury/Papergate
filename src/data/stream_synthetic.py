@@ -27,19 +27,31 @@ def generate_streaming_data(num_users=50, num_ips=100, num_resources=20, num_eve
         
         # Random interaction: IP -> Resource (simplification, real case might be User -> Resource via IP)
         # Here we simulate IP -> Resource
-        src = np.random.randint(num_users, num_users + num_ips)
-        dst = np.random.randint(num_users + num_ips, total_nodes)
+        src_val = np.random.randint(num_users, num_users + num_ips)
         
-        # Edge features: [JA3_trust(0/1), snort_alert(0/1), sonda1, sonda2, sonda3, action_type]
+        # Pattern strutturale: ogni IP ha una "risorsa preferita" (es. il suo server di dipartimento)
+        pref_resource = (src_val % num_resources) + num_users + num_ips
+        
         is_anomalous = np.random.rand() < 0.05
         
         if is_anomalous:
+            # L'anomalia rompe il pattern (va su una risorsa a caso non sua)
+            dst_val = np.random.randint(num_users + num_ips, total_nodes)
+            if dst_val == pref_resource:
+                dst_val = num_users + num_ips + ((dst_val - num_users - num_ips + 1) % num_resources)
+            
             ja3 = 0.0
             snort = 1.0
             s1, s2, s3 = np.random.rand(3) > 0.5
             action = np.random.randint(0, 5)
             label = 1
         else:
+            # Comportamento sano: 90% delle volte va sulla sua risorsa, 10% su risorse comuni
+            if np.random.rand() < 0.90:
+                dst_val = pref_resource
+            else:
+                dst_val = np.random.randint(num_users + num_ips, total_nodes)
+                
             ja3 = 1.0
             snort = 0.0
             s1, s2, s3 = 0.0, 0.0, 0.0
@@ -48,8 +60,8 @@ def generate_streaming_data(num_users=50, num_ips=100, num_resources=20, num_eve
             
         edge_feat = [ja3, snort, float(s1), float(s2), float(s3), float(action)]
         
-        src_nodes.append(src)
-        dst_nodes.append(dst)
+        src_nodes.append(src_val)
+        dst_nodes.append(dst_val)
         timestamps.append(current_time)
         edge_features.append(edge_feat)
         labels.append(label)
