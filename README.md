@@ -52,13 +52,24 @@ python -m graphagate.score
 python -m graphagate.export_onnx        # -> public/model_{S,M,L}.onnx
 ```
 
-### Docker (CPU)
+### Docker Compose (GPU)
+
+Per semplificare l'esecuzione sono stati predisposti dei profili in `docker-compose.yml`:
 
 ```bash
+# Esegue il training del modello
+docker compose --profile training up
+
+# Esegue l'inferenza (valutazione ed export ONNX)
+docker compose --profile inference up
+```
+
+In alternativa, con comandi Docker diretti:
+```bash
 docker build -f docker/Dockerfile -t graphagate .
-docker run --rm -v "$PWD/public:/app/public" graphagate                      # train
-docker run --rm -v "$PWD/public:/app/public" graphagate graphagate.score --eval
-docker run --rm -v "$PWD/public:/app/public" graphagate graphagate.export_onnx
+docker run --rm --gpus all -v "$PWD/public:/app/public" graphagate                      # train
+docker run --rm --gpus all -v "$PWD/public:/app/public" graphagate graphagate.score --eval
+docker run --rm --gpus all -v "$PWD/public:/app/public" graphagate graphagate.export_onnx
 ```
 
 ## Project layout

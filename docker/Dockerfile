@@ -1,16 +1,22 @@
-# Graphagate — CPU training / inference / ONNX-export image.
+# Graphagate — GPU training / inference / ONNX-export image.
 #
 # Build context is the repository root:
 #     docker build -f docker/Dockerfile -t graphagate .
 #
-# torch is installed from PyPI; on linux/arm64 that resolves to a CPU-only
-# aarch64 wheel. GPU/CUDA training and TensorRT compilation are out of scope for
-# this image (they belong to the NVIDIA workstation described in the document).
-FROM python:3.12-slim
+# Uses CUDA 13 base image for RTX Blackwell support.
+FROM nvidia/cuda:13.2.1-base-ubuntu24.04
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
-    PIP_NO_CACHE_DIR=1
+    PIP_NO_CACHE_DIR=1 \
+    DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3 python3-pip python3-venv \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN python3 -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
 
 WORKDIR /app
 
@@ -24,8 +30,8 @@ RUN pip install --upgrade pip && pip install -e .
 VOLUME ["/app/public"]
 
 # Run any module: train (default), score, export_onnx.
-#   docker run --rm graphagate                      # -> graphagate.train
-#   docker run --rm graphagate graphagate.score --eval
-#   docker run --rm graphagate graphagate.export_onnx
+#   docker run --rm --gpus all -v "$PWD/public:/app/public" graphagate                      # -> graphagate.train
+#   docker run --rm --gpus all -v "$PWD/public:/app/public" graphagate graphagate.score --eval
+#   docker run --rm --gpus all -v "$PWD/public:/app/public" graphagate graphagate.export_onnx
 ENTRYPOINT ["python", "-m"]
 CMD ["graphagate.train"]

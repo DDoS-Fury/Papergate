@@ -1,0 +1,44 @@
+services:
+  # Base configuration for all services
+  x-base: &base
+    profiles: ["internal-base"]
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    image: graphagate
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    volumes:
+      - ./public:/app/public
+      - ./src:/app/src
+
+  # --- PROFILO TRAINING ---
+  train:
+    <<: *base
+    profiles: ["training"]
+    container_name: graphagate-train
+    command: ["graphagate.train"]
+
+  train-tgn:
+    <<: *base
+    profiles: ["training-tgn"]
+    container_name: graphagate-train-tgn
+    command: ["graphagate.train_tgn"]
+
+  # --- PROFILO INFERENZA ---
+  score:
+    <<: *base
+    profiles: ["inference"]
+    container_name: graphagate-score
+    command: ["graphagate.score", "--eval"]
+
+  export:
+    <<: *base
+    profiles: ["inference"]
+    container_name: graphagate-export
+    command: ["graphagate.export_onnx"]

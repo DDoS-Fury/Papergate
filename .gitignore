@@ -22,3 +22,4 @@ public/*.json
 .DS_Store
 .idea/
 .vscode/
+.antigravitycli/
