@@ -3,7 +3,7 @@ import torch.nn as nn
 from torch_geometric.nn.models.tgn import (
     TGNMemory,
     IdentityMessage,
-    LastAggregator,
+    MeanAggregator,
 )
 from torch_geometric.nn import TransformerConv
 
@@ -42,7 +42,7 @@ class ZTATemporalGraphNetwork(nn.Module):
             memory_dim=memory_dim,
             time_dim=time_dim,
             message_module=IdentityMessage(msg_dim, memory_dim, time_dim),
-            aggregator_module=LastAggregator(),
+            aggregator_module=MeanAggregator(),
         )
         
         self.gnn = GraphAttentionEmbedding(

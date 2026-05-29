@@ -28,6 +28,23 @@ docker compose --profile training-tgn up
 ```
 *(Esegue in background `python -m graphagate.train_tgn`)*
 
+### 1.2 Verifica correttezza streaming (TGN)
+Dopo il training TGN (che salva `public/tgn_checkpoint.pt` e `public/tgn_stats.json`),
+questo profilo ricarica l'artifact e verifica le proprietà di serving real-time:
+determinismo del reload, gate anti-poisoning della memoria (un evento anomalo non
+aggiorna la baseline) e ammissione di entità mai viste (nodi dinamici).
+
+```bash
+docker compose --profile verify-tgn up
+```
+*(Esegue `python -m graphagate.verify_tgn`)*
+
+Gli artifact TGN persistiti in `public/` sono:
+- `tgn_checkpoint.pt` — pesi + buffer di memoria + raw-message store (per continuare
+  lo stato temporale tra riavvii);
+- `tgn_stats.json` — soglia di decisione calibrata, `capacity` e mappatura
+  `NodeRegistry` (entità esterne → slot di memoria).
+
 ### 2. Inferenza ed Esportazione (ONNX)
 Questo profilo gestisce sia la valutazione delle anomalie (anomaly score) sia l'esportazione del modello per i deployment in produzione (es. OPA + onnxruntime_go).
 

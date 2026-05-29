@@ -31,6 +31,17 @@ A second experimental model has been introduced to analyze continuous, real-time
 Unlike the static GAE, the TGN maintains a historical "memory" of node behavior (IPs and Users) and evaluates every new interaction sequentially.
 - **Unsupervised Anomaly Detection**: The TGN is trained purely on benign streaming interactions via Negative Sampling (predicting structural and contextual edge likelihood).
 - **Zero Trust Edge Features**: Contextual data like `JA3_trust` and `Snort` alerts are injected directly as edge features, allowing the network to penalize anomalous requests instantly.
+- **Real-time serving**: `src/serve_tgn.py` exposes `load_model` + `score_event`. Scoring is
+  event-by-event; memory is updated **only for events classified benign** (anti-poisoning), and a
+  `NodeRegistry` admits previously unseen entities at runtime (dynamic, unbounded node space).
+  Training persists `public/tgn_checkpoint.pt` (weights + memory + raw-message store) and
+  `public/tgn_stats.json` (calibrated threshold + registry). Verify with
+  `python -m graphagate.verify_tgn`.
+
+> **Known limitation (v2):** the embedding layer message-passes over the *target edge itself*
+> rather than over historical temporal neighbours (a canonical TGN uses a neighbour loader), and
+> static node features are not yet consumed. This makes detection lean on contextual edge features;
+> robust *structural* anomaly detection (e.g. lateral movement) needs the neighbour-loader step.
 
 ## Setup
 

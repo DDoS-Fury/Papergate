@@ -19,6 +19,10 @@ ARTIFACTS_DIR: Path = REPO_ROOT / "public"
 CHECKPOINT_PATH: Path = ARTIFACTS_DIR / "checkpoint.pt"
 NORM_STATS_PATH: Path = ARTIFACTS_DIR / "norm_stats.json"
 
+# Streaming TGN (v2) deployment artifacts.
+TGN_CHECKPOINT_PATH: Path = ARTIFACTS_DIR / "tgn_checkpoint.pt"
+TGN_STATS_PATH: Path = ARTIFACTS_DIR / "tgn_stats.json"
+
 
 def onnx_path(bucket: str) -> Path:
     """Path of the exported ONNX model for a given bucket name (S/M/L)."""
@@ -77,6 +81,52 @@ class SyntheticConfig:
     resources_per_role: tuple[int, int] = (2, 6)
     anomaly_fraction: float = 0.05   # fraction of nodes perturbed (eval only)
     seed: int = 42
+
+
+@dataclass(frozen=True)
+class TGNConfig:
+    """Streaming Temporal Graph Network (v2) hyper-parameters.
+
+    The model memory is sized for ``capacity`` slots (= training entities +
+    ``capacity_headroom``) so previously unseen ZTA entities can be admitted at
+    inference time through the :class:`~graphagate.model.registry.NodeRegistry`.
+    """
+
+    # Synthetic stream shape (entity counts + number of events).
+    num_users: int = 50
+    num_ips: int = 100
+    num_resources: int = 20
+    num_events: int = 50000
+
+    # Architecture.
+    msg_dim: int = 6
+    memory_dim: int = 64
+    time_dim: int = 32
+    node_feat_dim: int = 16
+
+    # Optimisation.
+    batch_size: int = 200
+    epochs: int = 3
+    learning_rate: float = 1e-3
+
+    # Chronological split fractions (test = 1 - train - val).
+    train_frac: float = 0.7
+    val_frac: float = 0.1
+
+    # Spare memory slots reserved for entities first seen at inference time.
+    capacity_headroom: int = 512
+    # Decision-threshold calibration target (benign false-positive rate).
+    target_fpr: float = 0.05
+
+    seed: int = 42
+
+    @property
+    def total_nodes(self) -> int:
+        return self.num_users + self.num_ips + self.num_resources
+
+    @property
+    def capacity(self) -> int:
+        return self.total_nodes + self.capacity_headroom
 
 
 @dataclass(frozen=True)

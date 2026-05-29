@@ -30,6 +30,13 @@ services:
     container_name: graphagate-train-tgn
     command: ["graphagate.train_tgn"]
 
+  # Verifica della correttezza streaming del TGN (richiede gli artifact in public/).
+  verify-tgn:
+    <<: *base
+    profiles: ["verify-tgn"]
+    container_name: graphagate-verify-tgn
+    command: ["graphagate.verify_tgn"]
+
   # --- PROFILO INFERENZA ---
   score:
     <<: *base
