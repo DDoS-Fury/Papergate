@@ -45,6 +45,27 @@ neighbors/e_id/last_t/last_msg), O(num_nodes·K·msg_dim), nessun DB.
 - [x] `train_tgn.py`: metriche AUC/AP/recall per-tipo (policy vs contextual)
 - [x] `train_tgn.py`: baseline a regole + recall su anomalie di policy
 
+### Fase 6 — API di inferenza HTTP (servizio per orchestrator ZTA in Go) — ✅ FATTA
+REST/JSON (FastAPI+uvicorn); `/infer`+`/update` separati per il flusso anti-poisoning
+con OPA, più `/score` combinato; save-back su disco. Lo strato server chiama solo le
+primitive di `serve_tgn.py` (single source of truth). Stato mutabile in RAM → un solo
+worker + lock.
+- [x] `serve_tgn.py`: `load_model` → 4-tupla `(model, registry, threshold, hp)`;
+      nuovo `commit_event` (commit incondizionato post-ALLOW, riusa `_reset_slot`/
+      `_set_node_features`/`update_memory`)
+- [x] `serve_api.py` (NEW): FastAPI con lifespan (load all'avvio, save-back allo
+      shutdown), lock di modulo, schemi Pydantic con validazione dimensioni;
+      `GET /health`, `POST /infer|/update|/score|/persist`; `main()` → uvicorn workers=1
+- [x] `verify_tgn.py`: aggiornato l'unico unpack di `load_model`
+- [x] `pyproject.toml`: aggiunte `fastapi`, `uvicorn[standard]`
+- [x] `docker-compose.yml`: profilo/servizio `serve-tgn` (porta 8088, healthcheck Python)
+- [x] Docs: `orchestrator_integration.md` (API HTTP + flusso OPA + vincoli),
+      `docker.md` (profilo serve-tgn), `README.md` (servizio + esempio submodule + layout)
+- [x] Verifica via Docker: `verify-tgn` **4/4 PASS** (no regression); `serve-tgn` healthy
+      in ~8s; smoke endpoint OK (/health; /infer ×2 score identico = read-only; /score
+      anomalo is_anomaly=true; /update ok; dimensioni errate → 422; /persist scrive gli
+      artifact); save-back verificato (`last_update[60]=1e9` persistito nel checkpoint)
+
 ### Fase 5 — Verifica
 - [x] Riproducibilità: due run del generator con seed → tensori identici (smoke `repro: True`)
 - [x] Smoke: forward con feature statiche + `score_event` dinamico OK

@@ -1,5 +1,18 @@
 # Graphagate
 
+![Python](https://img.shields.io/badge/Python-3.10+-3776AB?style=for-the-badge&logo=python&logoColor=white)
+![PyTorch](https://img.shields.io/badge/PyTorch-2.12-EE4C2C?style=for-the-badge&logo=pytorch&logoColor=white)
+![PyG](https://img.shields.io/badge/PyTorch_Geometric-2.7-3C2179?style=for-the-badge&logo=pytorch&logoColor=white)
+![NumPy](https://img.shields.io/badge/NumPy-013243?style=for-the-badge&logo=numpy&logoColor=white)
+![scikit-learn](https://img.shields.io/badge/scikit--learn-F7931E?style=for-the-badge&logo=scikit-learn&logoColor=white)
+<br/>
+![FastAPI](https://img.shields.io/badge/FastAPI-009688?style=for-the-badge&logo=fastapi&logoColor=white)
+![Pydantic](https://img.shields.io/badge/Pydantic-E92063?style=for-the-badge&logo=pydantic&logoColor=white)
+![Uvicorn](https://img.shields.io/badge/Uvicorn-2A6F7F?style=for-the-badge&logo=gunicorn&logoColor=white)
+![Docker](https://img.shields.io/badge/Docker-2496ED?style=for-the-badge&logo=docker&logoColor=white)
+![CUDA](https://img.shields.io/badge/CUDA-13-76B900?style=for-the-badge&logo=nvidia&logoColor=white)
+![License: MIT](https://img.shields.io/badge/License-MIT-yellow?style=for-the-badge)
+
 GNN model training and serving microservice (and standalone), specialized in
 **unsupervised anomaly detection** for ZTA intrusion detection/prevention systems.
 
@@ -18,13 +31,17 @@ scores each new event sequentially.
   alerts), *policy* (an entity acting outside its role/clearance/tier), and *lateral
   movement* (an authorised but **non-habitual** access — same edge features as benign,
   detectable only from interaction history).
-- **Real-time serving** — `src/serve_tgn.py` exposes `load_model` + `score_event`.
-  Scoring is event-by-event; memory and the neighbour history are updated **only for events
+- **Real-time serving** — `src/serve_tgn.py` exposes the primitives (`load_model`,
+  `infer_score`, `update_memory`, `score_event`, `commit_event`) and `src/serve_api.py`
+  wraps them in a **REST/JSON inference microservice** (`graphagate.serve_api`, Compose
+  profile `serve-tgn`) that a ZTA orchestrator consumes over HTTP. Scoring is
+  event-by-event; memory and the neighbour history are updated **only for events
   classified benign** (anti-poisoning gate), and a `NodeRegistry` admits previously unseen
   entities at runtime (dynamic node space). The deployable artifact is
   `public/tgn_checkpoint.pt` (weights + memory + raw-message store + neighbour buffers) and
   `public/tgn_stats.json` (calibrated threshold + registry). Verify with
-  `python -m graphagate.verify_tgn`.
+  `python -m graphagate.verify_tgn`. Integration details (endpoints, OPA anti-poisoning
+  flow) in [`docs/orchestrator_integration.md`](docs/orchestrator_integration.md).
 
 ## Architettura del modello
 
@@ -128,6 +145,9 @@ docker compose --profile training-tgn up
 
 # Verifica della correttezza del serving streaming (richiede gli artifact in public/)
 docker compose --profile verify-tgn up
+
+# Servizio di inferenza HTTP long-running (REST/JSON su :8088, per l'orchestrator ZTA)
+docker compose --profile serve-tgn up
 ```
 
 In alternativa, con comandi Docker diretti:
@@ -147,7 +167,8 @@ src/model/tgn.py             # TGN architecture: TGNMemory + identity + GNN + du
 src/model/neighbor.py        # MessageNeighborLoader: bounded in-RAM temporal neighbour store
 src/model/registry.py        # dynamic NodeRegistry: external entity keys -> memory slots
 src/train_tgn.py             # self-supervised training + threshold calibration + per-class eval
-src/serve_tgn.py             # real-time serving / persistence (load_model, score_event)
+src/serve_tgn.py             # serving primitives / persistence (load_model, score_event, commit_event)
+src/serve_api.py             # REST/JSON inference microservice (FastAPI) — deployable service
 src/verify_tgn.py            # serving-path verification harness
 docker/Dockerfile            # GPU image for train_tgn / verify_tgn
 public/                      # artifacts: tgn_checkpoint.pt, tgn_stats.json
@@ -156,5 +177,38 @@ public/                      # artifacts: tgn_checkpoint.pt, tgn_stats.json
 ## Integrazione
 
 L'integrazione con l'orchestrator ZTA / Policy Decision Point (OPA) è descritta in
+[`docs/orchestrator_integration.md`](docs/orchestrator_integration.md): endpoint HTTP,
+schema delle richieste e flusso anti-poisoning con OPA (`/infer` → OPA → `/update`).
+
+Usato come **git submodule**, il servizio si referenzia nel `docker-compose.yml` della
+soluzione ZTA puntando al Dockerfile del submodule. Prerequisito: aver prodotto una volta
+gli artifact con il profilo `training-tgn` (finiscono in `public/`).
+
+```yaml
+  graphagate-inference:
+    build:
+      context: ./graphagate           # path del submodule
+      dockerfile: docker/Dockerfile
+    command: ["graphagate.serve_api"] # ENTRYPOINT è ["python","-m"]
+    volumes:
+      - ./graphagate/public:/app/public   # checkpoint + stats (artifact del training)
+    ports:
+      - "8088:8088"
+    healthcheck:                       # readiness: GET /health
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8088/health').status==200 else 1)"]
+      interval: 30s
+      retries: 3
+      start_period: 40s
+    # GPU opzionale per l'inferenza; un solo container (stato mutabile in RAM).
+
+  orchestrator:
+    # ...
+    depends_on:
+      graphagate-inference:
+        condition: service_healthy     # parte solo a modello caricato
+```
+
+L'orchestrator chiama gli endpoint via HTTP (`/infer` → OPA → `/update`); esempio di
+client Go e variabili d'ambiente in
 [`docs/orchestrator_integration.md`](docs/orchestrator_integration.md).
 </content>

@@ -11,6 +11,9 @@ behaviour that is served:
   through a :class:`NodeRegistry`, score, and update memory **only for events that
   look benign** (anti-poisoning gate). Anomalous events are reported but never
   written into the baseline.
+- :func:`commit_event` — the unconditional commit used when the benign/anomalous
+  decision is made outside the model (e.g. OPA): map keys and advance memory +
+  neighbour history without re-scoring.
 - :func:`save_model` / :func:`load_model` — persist and restore weights, the TGN
   memory buffers, the (non-state_dict) raw-message store, the entity registry and
   the calibrated decision threshold.
@@ -169,6 +172,45 @@ def score_event(
     return score, is_anomaly
 
 
+def commit_event(
+    model,
+    registry: NodeRegistry,
+    key_src: Hashable,
+    key_dst: Hashable,
+    timestamp: int,
+    features,
+    device,
+    *,
+    src_feat=None,
+    dst_feat=None,
+) -> None:
+    """Commit an event the caller has already judged benign (e.g. OPA returned ALLOW).
+
+    This is the *unconditional* counterpart of :func:`score_event`: it maps the entity
+    keys through ``registry`` (admitting unseen entities, evicting LRU on overflow),
+    optionally refreshes their static attributes, and advances both the TGN memory and
+    the neighbour history. Use it for the two-step anti-poisoning flow where the
+    benign/anomalous decision is made *outside* the model (score with
+    :func:`infer_score` / :func:`score_event` ``update=False`` first, then commit here
+    only on approval).
+    """
+    model.eval()
+    recency = model.memory.last_update
+    src_idx, _ = registry.get_or_add(
+        key_src, recency=recency, on_evict=lambda i: _reset_slot(model, i)
+    )
+    dst_idx, _ = registry.get_or_add(
+        key_dst, recency=recency, on_evict=lambda i: _reset_slot(model, i)
+    )
+
+    if src_feat is not None:
+        _set_node_features(model, src_idx, src_feat, device)
+    if dst_feat is not None:
+        _set_node_features(model, dst_idx, dst_feat, device)
+
+    update_memory(model, src_idx, dst_idx, timestamp, features, device)
+
+
 def save_model(model, registry: NodeRegistry, threshold: float, hp: dict,
                checkpoint_path, stats_path) -> None:
     """Persist the deployable artifact (weights + memory + registry + threshold)."""
@@ -200,7 +242,12 @@ def save_model(model, registry: NodeRegistry, threshold: float, hp: dict,
 
 
 def load_model(checkpoint_path, stats_path, device):
-    """Reconstruct ``(model, registry, threshold)`` for serving."""
+    """Reconstruct ``(model, registry, threshold, hp)`` for serving.
+
+    ``hp`` (the saved hyper-parameter dict) is returned so a long-running server can
+    later re-persist the evolved state via :func:`save_model` without re-reading the
+    checkpoint.
+    """
     ckpt = torch.load(checkpoint_path, map_location=device, weights_only=False)
     hp = ckpt["hyperparams"]
     model = build_model(hp, device)
@@ -218,4 +265,4 @@ def load_model(checkpoint_path, stats_path, device):
         stats = json.load(f)
     registry = NodeRegistry.from_dict(stats["registry"])
     threshold = float(stats["threshold"])
-    return model, registry, threshold
+    return model, registry, threshold, hp

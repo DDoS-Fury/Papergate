@@ -51,3 +51,153 @@ L'unico storage richiesto per questo strato AI è il filesystem. Il comando di s
 - Il dizionario del NodeRegistry.
 
 Questo file (`public/tgn_checkpoint.pt`) assieme ai metadati (`public/tgn_stats.json`) consente al microservizio AI di ripartire esattamente dal punto in cui era stato interrotto senza perdere il contesto storico degli utenti.
+
+## API HTTP (servizio di inferenza)
+
+Le primitive descritte sopra sono esposte come **microservizio REST/JSON** da
+`src/serve_api.py` (FastAPI + uvicorn), avviato con `python -m graphagate.serve_api`
+(profilo Docker Compose `serve-tgn`, porta `8088`). L'orchestrator Go vi parla con
+`net/http` + `encoding/json` — nessun `.proto`/gRPC da mantenere.
+
+### Avvio del servizio
+
+**Prerequisito**: il servizio carica gli artifact `public/tgn_checkpoint.pt` e
+`public/tgn_stats.json`. Vanno prodotti **prima**, una volta, dal training
+(`docker compose --profile training-tgn up`). Senza di essi il servizio non parte.
+
+Avvio come servizio (long-running):
+
+```bash
+# Via Docker Compose (profilo dedicato, espone :8088 e l'healthcheck su /health)
+docker compose --profile serve-tgn up
+
+# Oppure standalone, riusando la stessa immagine
+docker run --rm --gpus all -p 8088:8088 \
+  -v "$PWD/public:/app/public" graphagate graphagate.serve_api
+```
+
+Il servizio è pronto quando `GET /health` risponde `{"status":"ok","model_loaded":true,...}`
+(in Compose l'healthcheck del container lo fa già: dipendere da
+`condition: service_healthy` dal lato orchestrator garantisce l'ordine di avvio).
+
+Configurazione via variabili d'ambiente (tutte opzionali):
+
+| Variabile | Default | Ruolo |
+|---|---|---|
+| `GRAPHAGATE_CHECKPOINT` | `public/tgn_checkpoint.pt` | path del checkpoint (pesi + memoria + vicinato) |
+| `GRAPHAGATE_STATS` | `public/tgn_stats.json` | path di soglia calibrata + `NodeRegistry` |
+| `GRAPHAGATE_HOST` | `0.0.0.0` | indirizzo di bind |
+| `GRAPHAGATE_PORT` | `8088` | porta di bind |
+
+### Endpoint
+
+| Metodo · path | Ruolo | Muta lo stato? |
+|---|---|---|
+| `GET /health` | Readiness + parametri caricati (device, soglia, dimensioni, slot registry) | no |
+| `POST /infer` | Calcola l'anomaly score **senza** avanzare memoria/vicinato (ammette solo l'entità nel registry) — *passo 1* del flusso anti-poisoning | no (solo admission) |
+| `POST /update` | Committa un evento **già approvato** (post-ALLOW di OPA): avanza memoria + storia dei vicini | sì |
+| `POST /score` | Score + gate interno + update condizionale (uso senza OPA / test) | sì se benigno |
+| `POST /persist` | Riscrive lo stato evoluto su `public/` (anche automatico allo shutdown) | scrive su disco |
+
+### Schema della richiesta (eventi)
+
+`/infer`, `/update`, `/score` accettano lo stesso corpo JSON:
+
+```json
+{
+  "key_src": "10.0.0.7",          // chiave entità sorgente (string o int)
+  "key_dst": "https://crm/db",    // chiave entità destinazione
+  "timestamp": 1717000000,         // intero (es. Unix epoch)
+  "features": [1,0,0,0,0,2],       // messaggio d'arco, len == msg_dim (default 6)
+  "src_feat": [/* ... */],         // opz., attributi statici, len == node_feat_dim (16)
+  "dst_feat": [/* ... */]          // opz.
+}
+```
+
+Risposta di `/infer` e `/score`:
+
+```json
+{ "anomaly_score": 0.83, "is_anomaly": true, "threshold": 0.6264 }
+```
+
+### Mapping del flusso anti-poisoning (gatekeeper OPA)
+
+Lo schema in due step della sezione precedente si realizza così:
+
+1. Orchestrator → `POST /infer` → ottiene `anomaly_score` (sola lettura).
+2. Orchestrator → OPA con richiesta + score.
+3. Se **ALLOW** → `POST /update` (committa nel modello). Se **DENY** → nessuna chiamata
+   a `/update`: l'evento ostile non entra mai nella baseline.
+
+### Vincoli operativi
+
+- **Un solo processo/replica.** Il modello è uno stato mutabile in RAM (memoria,
+  vicinato, registry); più worker/replica divergerebbero e si sovrascriverebbero in
+  `/persist`. Avviare con un singolo worker uvicorn (già impostato) e **non** scalare
+  orizzontalmente questo servizio.
+- **Continuità delle chiavi.** Il registry serializzato dal training usa le chiavi viste
+  in addestramento. Per riconoscere un'entità nota, l'orchestrator deve inviare la
+  *stessa* chiave; una chiave nuova viene ammessa dinamicamente e parte "cold-start"
+  (si affida a memoria e vicinato man mano che accumula storia approvata).
+
+### Esempio: chiamata diretta (curl)
+
+```bash
+# Score read-only di un evento
+curl -s -X POST http://localhost:8088/infer \
+  -H 'Content-Type: application/json' \
+  -d '{"key_src":"10.0.0.7","key_dst":"https://crm/db","timestamp":1717000000,"features":[1,0,0,0,0,2]}'
+# -> {"anomaly_score":0.83,"is_anomaly":true,"threshold":0.6264}
+```
+
+### Esempio: integrazione dall'orchestrator (Go)
+
+Il flusso anti-poisoning in tre passi (`/infer` → OPA → `/update`) si scrive con la sola
+standard library:
+
+```go
+type Event struct {
+    KeySrc    string    `json:"key_src"`
+    KeyDst    string    `json:"key_dst"`
+    Timestamp int64     `json:"timestamp"`
+    Features  []float64 `json:"features"`
+    SrcFeat   []float64 `json:"src_feat,omitempty"`
+    DstFeat   []float64 `json:"dst_feat,omitempty"`
+}
+type ScoreResp struct {
+    AnomalyScore float64 `json:"anomaly_score"`
+    IsAnomaly    bool    `json:"is_anomaly"`
+    Threshold    float64 `json:"threshold"`
+}
+
+func post(base, path string, in, out any) error {
+    b, _ := json.Marshal(in)
+    resp, err := http.Post(base+path, "application/json", bytes.NewReader(b))
+    if err != nil {
+        return err
+    }
+    defer resp.Body.Close()
+    if resp.StatusCode != http.StatusOK {
+        return fmt.Errorf("graphagate %s: status %d", path, resp.StatusCode)
+    }
+    if out != nil {
+        return json.NewDecoder(resp.Body).Decode(out)
+    }
+    return nil
+}
+
+// Per ogni evento di accesso:
+ev := Event{KeySrc: srcIP, KeyDst: resURI, Timestamp: time.Now().Unix(),
+    Features: edgeSignals, SrcFeat: srcAttrs, DstFeat: dstAttrs}
+
+var s ScoreResp
+if err := post(base, "/infer", ev, &s); err != nil { /* fail-closed */ }
+
+allow := opa.Decide(req, s.AnomalyScore)   // OPA è il decisore finale
+if allow {
+    _ = post(base, "/update", ev, nil)     // committa SOLO se approvato
+}
+```
+
+> **Fail-closed**: se `/infer` non risponde (timeout, servizio non pronto), trattare
+> l'evento come sospetto a livello di policy invece di lasciarlo passare.

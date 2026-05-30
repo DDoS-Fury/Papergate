@@ -38,7 +38,11 @@ def main() -> int:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     def load():
-        return load_model(TGN_CHECKPOINT_PATH, TGN_STATS_PATH, device)
+        # load_model returns (model, registry, threshold, hp); the harness ignores hp.
+        model, registry, threshold, _ = load_model(
+            TGN_CHECKPOINT_PATH, TGN_STATS_PATH, device
+        )
+        return model, registry, threshold
 
     results = []
 
