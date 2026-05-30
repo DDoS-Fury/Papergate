@@ -83,6 +83,30 @@ def generate_streaming_data(num_users=50, num_ips=100, num_resources=20, num_eve
         node_features[num_users + i, 0] = ROLES.index(user_roles[u_idx]) / float(len(ROLES))
         node_features[num_users + i, 1] = user_clearances[u_idx] / 4.0
     
+    # Per-IP behaviour model. For each IP we precompute the (resource, method) actions
+    # its associated user is *authorised* to perform, then carve out a "habitual" subset
+    # — the routes that device actually uses day-to-day. Benign traffic is drawn from the
+    # habitual subset; a *lateral-movement* anomaly is an authorised-but-non-habitual
+    # action (policy-clean, signal-clean) — only the interaction history reveals it,
+    # which is exactly what the temporal neighbour loader supplies to the model.
+    ip_valid_actions = []
+    ip_habitual = []
+    for ip_idx in range(num_ips):
+        u_idx = ip_to_user[ip_idx]
+        role, clr, tier = user_roles[u_idx], user_clearances[u_idx], ip_tiers[ip_idx]
+        valid = []
+        for res_idx, rules in enumerate(resource_rules):
+            for method, (req_roles, min_tier, min_clearance) in rules.items():
+                if role in req_roles and tier >= min_tier and clr >= min_clearance:
+                    valid.append((res_idx, method))
+        ip_valid_actions.append(valid)
+        if valid:
+            k = max(1, len(valid) // 2)
+            hab_idx = np.random.choice(len(valid), size=k, replace=False)
+            ip_habitual.append({valid[j] for j in hab_idx})
+        else:
+            ip_habitual.append(set())
+
     src_nodes = []
     dst_nodes = []
     timestamps = []
@@ -109,24 +133,16 @@ def generate_streaming_data(num_users=50, num_ips=100, num_resources=20, num_eve
         is_anomalous = np.random.rand() < 0.05
         
         if not is_anomalous:
-            valid_actions = []
-            for res_idx, rules in enumerate(resource_rules):
-                for method, (req_roles, min_tier, min_clearance) in rules.items():
-                    if u_role in req_roles and u_tier >= min_tier and u_clearance >= min_clearance:
-                        valid_actions.append((res_idx, method))
-            
-            if not valid_actions:
-                # Fallback to the first route template (public path)
-                res_idx, method = 0, 0
-                for idx, r in enumerate(resource_rules):
-                    if 0 in r and r[0][1] == 0 and r[0][2] == 0:
-                        res_idx = idx
-                        break
+            habit = list(ip_habitual[src_ip_idx])
+            if habit:
+                res_idx, method = random.choice(habit)
+            elif ip_valid_actions[src_ip_idx]:
+                res_idx, method = random.choice(ip_valid_actions[src_ip_idx])
             else:
-                res_idx, method = random.choice(valid_actions)
-                
+                res_idx, method = 0, 0  # public-path fallback (no authorised action)
+
             dst_val = num_users + num_ips + res_idx
-            
+
             ja3 = 1.0
             snort = 0.0
             s1, s2, s3 = 0.0, 0.0, 0.0
@@ -134,7 +150,24 @@ def generate_streaming_data(num_users=50, num_ips=100, num_resources=20, num_eve
             etype = 0
 
         else:
-            anomaly_type = np.random.choice(["policy", "context"])
+            anomaly_type = np.random.choice(["policy", "context", "lateral"])
+
+            if anomaly_type == "lateral":
+                # Authorised but non-habitual access: policy-clean and signal-clean,
+                # detectable only from the IP's interaction history.
+                non_habit = [a for a in ip_valid_actions[src_ip_idx]
+                             if a not in ip_habitual[src_ip_idx]]
+                if non_habit:
+                    res_idx, method = random.choice(non_habit)
+                    dst_val = num_users + num_ips + res_idx
+                    ja3 = 1.0
+                    snort = 0.0
+                    s1, s2, s3 = 0.0, 0.0, 0.0
+                    etype = 3
+                else:
+                    # No non-habitual authorised action exists -> fall back to a policy
+                    # violation so the event is still a genuine anomaly.
+                    anomaly_type = "policy"
 
             if anomaly_type == "policy":
                 invalid_actions = []
@@ -155,7 +188,7 @@ def generate_streaming_data(num_users=50, num_ips=100, num_resources=20, num_eve
                 s1, s2, s3 = 0.0, 0.0, 0.0
                 etype = 1
 
-            else:
+            elif anomaly_type == "context":
                 res_idx = np.random.randint(0, num_resources)
                 method = np.random.randint(0, 4)
                 dst_val = num_users + num_ips + res_idx

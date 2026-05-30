@@ -40,10 +40,17 @@ class TGNConfig:
     memory_dim: int = 64
     time_dim: int = 32
     node_feat_dim: int = 16
+    # Learnable per-node identity embedding dimension (feeds the GNN; gives resources a
+    # distinguishable identity so the structural head can detect lateral movement).
+    id_dim: int = 32
+    # Temporal neighbours kept per node in the (bounded, in-memory) neighbour loader.
+    # Enables message passing over each entity's recent interaction history → the
+    # structural signal for lateral-movement detection. No graph DB required.
+    neighbor_size: int = 10
 
     # Optimisation.
     batch_size: int = 200
-    epochs: int = 3
+    epochs: int = 10
     learning_rate: float = 1e-3
 
     # Chronological split fractions (test = 1 - train - val).

@@ -20,10 +20,25 @@ Piano completo: `C:\Users\Gabs\.claude\plans\obiettivo-valuta-in-modo-graceful-v
 - [x] `serve_tgn.py`: `score_event` con `src_feat`/`dst_feat` opzionali + `_reset_slot` azzera node_feat
 - [x] `verify_tgn.py`: compatibile via default (nessuna modifica necessaria)
 
-### Fase 3 — Neighbor loader (in-memory, no graph DB) — ⏸️ IN ATTESA
-Bloccante di design emerso: lo store messaggi per-edge (per `e_id`) cresce illimitato in
-streaming long-running. Serve decisione su store a dimensione fissa (ring-buffer ~`num_nodes×K`).
-- [ ] (da decidere con l'utente prima di implementare)
+### Fase 3 — Neighbor loader (in-memory, no graph DB, bounded) + scorer strutturale — ✅ FATTA
+Design bounded: `MessageNeighborLoader` (ring-buffer `[num_nodes, size]` per
+neighbors/e_id/last_t/last_msg), O(num_nodes·K·msg_dim), nessun DB.
+- [x] `src/model/neighbor.py`: `MessageNeighborLoader` (mirror esatto di PyG 2.7.0
+      `LastNeighborLoader`, verificato via introspezione) con `insert`/`__call__`/
+      `reset_state`/`reset_node`/`state`/`load_state`
+- [x] `tgn.py`: `embed()` (contesto vicinato) + `init_neighbor_loader()`
+- [x] `train_tgn.py`: loop usa loader (reset per epoca, embed unico, insert benigni);
+      4ª head di negativi *hard non-abituali* (risorsa fuori dal vicinato di src)
+- [x] `serve_tgn.py`: `infer_score`/`update_memory` via loader; `build_model` crea+`eval()`;
+      `save_model`/`load_model` persistono lo stato del loader; `_reset_slot` → `reset_node`
+- [x] `config.py`: `neighbor_size=10`; `epochs` 3→10
+- [x] **Bug pre-esistente trovato e corretto**: doppio flush del message store al reload
+      (`model.eval()` dopo `load_state_dict`) → `build_model` ora fa `eval()` prima
+- [x] **Redesign scorer** (approvato): identità di nodo apprendibile (`nn.Embedding`) data
+      in input alla GNN + head di compatibilità strutturale dedicata (cosine·temperatura
+      apprendibile) sommata alla head a feature. `model.score()` condivisa train/serve.
+- [x] Verifica: training exit 0, `verify_tgn` 4/4 PASS, reload determinism *genuino*,
+      **lateral movement ora rilevato (AUC 0.90 vs 0.46)**.
 
 ### Fase 4 — Rigore di valutazione
 - [x] `stream_synthetic.py`: emette vettore `types` (0=benign,1=policy,2=context), 7° valore
@@ -38,22 +53,29 @@ streaming long-running. Serve decisione su store a dimensione fissa (ring-buffer
 
 ## Review
 
-Fasi 1, 2, 4 implementate e verificate end-to-end via Docker.
+Tutte le fasi (1–4) implementate e verificate end-to-end via Docker.
 
-Metriche test (training completo, seed=42):
-- Overall: AUC 0.9401 | AP 0.8070 | (thr 0.7005) Precision 0.278 Recall 0.863
-- Policy:     AUC 0.8849 | Recall@thr 0.7322   (n=239)
-- Contextual: AUC 0.9947 | Recall@thr 0.9917   (n=242)
-- Baseline a regole: recall su policy = 0.0000 → conferma il valore aggiunto delle
-  feature statiche (Fase 2): il modello rileva le violazioni di policy che una baseline
-  a sole regole non vede.
+Metriche test finali (training completo, seed=42, loader + identità + head strutturale, 10 epoche):
+- Overall:    AUC 0.9690 | AP 0.8583 | (thr 0.6264) Precision 0.307 Recall 0.915
+- Policy:     AUC 0.9988 | AP 0.9589 | Recall@thr 1.0000   (n=174)
+- Contextual: AUC 0.9999 | AP 0.9969 | Recall@thr 1.0000   (n=171)
+- Lateral:    AUC 0.8981 | AP 0.2417 | Recall@thr 0.7162   (n=148)  ← NUOVO, prima ≈ caso (0.46)
+- Baseline a regole: recall policy = 0.0000, recall lateral = 0.0000 → il modello rileva
+  proprio ciò che le sole regole non vedono (violazioni di policy e lateral movement).
 
-Verify serving: 4/4 PASS (reload determinism, benign update, anti-poisoning, dynamic node).
+Progressione del lateral movement durante la Fase 3 (diagnosi → fix):
+1. loader cablato + negativi facili .............. AUC 0.49 (caso)
+2. + negativi hard (risorsa casuale) + 10 epoche . AUC 0.53 (collisione con abituali)
+3. + negativi hard *non-abituali* ................ AUC 0.46 (blocco rappresentazionale)
+   → diagnostico: scorer concat-MLP ignora la compatibilità src↔dst; risorse senza identità
+4. + identità di nodo nella GNN + head strutturale  AUC 0.90 ✅
+
+Verify serving: 4/4 PASS (reload determinism *genuino*, benign update, anti-poisoning, dynamic node).
+
+Bug pre-esistente corretto: doppio flush del message store di `TGNMemory` al reload
+(`model.eval()` ri-applicava lo store sopra il buffer già completo) — mascherato dal
+vecchio check di determinismo che confrontava due reload tra loro.
 
 Nessuna regressione: shared train/serve path, gate anti-poisoning, predict-then-update,
-split cronologico, semantica binaria di `y` tutti invariati.
-
-Fase 3 (neighbor loader): NON implementata — vedi blocco design sopra, in attesa di decisione.
-Sotto-punti opzionali (flip negative contestuale, dati più difficili / lateral movement):
-non implementati, richiedono ok esplicito.
-</content>
+split cronologico, semantica binaria di `y` tutti invariati. Le Fasi 2/3 cambiano il
+formato del checkpoint → richiedono retraining (la pipeline lo fa già).

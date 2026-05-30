@@ -32,8 +32,9 @@ docker compose --profile verify-tgn up
 *(Esegue `python -m graphagate.verify_tgn`)*
 
 Gli artifact TGN persistiti in `public/` sono:
-- `tgn_checkpoint.pt` — pesi + buffer di memoria + raw-message store (per continuare
-  lo stato temporale tra riavvii);
+- `tgn_checkpoint.pt` — pesi (inclusi identità di nodo e teste di scoring) + buffer di
+  memoria + raw-message store + buffer del neighbour loader (per continuare esattamente
+  lo stato temporale e la storia dei vicini tra riavvii);
 - `tgn_stats.json` — soglia di decisione calibrata, `capacity` e mappatura
   `NodeRegistry` (entità esterne → slot di memoria).
 

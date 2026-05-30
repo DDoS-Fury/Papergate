@@ -110,6 +110,7 @@ def train_tgn(cfg: TGNConfig = TGNConfig()):
         msg_dim=cfg.msg_dim,
         memory_dim=cfg.memory_dim,
         time_dim=cfg.time_dim,
+        id_dim=cfg.id_dim,
     ).to(device)
 
     # Load the static node attributes (role / clearance / tier) into the model's
@@ -117,6 +118,9 @@ def train_tgn(cfg: TGNConfig = TGNConfig()):
     # first seen at serving time stay zero until those entities supply their features.
     with torch.no_grad():
         model.node_feat[: cfg.total_nodes] = node_features.to(device)
+
+    # Bounded temporal neighbour loader (built on the model device after .to).
+    model.init_neighbor_loader(cfg.neighbor_size, device)
 
     optimizer = Adam(model.parameters(), lr=cfg.learning_rate)
     criterion = torch.nn.BCEWithLogitsLoss()
@@ -131,6 +135,7 @@ def train_tgn(cfg: TGNConfig = TGNConfig()):
     print("--- INIZIO ADDESTRAMENTO UNSUPERVISED ---")
     for epoch in range(1, cfg.epochs + 1):
         model.memory.reset_state()  # restart the recurrent memory each epoch
+        model.neighbor_loader.reset_state()  # ...and the temporal neighbourhood
         model.train()
 
         total_loss = 0.0
@@ -156,27 +161,59 @@ def train_tgn(cfg: TGNConfig = TGNConfig()):
             p_t = b_t[benign_mask]
             p_msg = b_msg[benign_mask]
 
-            # --- POSITIVE EDGES (healthy behaviour) ---
-            n_id, inv = torch.unique(torch.cat([p_src, p_dst]), return_inverse=True)
-            pos_edge_index = torch.stack([inv[: len(p_src)], inv[len(p_src):]], dim=0)
-            pos_out = model(n_id, pos_edge_index, p_t, p_msg).squeeze(-1)
-
-            # --- STRUCTURAL NEGATIVES (lateral movement / enumeration) ---
+            # Structural negatives: src paired with an unrelated node anywhere in the
+            # graph (coarse "wrong target type" signal).
             neg_dst = torch.randint(cfg.num_users, cfg.total_nodes, (len(p_src),), device=device)
-            n_id_neg, inv_neg = torch.unique(torch.cat([p_src, neg_dst]), return_inverse=True)
-            neg_edge_index = torch.stack([inv_neg[: len(p_src)], inv_neg[len(p_src):]], dim=0)
-            neg_out_struct = model(n_id_neg, neg_edge_index, p_t, p_msg).squeeze(-1)
+            # HARD structural negatives: src paired with a *non-habitual* resource — one
+            # it is NOT currently a neighbour of. This is exactly the lateral-movement
+            # pattern (authorised-but-unusual access) and forces the model to learn each
+            # entity's habitual resource set, the fine-grained signal a random-resource
+            # negative would wash out (it often collides with a habitual resource).
+            res_lo = cfg.total_nodes - cfg.num_resources
+            num_res = cfg.num_resources
+            nl = model.neighbor_loader
+            nbr = nl.neighbors[p_src]                 # [B, K] global neighbour ids
+            res_local = nbr - res_lo                  # -> [0, num_res); non-resources out of range
+            is_res = (nl.e_id[p_src] >= 0) & (res_local >= 0) & (res_local < num_res)
+            occ = torch.zeros(len(p_src), num_res, dtype=torch.bool, device=device)
+            rows = torch.arange(len(p_src), device=device).unsqueeze(1).expand_as(res_local)
+            occ[rows[is_res], res_local[is_res]] = True  # habitual resources so far
+            # Random pick among the non-habitual resources (K < num_res => always some).
+            pick = torch.rand(len(p_src), num_res, device=device)
+            pick[occ] = -1.0
+            hard_dst = pick.argmax(dim=1) + res_lo
+
+            # Expand every involved node to its stored temporal neighbourhood and embed
+            # once; the heads below differ only in which endpoints / message they score,
+            # sharing the same history-conditioned embeddings.
+            nodes = torch.cat([p_src, p_dst, neg_dst, hard_dst]).unique()
+            n_id, edge_index, hist_t, hist_msg = model.neighbor_loader(nodes)
+            z = model.embed(n_id, edge_index, hist_t, hist_msg)
+            assoc = model.neighbor_loader._assoc
+            nf = model.node_feat[n_id]
+            s_loc, d_loc = assoc[p_src], assoc[p_dst]
+            nd_loc, hd_loc = assoc[neg_dst], assoc[hard_dst]
+
+            # --- POSITIVE EDGES (healthy behaviour) ---
+            pos_out = model.score(z, nf, s_loc, d_loc, p_msg)
+
+            # --- STRUCTURAL NEGATIVES (src paired with an unrelated target) ---
+            neg_out_struct = model.score(z, nf, s_loc, nd_loc, p_msg)
+
+            # --- HARD STRUCTURAL NEGATIVES (src paired with a non-habitual resource) ---
+            neg_out_hard = model.score(z, nf, s_loc, hd_loc, p_msg)
 
             # --- CONTEXTUAL NEGATIVES (out-of-distribution feature perturbation) ---
             neg_msg = p_msg.clone()
             noise_mask = torch.rand_like(neg_msg) < 0.20
             neg_msg[noise_mask] = 1.0 - neg_msg[noise_mask]
-            neg_out_ctx = model(n_id, pos_edge_index, p_t, neg_msg).squeeze(-1)
+            neg_out_ctx = model.score(z, nf, s_loc, d_loc, neg_msg)
 
             # --- UNSUPERVISED LOSS: positive -> 1, negatives -> 0 ---
             loss = (
                 criterion(pos_out, torch.ones_like(pos_out))
                 + criterion(neg_out_struct, torch.zeros_like(neg_out_struct))
+                + criterion(neg_out_hard, torch.zeros_like(neg_out_hard))
                 + criterion(neg_out_ctx, torch.zeros_like(neg_out_ctx))
             )
 
@@ -184,9 +221,10 @@ def train_tgn(cfg: TGNConfig = TGNConfig()):
             optimizer.step()
             total_loss += loss.item()
 
-            # Update memory with the benign traffic only.
+            # Predict-then-update: commit benign traffic to memory and neighbour store.
             model.memory.update_state(p_src, p_dst, p_t, p_msg)
             model.memory.detach()
+            model.neighbor_loader.insert(p_src, p_dst, p_t, p_msg)
 
         print(f"Epoch {epoch:02d} | Train Loss: {total_loss / max(num_train_batches, 1):.4f}")
 
@@ -229,7 +267,7 @@ def train_tgn(cfg: TGNConfig = TGNConfig()):
     # benign edge features and are the genuinely hard case.
     print("\n--- METRICHE PER TIPO DI ANOMALIA ---")
     benign = test_types == 0
-    for type_id, name in ((1, "policy   "), (2, "contextual")):
+    for type_id, name in ((1, "policy    "), (2, "contextual"), (3, "lateral   ")):
         sel = benign | (test_types == type_id)
         s_sel, l_sel = test_scores[sel], (test_types[sel] == type_id).astype(int)
         if l_sel.sum() == 0:
@@ -250,9 +288,12 @@ def train_tgn(cfg: TGNConfig = TGNConfig()):
     base_policy_recall = (
         ((base_pred == 1) & (test_types == 1)).sum() / max((test_types == 1).sum(), 1)
     )
+    base_lateral_recall = (
+        ((base_pred == 1) & (test_types == 3)).sum() / max((test_types == 3).sum(), 1)
+    )
     print("\n--- BASELINE A REGOLE (signal-only) ---")
     print(f"  Precision: {b_precision:.4f} | Recall: {b_recall:.4f} | "
-          f"Recall su anomalie di policy: {base_policy_recall:.4f}")
+          f"Recall policy: {base_policy_recall:.4f} | Recall lateral: {base_lateral_recall:.4f}")
 
     # --- PERSIST DEPLOYABLE ARTIFACT -----------------------------------------
     hp = {
@@ -261,6 +302,8 @@ def train_tgn(cfg: TGNConfig = TGNConfig()):
         "msg_dim": cfg.msg_dim,
         "memory_dim": cfg.memory_dim,
         "time_dim": cfg.time_dim,
+        "id_dim": cfg.id_dim,
+        "neighbor_size": cfg.neighbor_size,
         "target_fpr": cfg.target_fpr,
     }
     save_model(model, registry, threshold, hp, TGN_CHECKPOINT_PATH, TGN_STATS_PATH)

@@ -37,7 +37,19 @@ def build_model(hp: dict, device: torch.device) -> ZTATemporalGraphNetwork:
         msg_dim=int(hp["msg_dim"]),
         memory_dim=int(hp["memory_dim"]),
         time_dim=int(hp["time_dim"]),
+        id_dim=int(hp.get("id_dim", 32)),
     ).to(device)
+    # The bounded neighbour loader lives outside the state_dict; build it on the
+    # serving device so its buffers match the model's. Its contents are restored
+    # from the checkpoint in load_model.
+    model.init_neighbor_loader(int(hp.get("neighbor_size", 10)), device)
+    # Switch to eval *before* the caller restores buffers. PyG's TGNMemory flushes
+    # its pending message store into the memory buffer on the train->eval transition
+    # (see TGNMemory.train). If we let that happen *after* load_state_dict has already
+    # restored the (fully materialised) memory + the saved message store, the messages
+    # are applied a second time and the reloaded memory diverges from the original.
+    # Evaluating here, while the store is still empty, makes the later restore exact.
+    model.eval()
     return model
 
 
@@ -54,23 +66,34 @@ def _event_tensors(src_idx: int, dst_idx: int, t_val: int, msg_vec, device):
 def infer_score(model, src_idx: int, dst_idx: int, t_val: int, msg_vec, device) -> float:
     """Return the anomaly score (1 - P(benign)) for a single event.
 
-    Does **not** mutate memory. ``torch.unique`` naturally collapses the
-    ``src == dst`` self-loop into a single node, yielding a valid edge index.
+    Does **not** mutate memory or the neighbour loader. The two endpoints are
+    expanded to their stored temporal neighbourhood so the embedding reflects each
+    entity's recent interaction history (the structural signal for lateral movement);
+    a cold-start node with no neighbours falls back to its memory state alone.
     """
     b_src, b_dst, b_t, b_msg = _event_tensors(src_idx, dst_idx, t_val, msg_vec, device)
-    n_id, inv = torch.unique(torch.cat([b_src, b_dst]), return_inverse=True)
-    edge_index = torch.stack([inv[:1], inv[1:]], dim=0)
-    out = model(n_id, edge_index, b_t, b_msg).squeeze(-1)
+    nodes = torch.unique(torch.cat([b_src, b_dst]))
+    n_id, edge_index, hist_t, hist_msg = model.neighbor_loader(nodes)
+    assoc = model.neighbor_loader._assoc
+    out = model(
+        n_id, edge_index, hist_t, hist_msg, assoc[b_src], assoc[b_dst], b_msg
+    ).squeeze(-1)
     prob_benign = torch.sigmoid(out).item()
     return 1.0 - prob_benign
 
 
 @torch.no_grad()
 def update_memory(model, src_idx: int, dst_idx: int, t_val: int, msg_vec, device) -> None:
-    """Commit a single event into the TGN memory and detach the graph."""
+    """Commit a single event into the TGN memory and the neighbour store.
+
+    Inserting into the neighbour loader only here (and only for events the caller
+    has judged benign) keeps the anti-poisoning gate intact: anomalous events never
+    enter an entity's history.
+    """
     b_src, b_dst, b_t, b_msg = _event_tensors(src_idx, dst_idx, t_val, msg_vec, device)
     model.memory.update_state(b_src, b_dst, b_t, b_msg)
     model.memory.detach()
+    model.neighbor_loader.insert(b_src, b_dst, b_t, b_msg)
 
 
 def _reset_slot(model, idx: int) -> None:
@@ -81,6 +104,9 @@ def _reset_slot(model, idx: int) -> None:
         model.node_feat[idx].zero_()
     for store in (model.memory.msg_s_store, model.memory.msg_d_store):
         store.pop(idx, None)
+    # Scrub the reused slot's temporal neighbourhood so a recycled index can't
+    # inherit the evicted entity's interaction history.
+    model.neighbor_loader.reset_node(idx)
 
 
 def _set_node_features(model, idx: int, feat, device) -> None:
@@ -157,6 +183,7 @@ def save_model(model, registry: NodeRegistry, threshold: float, hp: dict,
             "model": model.state_dict(),
             "msg_s_store": model.memory.msg_s_store,
             "msg_d_store": model.memory.msg_d_store,
+            "neighbor_loader": model.neighbor_loader.state(),
             "hyperparams": hp,
         },
         checkpoint_path,
@@ -181,6 +208,10 @@ def load_model(checkpoint_path, stats_path, device):
     # Restore pending raw messages so memory continuation is exact.
     model.memory.msg_s_store = ckpt.get("msg_s_store", {})
     model.memory.msg_d_store = ckpt.get("msg_d_store", {})
+    # Restore the temporal neighbour buffers (map_location already placed the saved
+    # tensors on ``device``); build_model created an empty loader of the right shape.
+    if "neighbor_loader" in ckpt:
+        model.neighbor_loader.load_state(ckpt["neighbor_loader"])
     model.eval()
 
     with open(stats_path, encoding="utf-8") as f:
