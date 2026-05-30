@@ -1,1 +1,1 @@
-"""Model layer: DOMINANT-style Graph Autoencoder and reconstruction losses."""
+"""Model layer: streaming Temporal Graph Network and dynamic node registry."""

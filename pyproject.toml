@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "graphagate"
 version = "0.1.0"
-description = "GNN Graph Autoencoder for unsupervised anomaly detection in Zero Trust Architectures"
+description = "Streaming Temporal Graph Network for unsupervised anomaly detection in Zero Trust Architectures"
 readme = "README.md"
 requires-python = ">=3.10,<3.13"
 license = { file = "LICENSE" }
@@ -14,10 +14,6 @@ dependencies = [
     "torch_geometric>=2.6,<3.0",
     "numpy>=1.26,<3.0",
     "scikit-learn>=1.4",
-    "networkx>=3.2",
-    "onnx>=1.16",
-    "onnxscript>=0.1",
-    "onnxruntime>=1.18",
 ]
 
 [tool.setuptools]

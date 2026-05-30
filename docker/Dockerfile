@@ -1,4 +1,4 @@
-# Graphagate — GPU training / inference / ONNX-export image.
+# Graphagate — GPU training / verification image for the streaming TGN.
 #
 # Build context is the repository root:
 #     docker build -f docker/Dockerfile -t graphagate .
@@ -26,12 +26,11 @@ COPY src ./src
 
 RUN pip install --upgrade pip && pip install -e .
 
-# Artifacts (checkpoint, ONNX, norm_stats) are written here; mount a volume to persist.
+# Artifacts (tgn_checkpoint.pt, tgn_stats.json) are written here; mount a volume to persist.
 VOLUME ["/app/public"]
 
-# Run any module: train (default), score, export_onnx.
-#   docker run --rm --gpus all -v "$PWD/public:/app/public" graphagate                      # -> graphagate.train
-#   docker run --rm --gpus all -v "$PWD/public:/app/public" graphagate graphagate.score --eval
-#   docker run --rm --gpus all -v "$PWD/public:/app/public" graphagate graphagate.export_onnx
+# Run any module: train_tgn (default), verify_tgn.
+#   docker run --rm --gpus all -v "$PWD/public:/app/public" graphagate                       # -> graphagate.train_tgn
+#   docker run --rm --gpus all -v "$PWD/public:/app/public" graphagate graphagate.verify_tgn
 ENTRYPOINT ["python", "-m"]
-CMD ["graphagate.train"]
+CMD ["graphagate.train_tgn"]

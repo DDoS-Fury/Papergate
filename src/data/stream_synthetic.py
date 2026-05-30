@@ -2,14 +2,23 @@ import torch
 import numpy as np
 import random
 
-def generate_streaming_data(num_users=50, num_ips=100, num_resources=20, num_events=5000):
+def generate_streaming_data(num_users=50, num_ips=100, num_resources=20, num_events=5000,
+                            seed=None):
     """
     Generates mock streaming data for TGN based on ZTA policies.
     We map all entities to a single node index space:
     [0, num_users-1] -> Users
     [num_users, num_users + num_ips - 1] -> IPs (Devices)
     [num_users + num_ips, num_users + num_ips + num_resources - 1] -> Resources
+
+    ``seed`` (optional) seeds both ``numpy`` and the stdlib ``random`` module so the
+    stream is fully reproducible — ``random.choice`` (route/method selection) is used
+    alongside ``np.random``, so seeding only numpy would leave the data partly random.
     """
+    if seed is not None:
+        np.random.seed(seed)
+        random.seed(seed)
+
     total_nodes = num_users + num_ips + num_resources
     
     # ZTA Policies definition
@@ -79,6 +88,9 @@ def generate_streaming_data(num_users=50, num_ips=100, num_resources=20, num_eve
     timestamps = []
     edge_features = []
     labels = []
+    # Anomaly type for per-class evaluation: 0=benign, 1=policy violation, 2=contextual.
+    # The binary ``labels`` above are unchanged (training/serving consume only those).
+    types = []
     
     current_time = 0
     for i in range(num_events):
@@ -119,10 +131,11 @@ def generate_streaming_data(num_users=50, num_ips=100, num_resources=20, num_eve
             snort = 0.0
             s1, s2, s3 = 0.0, 0.0, 0.0
             label = 0
-            
+            etype = 0
+
         else:
             anomaly_type = np.random.choice(["policy", "context"])
-            
+
             if anomaly_type == "policy":
                 invalid_actions = []
                 for res_idx, rules in enumerate(resource_rules):
@@ -140,16 +153,18 @@ def generate_streaming_data(num_users=50, num_ips=100, num_resources=20, num_eve
                 ja3 = 1.0
                 snort = 0.0
                 s1, s2, s3 = 0.0, 0.0, 0.0
-                
+                etype = 1
+
             else:
                 res_idx = np.random.randint(0, num_resources)
                 method = np.random.randint(0, 4)
                 dst_val = num_users + num_ips + res_idx
-                
+
                 ja3 = 0.0 if np.random.rand() > 0.5 else 1.0
                 snort = 1.0 if np.random.rand() > 0.5 else 0.0
                 s1, s2, s3 = np.random.rand(3) > 0.5
-                
+                etype = 2
+
             label = 1
             
         action = float(method)
@@ -160,11 +175,13 @@ def generate_streaming_data(num_users=50, num_ips=100, num_resources=20, num_eve
         timestamps.append(current_time)
         edge_features.append(edge_feat)
         labels.append(label)
+        types.append(etype)
 
     src_tensor = torch.tensor(src_nodes, dtype=torch.long)
     dst_tensor = torch.tensor(dst_nodes, dtype=torch.long)
-    t_tensor = torch.tensor(timestamps, dtype=torch.long) 
+    t_tensor = torch.tensor(timestamps, dtype=torch.long)
     msg_tensor = torch.tensor(edge_features, dtype=torch.float)
     y_tensor = torch.tensor(labels, dtype=torch.long)
-    
-    return src_tensor, dst_tensor, t_tensor, msg_tensor, y_tensor, node_features
+    types_tensor = torch.tensor(types, dtype=torch.long)
+
+    return src_tensor, dst_tensor, t_tensor, msg_tensor, y_tensor, types_tensor, node_features

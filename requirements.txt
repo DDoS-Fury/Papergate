@@ -4,9 +4,3 @@ torch==2.12.*
 torch_geometric>=2.6,<3.0
 numpy>=1.26,<3.0
 scikit-learn>=1.4
-networkx>=3.2
-
-# ONNX export (dynamo/AOT exporter needs onnxscript) + parity check
-onnx>=1.16
-onnxscript>=0.1
-onnxruntime>=1.18

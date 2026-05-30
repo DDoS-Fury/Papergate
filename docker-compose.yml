@@ -17,13 +17,7 @@ services:
       - ./public:/app/public
       - ./src:/app/src
 
-  # --- PROFILO TRAINING ---
-  train:
-    <<: *base
-    profiles: ["training"]
-    container_name: graphagate-train
-    command: ["graphagate.train"]
-
+  # --- PROFILO TRAINING TGN ---
   train-tgn:
     <<: *base
     profiles: ["training-tgn"]
@@ -36,16 +30,3 @@ services:
     profiles: ["verify-tgn"]
     container_name: graphagate-verify-tgn
     command: ["graphagate.verify_tgn"]
-
-  # --- PROFILO INFERENZA ---
-  score:
-    <<: *base
-    profiles: ["inference"]
-    container_name: graphagate-score
-    command: ["graphagate.score", "--eval"]
-
-  export:
-    <<: *base
-    profiles: ["inference"]
-    container_name: graphagate-export
-    command: ["graphagate.export_onnx"]

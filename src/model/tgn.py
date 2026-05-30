@@ -22,20 +22,28 @@ class GraphAttentionEmbedding(nn.Module):
         return self.conv(x, edge_index, edge_attr)
 
 class LinkPredictor(nn.Module):
-    def __init__(self, in_channels, msg_dim):
+    def __init__(self, in_channels, msg_dim, node_feat_dim):
         super().__init__()
-        self.lin1 = nn.Linear(in_channels * 2 + msg_dim, in_channels)
+        # Static node attributes (role / clearance / device tier) are concatenated
+        # for both endpoints: they carry the policy-relevant signal that separates a
+        # policy-violation anomaly (same edge features as benign) from benign traffic.
+        self.lin1 = nn.Linear(in_channels * 2 + msg_dim + node_feat_dim * 2, in_channels)
         self.lin2 = nn.Linear(in_channels, 1)
 
-    def forward(self, z_src, z_dst, msg):
-        h = torch.cat([z_src, z_dst, msg], dim=-1)
+    def forward(self, z_src, z_dst, msg, feat_src, feat_dst):
+        h = torch.cat([z_src, z_dst, msg, feat_src, feat_dst], dim=-1)
         h = self.lin1(h).relu()
         return self.lin2(h)
 
 class ZTATemporalGraphNetwork(nn.Module):
     def __init__(self, num_nodes, node_feat_dim, msg_dim, memory_dim=64, time_dim=32):
         super().__init__()
-        
+
+        # Static per-node attributes (role / clearance / device tier), indexed by the
+        # global node id. Populated from the data at train time and persisted in the
+        # state_dict; dynamic entities admitted at serving time write their slot here.
+        self.register_buffer("node_feat", torch.zeros(num_nodes, node_feat_dim))
+
         self.memory = TGNMemory(
             num_nodes=num_nodes,
             raw_msg_dim=msg_dim,
@@ -52,7 +60,9 @@ class ZTATemporalGraphNetwork(nn.Module):
             time_enc=self.memory.time_enc,
         )
         
-        self.link_pred = LinkPredictor(in_channels=memory_dim, msg_dim=msg_dim)
+        self.link_pred = LinkPredictor(
+            in_channels=memory_dim, msg_dim=msg_dim, node_feat_dim=node_feat_dim
+        )
 
     def forward(self, n_id, edge_index, t, msg):
         """
@@ -60,12 +70,15 @@ class ZTATemporalGraphNetwork(nn.Module):
         """
         # Get memory
         z, last_update = self.memory(n_id)
-        
+
         # Calculate embedding
         z = self.gnn(z, last_update, edge_index, t, msg)
-        
+
+        # Static attributes for the nodes in this batch, aligned with z's local order.
+        nf = self.node_feat[n_id]
+
         # Predict links for the edges in the batch
         src, dst = edge_index
-        pred = self.link_pred(z[src], z[dst], msg)
+        pred = self.link_pred(z[src], z[dst], msg, nf[src], nf[dst])
         return pred
 

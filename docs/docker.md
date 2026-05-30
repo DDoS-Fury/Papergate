@@ -10,25 +10,17 @@ Questa struttura permette di eseguire le diverse fasi del progetto isolando gli 
 
 ## Profili Disponibili
 
-Il `docker-compose.yml` contiene due profili principali: `training` e `inference`.
+Il `docker-compose.yml` contiene due profili: `training-tgn` e `verify-tgn`.
 
-### 1. Training (GAE Originale)
-Avvia il container per l'addestramento non supervisionato del GAE sui dati benigni (generati o forniti). Il modello risultante, così come le statistiche di normalizzazione, verranno salvati nella cartella `public/`.
-
-```bash
-docker compose --profile training up
-```
-*(Esegue in background `python -m graphagate.train`)*
-
-### 1.1 Training (Nuovo Modello Temporale TGN)
-Avvia il container per l'addestramento della nuova rete dinamica basata su grafi temporali (Temporal Graph Network). Questo profilo genera dati in stream continuo con contesti Zero Trust (JA3, alert snort, sonde).
+### 1. Training (Modello Temporale TGN)
+Avvia il container per l'addestramento della rete dinamica basata su grafi temporali (Temporal Graph Network). Questo profilo genera dati in stream continuo con contesti Zero Trust (JA3, alert snort, sonde). Gli artifact risultanti vengono salvati nella cartella `public/`.
 
 ```bash
 docker compose --profile training-tgn up
 ```
 *(Esegue in background `python -m graphagate.train_tgn`)*
 
-### 1.2 Verifica correttezza streaming (TGN)
+### 2. Verifica correttezza streaming (TGN)
 Dopo il training TGN (che salva `public/tgn_checkpoint.pt` e `public/tgn_stats.json`),
 questo profilo ricarica l'artifact e verifica le proprietà di serving real-time:
 determinismo del reload, gate anti-poisoning della memoria (un evento anomalo non
@@ -45,15 +37,5 @@ Gli artifact TGN persistiti in `public/` sono:
 - `tgn_stats.json` — soglia di decisione calibrata, `capacity` e mappatura
   `NodeRegistry` (entità esterne → slot di memoria).
 
-### 2. Inferenza ed Esportazione (ONNX)
-Questo profilo gestisce sia la valutazione delle anomalie (anomaly score) sia l'esportazione del modello per i deployment in produzione (es. OPA + onnxruntime_go).
-
-```bash
-docker compose --profile inference up
-```
-Questo comando avvia due servizi in parallelo:
-- **score**: Inietta anomalie e valuta i risultati tramite ROC-AUC e PR-AUC. *(Esegue `graphagate.score --eval`)*
-- **export**: Esporta i pesi e la rete nei formati ONNX statici (bucket S/M/L) in `public/`. *(Esegue `graphagate.export_onnx`)*
-
 ## Dettagli tecnici
-I file di output come `checkpoint.pt`, `norm_stats.json`, e i modelli `model_{S,M,L}.onnx` sono automaticamente persistiti tramite un volume bind-mount sulla cartella `./public` dell'host. Tali artefatti potranno poi essere utilizzati dai microservizi di validazione ZTA (Zero Trust Architecture).
+Gli artifact (`tgn_checkpoint.pt`, `tgn_stats.json`) sono automaticamente persistiti tramite un volume bind-mount sulla cartella `./public` dell'host. Tali artefatti potranno poi essere utilizzati dai microservizi di validazione ZTA (Zero Trust Architecture).

@@ -78,8 +78,17 @@ def _reset_slot(model, idx: int) -> None:
     with torch.no_grad():
         model.memory.memory[idx].zero_()
         model.memory.last_update[idx] = 0
+        model.node_feat[idx].zero_()
     for store in (model.memory.msg_s_store, model.memory.msg_d_store):
         store.pop(idx, None)
+
+
+def _set_node_features(model, idx: int, feat, device) -> None:
+    """Write a node's static attributes (role / clearance / tier) into its slot."""
+    with torch.no_grad():
+        model.node_feat[idx] = torch.as_tensor(
+            feat, dtype=model.node_feat.dtype, device=device
+        )
 
 
 def score_event(
@@ -92,6 +101,8 @@ def score_event(
     features,
     device,
     *,
+    src_feat=None,
+    dst_feat=None,
     update: bool = True,
 ) -> tuple[float, bool]:
     """Score one streaming access event.
@@ -100,6 +111,12 @@ def score_event(
     anomaly score, and — when ``update`` is set — writes the event into memory
     **only if it is classified benign** (``score < threshold``). This keeps the
     memory baseline free of attacker-controlled events.
+
+    ``src_feat`` / ``dst_feat`` are the endpoints' static attributes (role /
+    clearance / device tier). In a ZTA deployment the orchestrator/OPA already
+    holds these for every request, so they are supplied per event — no extra data
+    store is required. When omitted, the slot keeps whatever features it already
+    has (e.g. those learned for preregistered entities at train time).
 
     Returns ``(anomaly_score, is_anomaly)``.
     """
@@ -111,6 +128,11 @@ def score_event(
     dst_idx, _ = registry.get_or_add(
         key_dst, recency=recency, on_evict=lambda i: _reset_slot(model, i)
     )
+
+    if src_feat is not None:
+        _set_node_features(model, src_idx, src_feat, device)
+    if dst_feat is not None:
+        _set_node_features(model, dst_idx, dst_feat, device)
 
     score = infer_score(model, src_idx, dst_idx, timestamp, features, device)
     is_anomaly = score >= threshold

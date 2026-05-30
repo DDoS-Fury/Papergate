@@ -11,6 +11,8 @@ Pipeline:
   6. Persist the deployable artifact (weights + memory + registry + threshold).
 """
 
+import random
+
 import numpy as np
 import torch
 from torch.optim import Adam
@@ -52,16 +54,46 @@ def _replay(model, src, dst, t, msg, y, device, *, threshold=None, gate_by_label
     return scores, labels
 
 
+def _binary_metrics(scores, labels, threshold):
+    """Precision / recall (+ raw counts) of ``score >= threshold`` against ``labels``."""
+    preds = (scores >= threshold).astype(int)
+    tp = int(((preds == 1) & (labels == 1)).sum())
+    fp = int(((preds == 1) & (labels == 0)).sum())
+    fn = int(((preds == 0) & (labels == 1)).sum())
+    precision = tp / (tp + fp) if (tp + fp) else 0.0
+    recall = tp / (tp + fn) if (tp + fn) else 0.0
+    return precision, recall
+
+
+def _rule_baseline(test_msg):
+    """Trivial detector: flag if any Zero-Trust edge signal fires.
+
+    Columns are ``[ja3, snort, s1, s2, s3, method]``: an event is suspicious when the
+    TLS trust is broken (``ja3==0``), Snort alerts (``snort==1``) or any sensor fires.
+    This catches *contextual* anomalies but is blind to *policy* violations (which
+    share benign edge features) — it quantifies how much the TGN adds beyond rules.
+    """
+    return (
+        (test_msg[:, 0] == 0.0)
+        | (test_msg[:, 1] == 1.0)
+        | (test_msg[:, 2] == 1.0)
+        | (test_msg[:, 3] == 1.0)
+        | (test_msg[:, 4] == 1.0)
+    ).astype(int)
+
+
 def train_tgn(cfg: TGNConfig = TGNConfig()):
     torch.manual_seed(cfg.seed)
     np.random.seed(cfg.seed)
+    random.seed(cfg.seed)
 
     print("Generating streaming data...")
-    src, dst, t, msg, y, _node_features = generate_streaming_data(
+    src, dst, t, msg, y, types, node_features = generate_streaming_data(
         num_users=cfg.num_users,
         num_ips=cfg.num_ips,
         num_resources=cfg.num_resources,
         num_events=cfg.num_events,
+        seed=cfg.seed,
     )
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -79,6 +111,12 @@ def train_tgn(cfg: TGNConfig = TGNConfig()):
         memory_dim=cfg.memory_dim,
         time_dim=cfg.time_dim,
     ).to(device)
+
+    # Load the static node attributes (role / clearance / tier) into the model's
+    # buffer for the preregistered training entities. Slots reserved for entities
+    # first seen at serving time stay zero until those entities supply their features.
+    with torch.no_grad():
+        model.node_feat[: cfg.total_nodes] = node_features.to(device)
 
     optimizer = Adam(model.parameters(), lr=cfg.learning_rate)
     criterion = torch.nn.BCEWithLogitsLoss()
@@ -175,16 +213,46 @@ def train_tgn(cfg: TGNConfig = TGNConfig()):
         device, threshold=threshold, gate_by_label=False,
     )
 
+    test_types = types[val_end:].numpy()
+    test_msg = msg[val_end:].numpy()
+
     auc = roc_auc_score(test_labels, test_scores)
     ap = average_precision_score(test_labels, test_scores)
-    preds = (test_scores >= threshold).astype(int)
-    tp = int(((preds == 1) & (test_labels == 1)).sum())
-    fp = int(((preds == 1) & (test_labels == 0)).sum())
-    fn = int(((preds == 0) & (test_labels == 1)).sum())
-    precision = tp / (tp + fp) if (tp + fp) else 0.0
-    recall = tp / (tp + fn) if (tp + fn) else 0.0
+    precision, recall = _binary_metrics(test_scores, test_labels, threshold)
     print(f"Test Stream | AUC: {auc:.4f} | AP: {ap:.4f}")
     print(f"At threshold {threshold:.4f} | Precision: {precision:.4f} | Recall: {recall:.4f}")
+
+    # --- PER-ANOMALY-TYPE BREAKDOWN ------------------------------------------
+    # AUC/AP per type are computed against benign only (type 0) vs that type, so an
+    # aggregate metric cannot hide a class the model handles poorly. Contextual
+    # anomalies are near-trivial (separable on edge features); policy anomalies share
+    # benign edge features and are the genuinely hard case.
+    print("\n--- METRICHE PER TIPO DI ANOMALIA ---")
+    benign = test_types == 0
+    for type_id, name in ((1, "policy   "), (2, "contextual")):
+        sel = benign | (test_types == type_id)
+        s_sel, l_sel = test_scores[sel], (test_types[sel] == type_id).astype(int)
+        if l_sel.sum() == 0:
+            continue
+        t_auc = roc_auc_score(l_sel, s_sel)
+        t_ap = average_precision_score(l_sel, s_sel)
+        _, t_recall = _binary_metrics(s_sel, l_sel, threshold)
+        print(f"  {name} | n={int(l_sel.sum()):4d} | AUC: {t_auc:.4f} | "
+              f"AP: {t_ap:.4f} | Recall@thr: {t_recall:.4f}")
+
+    # --- RULE-BASED BASELINE (value-add reference) ---------------------------
+    base_pred = _rule_baseline(test_msg)
+    b_tp = int(((base_pred == 1) & (test_labels == 1)).sum())
+    b_fp = int(((base_pred == 1) & (test_labels == 0)).sum())
+    b_fn = int(((base_pred == 0) & (test_labels == 1)).sum())
+    b_precision = b_tp / (b_tp + b_fp) if (b_tp + b_fp) else 0.0
+    b_recall = b_tp / (b_tp + b_fn) if (b_tp + b_fn) else 0.0
+    base_policy_recall = (
+        ((base_pred == 1) & (test_types == 1)).sum() / max((test_types == 1).sum(), 1)
+    )
+    print("\n--- BASELINE A REGOLE (signal-only) ---")
+    print(f"  Precision: {b_precision:.4f} | Recall: {b_recall:.4f} | "
+          f"Recall su anomalie di policy: {base_policy_recall:.4f}")
 
     # --- PERSIST DEPLOYABLE ARTIFACT -----------------------------------------
     hp = {
