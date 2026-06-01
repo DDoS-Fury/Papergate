@@ -46,10 +46,17 @@ class MetricsTracker:
             except Exception:
                 pass
                 
-        # Calculate accuracy
-        correct = sum(1 for p in self.predictions if p[0] == p[1])
+        # Calculate metrics for anomalies (positive class = True)
+        tp = sum(1 for p in self.predictions if p[0] and p[1])
+        fp = sum(1 for p in self.predictions if p[0] and not p[1])
+        fn = sum(1 for p in self.predictions if not p[0] and p[1])
+        tn = sum(1 for p in self.predictions if not p[0] and not p[1])
+        
         total = len(self.predictions)
-        accuracy = correct / total if total > 0 else 0
+        accuracy = (tp + tn) / total if total > 0 else 0
+        precision = tp / (tp + fp) if (tp + fp) > 0 else 0
+        recall = tp / (tp + fn) if (tp + fn) > 0 else 0
+        f1 = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0
         
         print("="*50)
         print("TEST CLIENT REPORT")
@@ -60,11 +67,12 @@ class MetricsTracker:
         print(f"VRAM Usage: {vram_info}")
         print(f"Latency (ms) - P50: {p50:.2f} | P90: {p90:.2f} | P99: {p99:.2f}")
         print(f"Overall Accuracy: {accuracy*100:.2f}%")
+        print(f"Anomalies - Precision: {precision:.4f} | Recall: {recall:.4f} | F1 Score: {f1:.4f}")
         
         # Breakdown by type
         # types: 0=benign, 1=policy, 2=contextual, 3=lateral
         type_names = {0: "Benign", 1: "Policy", 2: "Contextual", 3: "Lateral"}
-        print("\nAccuracy by Event Type:")
+        print("\nAccuracy by Event Type (Recall for anomalies, Specificity for benign):")
         for t in [0, 1, 2, 3]:
             t_preds = [p for p in self.predictions if p[2] == t]
             if t_preds:

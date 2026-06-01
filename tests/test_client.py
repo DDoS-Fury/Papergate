@@ -43,17 +43,20 @@ async def test_client(duration_seconds=120):
             tracker.record_prediction(is_anomaly, label == 1, etype)
             
             # 3. Simulate Orchestrator/OPA decision
+            # OPA receives the raw continuous score and the calibrated threshold from the API
+            # and performs the evaluation locally (e.g. OPA Rego policy logic).
+            api_threshold = resp_data.get("threshold", 0.5)
+            opa_is_anomaly = anomaly_score > api_threshold
+            
             user_counts[key_src] = user_counts.get(key_src, 0) + 1
             is_policy_violation = (etype == 1)
             
             # GRACE PERIOD: Per i primissimi eventi di un nuovo utente (cold-start),
             # l'Orchestrator si fida delle policy statiche (JWT/OPA) per fargli creare una baseline.
-            # Se la policy è OK, ignora l'AI score. Un grace period di 50 eventi garantisce che 
-            # l'utente abbia il tempo di toccare tutte le sue risorse abituali prima di attivare lo sbarramento.
             if user_counts[key_src] <= 50:
                 allow = not is_policy_violation
             else:
-                allow = (not is_policy_violation) and (anomaly_score < 0.70)
+                allow = (not is_policy_violation) and (not opa_is_anomaly)
                 
             if allow:
                 try:

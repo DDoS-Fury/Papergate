@@ -82,6 +82,10 @@ async def event_generator(num_users=50, num_ips=100, num_resources=20, seed=None
         u_idx = ip_to_user[i]
         node_features[num_users + i, 0] = ROLES.index(user_roles[u_idx]) / float(len(ROLES))
         node_features[num_users + i, 1] = user_clearances[u_idx] / 4.0
+
+    for i in range(num_resources):
+        uri_idx = i % len(RESOURCE_URIS)
+        node_features[num_users + num_ips + i, 3 + uri_idx] = 1.0
         
     ip_valid_actions = []
     ip_habitual = []
@@ -186,7 +190,7 @@ async def event_generator(num_users=50, num_ips=100, num_resources=20, seed=None
         edge_feat = [float(ja3), float(snort), float(s1), float(s2), float(s3), float(action)]
         
         src_feat = node_features[src_val].tolist()
-        dst_feat = [0.0] * 16
+        dst_feat = node_features[dst_val].tolist()
         
         yield {
             "key_src": f"user_{src_val}",

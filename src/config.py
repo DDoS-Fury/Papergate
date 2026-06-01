@@ -37,16 +37,13 @@ class TGNConfig:
 
     # Architecture.
     msg_dim: int = 6
-    memory_dim: int = 64
+    memory_dim: int = 128
     time_dim: int = 32
     node_feat_dim: int = 16
-    # Learnable per-node identity embedding dimension (feeds the GNN; gives resources a
-    # distinguishable identity so the structural head can detect lateral movement).
-    id_dim: int = 32
     # Temporal neighbours kept per node in the (bounded, in-memory) neighbour loader.
     # Enables message passing over each entity's recent interaction history → the
     # structural signal for lateral-movement detection. No graph DB required.
-    neighbor_size: int = 10
+    neighbor_size: int = 30
 
     # Optimisation.
     batch_size: int = 200
@@ -60,7 +57,7 @@ class TGNConfig:
     # Spare memory slots reserved for entities first seen at inference time.
     capacity_headroom: int = 50000
     # Decision-threshold calibration target (benign false-positive rate).
-    target_fpr: float = 0.05
+    target_fpr: float = 0.01
 
     seed: int = 42
 

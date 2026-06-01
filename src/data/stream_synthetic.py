@@ -98,6 +98,10 @@ def generate_streaming_data(num_users=50, num_ips=100, num_resources=20, num_eve
         u_idx = ip_to_user[i]
         node_features[num_users + i, 0] = ROLES.index(user_roles[u_idx]) / float(len(ROLES))
         node_features[num_users + i, 1] = user_clearances[u_idx] / 4.0
+        
+    for i in range(num_resources):
+        uri_idx = i % len(RESOURCE_URIS)
+        node_features[num_users + num_ips + i, 3 + uri_idx] = 1.0
     
     # Per-IP behaviour model. For each IP we precompute the (resource, method) actions
     # its associated user is *authorised* to perform, then carve out a "habitual" subset

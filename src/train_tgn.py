@@ -116,7 +116,6 @@ def train_tgn(cfg: TGNConfig = TGNConfig()):
         msg_dim=cfg.msg_dim,
         memory_dim=cfg.memory_dim,
         time_dim=cfg.time_dim,
-        id_dim=cfg.id_dim,
     ).to(device)
 
     # Load the static node attributes (role / clearance / tier) into the model's
@@ -219,7 +218,7 @@ def train_tgn(cfg: TGNConfig = TGNConfig()):
             loss = (
                 criterion(pos_out, torch.ones_like(pos_out))
                 + criterion(neg_out_struct, torch.zeros_like(neg_out_struct))
-                + criterion(neg_out_hard, torch.zeros_like(neg_out_hard))
+                + 5.0 * criterion(neg_out_hard, torch.zeros_like(neg_out_hard))
                 + criterion(neg_out_ctx, torch.zeros_like(neg_out_ctx))
             )
 
@@ -308,7 +307,6 @@ def train_tgn(cfg: TGNConfig = TGNConfig()):
         "msg_dim": cfg.msg_dim,
         "memory_dim": cfg.memory_dim,
         "time_dim": cfg.time_dim,
-        "id_dim": cfg.id_dim,
         "neighbor_size": cfg.neighbor_size,
         "target_fpr": cfg.target_fpr,
     }

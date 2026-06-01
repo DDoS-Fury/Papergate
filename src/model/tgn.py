@@ -39,8 +39,7 @@ class LinkPredictor(nn.Module):
         return self.lin2(h)
 
 class ZTATemporalGraphNetwork(nn.Module):
-    def __init__(self, num_nodes, node_feat_dim, msg_dim, memory_dim=64, time_dim=32,
-                 id_dim=32):
+    def __init__(self, num_nodes, node_feat_dim, msg_dim, memory_dim=64, time_dim=32):
         super().__init__()
 
         # Kept for (re)building the temporal neighbour loader, which is not an
@@ -53,13 +52,6 @@ class ZTATemporalGraphNetwork(nn.Module):
         # state_dict; dynamic entities admitted at serving time write their slot here.
         self.register_buffer("node_feat", torch.zeros(num_nodes, node_feat_dim))
 
-        # Learnable per-node identity. Fed *into* the GNN so the attention embedding
-        # itself becomes identity-aware: an entity's embedding aggregates the identities
-        # of the resources it habitually touches, and a resource carries its own. Without
-        # this, resources are near-indistinguishable (no static features, homogeneous
-        # benign edge features) and the structural signal for lateral movement is absent.
-        self.node_id = nn.Embedding(num_nodes, id_dim)
-
         self.memory = TGNMemory(
             num_nodes=num_nodes,
             raw_msg_dim=msg_dim,
@@ -70,7 +62,7 @@ class ZTATemporalGraphNetwork(nn.Module):
         )
 
         self.gnn = GraphAttentionEmbedding(
-            in_channels=memory_dim + id_dim,
+            in_channels=memory_dim + node_feat_dim,
             out_channels=memory_dim,
             msg_dim=msg_dim,
             time_enc=self.memory.time_enc,
@@ -109,7 +101,8 @@ class ZTATemporalGraphNetwork(nn.Module):
         supplied by the neighbour loader — not the event currently being scored.
         """
         z, last_update = self.memory(n_id)
-        x = torch.cat([z, self.node_id(n_id)], dim=-1)  # identity-aware node features
+        nf = self.node_feat[n_id]
+        x = torch.cat([z, nf], dim=-1)  # identity-aware node features
         z = self.gnn(x, last_update, edge_index, hist_t, hist_msg)
         return z
 
