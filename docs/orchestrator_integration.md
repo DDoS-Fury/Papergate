@@ -149,10 +149,8 @@ Per questo motivo, l'Orchestrator deve iniettare i privilegi a runtime tramite `
   vicinato, registry); più worker/replica divergerebbero e si sovrascriverebbero in
   `/persist`. Avviare con un singolo worker uvicorn (già impostato) e **non** scalare
   orizzontalmente questo servizio.
-- **Continuità delle chiavi.** Il registry serializzato dal training usa le chiavi viste
-  in addestramento. Per riconoscere un'entità nota, l'orchestrator deve inviare la
-  *stessa* chiave; una chiave nuova viene ammessa dinamicamente e parte "cold-start"
-  (si affida a memoria e vicinato man mano che accumula storia approvata).
+- **Continuità delle chiavi e Risorse.** Il registry serializzato dal training pre-registra le stringhe esatte degli URI per gli endpoint (es. `/api/v1/zones`). L'Orchestrator DEVE usare queste esatte stringhe come `key_dst` per far sì che il modello riconosca il backend. Se viene usata una stringa diversa, il modello lo interpreterà come un backend mai visto prima (falsando i rilevamenti).
+- **Grace Period (Rodaggio Cold-Start per Utenti).** Poiché in produzione l'Orchestrator incontrerà chiavi utente/IP completamente nuove (`key_src`), il modello assegnerà a queste identità un alto anomaly score iniziale, per la mancanza di storico (cold-start). L'Orchestrator **deve** applicare un "Grace Period" su queste nuove entità: per i primissimi eventi (es. i primi 5-10), deve fidarsi solo della validazione statica di OPA e forzare la chiamata a `/update`, ignorando il punteggio AI. Questo permette al modello di costruire rapidamente una baseline "sicura" per il nuovo utente.
 
 ### Esempio: chiamata diretta (curl)
 

@@ -50,7 +50,7 @@ class TGNConfig:
 
     # Optimisation.
     batch_size: int = 200
-    epochs: int = 10
+    epochs: int = 11
     learning_rate: float = 1e-3
 
     # Chronological split fractions (test = 1 - train - val).

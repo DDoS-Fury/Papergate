@@ -66,9 +66,25 @@ def generate_streaming_data(num_users=50, num_ips=100, num_resources=20, num_eve
          1: ({"plant_manager"}, 2, 4), 2: ({"plant_manager"}, 2, 4), 3: ({"plant_manager"}, 2, 4)}
     ]
     
+    RESOURCE_URIS = [
+        "/public",
+        "/api/v1/auth/register/begin",
+        "/api/v1/personnel",
+        "/api/v1/zones",
+        "/api/v1/badges",
+        "/api/v1/reactor-parameters",
+        "/api/v1/maintenance-orders",
+        "/api/v1/documents",
+        "/api/v1/nuclear-materials"
+    ]
+    
     resource_rules = []
+    resource_uris = []
     for i in range(num_resources):
+        base_uri = RESOURCE_URIS[i % len(RESOURCE_URIS)]
+        suffix = "" if num_resources <= len(RESOURCE_URIS) else f"/{i // len(RESOURCE_URIS)}"
         resource_rules.append(route_templates[i % len(route_templates)])
+        resource_uris.append(base_uri + suffix)
         
     # Node features (static): 16-dim
     # Encode roles, clearance, tier into the features.
@@ -122,7 +138,12 @@ def generate_streaming_data(num_users=50, num_ips=100, num_resources=20, num_eve
         hour_of_day = (current_time // 3600) % 24
         
         # We simulate IP -> Resource interactions
-        src_ip_idx = np.random.randint(0, num_ips)
+        # Gradually introduce IPs throughout the stream to simulate continuous cold-starts.
+        # This forces the model to learn to tolerate new entities with empty histories.
+        max_ip = max(1, int((i / num_events) * num_ips) + 1)
+        if max_ip > num_ips:
+            max_ip = num_ips
+        src_ip_idx = np.random.randint(0, max_ip)
         src_val = num_users + src_ip_idx
         
         user_idx = ip_to_user[src_ip_idx]
@@ -217,4 +238,4 @@ def generate_streaming_data(num_users=50, num_ips=100, num_resources=20, num_eve
     y_tensor = torch.tensor(labels, dtype=torch.long)
     types_tensor = torch.tensor(types, dtype=torch.long)
 
-    return src_tensor, dst_tensor, t_tensor, msg_tensor, y_tensor, types_tensor, node_features
+    return src_tensor, dst_tensor, t_tensor, msg_tensor, y_tensor, types_tensor, node_features, resource_uris

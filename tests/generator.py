@@ -52,9 +52,25 @@ async def event_generator(num_users=50, num_ips=100, num_resources=20, seed=None
          1: ({"plant_manager"}, 2, 4), 2: ({"plant_manager"}, 2, 4), 3: ({"plant_manager"}, 2, 4)}
     ]
     
+    RESOURCE_URIS = [
+        "/public",
+        "/api/v1/auth/register/begin",
+        "/api/v1/personnel",
+        "/api/v1/zones",
+        "/api/v1/badges",
+        "/api/v1/reactor-parameters",
+        "/api/v1/maintenance-orders",
+        "/api/v1/documents",
+        "/api/v1/nuclear-materials"
+    ]
+    
     resource_rules = []
+    resource_uris = []
     for i in range(num_resources):
+        base_uri = RESOURCE_URIS[i % len(RESOURCE_URIS)]
+        suffix = "" if num_resources <= len(RESOURCE_URIS) else f"/{i // len(RESOURCE_URIS)}"
         resource_rules.append(route_templates[i % len(route_templates)])
+        resource_uris.append(base_uri + suffix)
         
     # Node features (static): 16-dim
     node_features = np.zeros((total_nodes, 16))
@@ -85,7 +101,14 @@ async def event_generator(num_users=50, num_ips=100, num_resources=20, seed=None
         else:
             ip_habitual.append(set())
 
+    # Per allineare PERFETTAMENTE il tempo con il training, riproduciamo
+    # la sequenza casuale originale del seed 42 per 50000 eventi.
+    np.random.seed(42)
     current_time = 0
+    for _ in range(50000):
+        current_time += int(np.random.exponential(scale=300.0))
+        
+    print(f"[Generator] Starting seamlessly at t={current_time}")
     while True:
         current_time += int(np.random.exponential(scale=300.0))
         
@@ -167,7 +190,7 @@ async def event_generator(num_users=50, num_ips=100, num_resources=20, seed=None
         
         yield {
             "key_src": f"user_{src_val}",
-            "key_dst": f"res_{dst_val}",
+            "key_dst": resource_uris[res_idx],
             "timestamp": int(current_time),
             "features": edge_feat,
             "src_feat": src_feat,

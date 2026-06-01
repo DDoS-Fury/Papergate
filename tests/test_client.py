@@ -48,8 +48,9 @@ async def test_client(duration_seconds=120):
             
             # GRACE PERIOD: Per i primissimi eventi di un nuovo utente (cold-start),
             # l'Orchestrator si fida delle policy statiche (JWT/OPA) per fargli creare una baseline.
-            # Se la policy è OK, ignora l'AI score. Dopo 5 eventi, applica lo sbarramento AI (>= 0.7).
-            if user_counts[key_src] <= 5:
+            # Se la policy è OK, ignora l'AI score. Un grace period di 50 eventi garantisce che 
+            # l'utente abbia il tempo di toccare tutte le sue risorse abituali prima di attivare lo sbarramento.
+            if user_counts[key_src] <= 50:
                 allow = not is_policy_violation
             else:
                 allow = (not is_policy_violation) and (anomaly_score < 0.70)

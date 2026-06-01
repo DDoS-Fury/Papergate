@@ -88,7 +88,7 @@ def train_tgn(cfg: TGNConfig = TGNConfig()):
     random.seed(cfg.seed)
 
     print("Generating streaming data...")
-    src, dst, t, msg, y, types, node_features = generate_streaming_data(
+    src, dst, t, msg, y, types, node_features, resource_uris = generate_streaming_data(
         num_users=cfg.num_users,
         num_ips=cfg.num_ips,
         num_resources=cfg.num_resources,
@@ -99,10 +99,16 @@ def train_tgn(cfg: TGNConfig = TGNConfig()):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
 
-    # Entity registry: known synthetic ids get an identity mapping; spare capacity
-    # is reserved for entities first seen at inference time.
+    # Entity registry: users and IPs are still mapped by their int ids, but resources
+    # are registered using their actual string URIs so the Orchestrator can send strings natively.
     registry = NodeRegistry(capacity=cfg.capacity)
-    registry.preregister(range(cfg.total_nodes))
+    registry.preregister(range(cfg.num_users + cfg.num_ips))
+    res_start = cfg.num_users + cfg.num_ips
+    for i, uri in enumerate(resource_uris):
+        slot = res_start + i
+        registry._key_to_idx[uri] = slot
+        registry._idx_to_key[slot] = uri
+        registry._next_idx = max(registry._next_idx, slot + 1)
 
     model = ZTATemporalGraphNetwork(
         num_nodes=cfg.capacity,
