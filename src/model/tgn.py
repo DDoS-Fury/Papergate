@@ -36,12 +36,12 @@ class GraphAttentionEmbedding(nn.Module):
         return x
 
 class LinkPredictor(nn.Module):
-    def __init__(self, in_channels, msg_dim, node_feat_dim):
+    def __init__(self, in_channels, msg_dim, node_feat_dim, hash_dim):
         super().__init__()
         # Static node attributes (role / clearance / device tier) are concatenated
         # for both endpoints: they carry the policy-relevant signal that separates a
         # policy-violation anomaly (same edge features as benign) from benign traffic.
-        self.lin1 = nn.Linear(in_channels * 2 + msg_dim + node_feat_dim * 2, in_channels)
+        self.lin1 = nn.Linear(in_channels * 2 + msg_dim + (node_feat_dim + hash_dim) * 2, in_channels)
         self.lin2 = nn.Linear(in_channels, 1)
 
     def forward(self, z_src, z_dst, msg, feat_src, feat_dst):
@@ -50,7 +50,7 @@ class LinkPredictor(nn.Module):
         return self.lin2(h)
 
 class ZTATemporalGraphNetwork(nn.Module):
-    def __init__(self, num_nodes, node_feat_dim, msg_dim, memory_dim=64, time_dim=32, num_hops=2):
+    def __init__(self, num_nodes, node_feat_dim, msg_dim, memory_dim=64, time_dim=32, num_hops=2, hash_buckets=10000, hash_dim=16):
         super().__init__()
 
         self.num_hops = num_hops
@@ -63,6 +63,10 @@ class ZTATemporalGraphNetwork(nn.Module):
         # global node id. Populated from the data at train time and persisted in the
         # state_dict; dynamic entities admitted at serving time write their slot here.
         self.register_buffer("node_feat", torch.zeros(num_nodes, node_feat_dim))
+        
+        # Hashed Identity Trick buffer
+        self.register_buffer("node_hash", torch.zeros(num_nodes, dtype=torch.long))
+        self.hash_emb = nn.Embedding(hash_buckets, hash_dim)
 
         self.memory = TGNMemory(
             num_nodes=num_nodes,
@@ -74,7 +78,7 @@ class ZTATemporalGraphNetwork(nn.Module):
         )
 
         self.gnn = GraphAttentionEmbedding(
-            in_channels=memory_dim + node_feat_dim,
+            in_channels=memory_dim + node_feat_dim + hash_dim,
             out_channels=memory_dim,
             msg_dim=msg_dim,
             time_enc=self.memory.time_enc,
@@ -82,7 +86,7 @@ class ZTATemporalGraphNetwork(nn.Module):
         )
 
         self.link_pred = LinkPredictor(
-            in_channels=memory_dim, msg_dim=msg_dim, node_feat_dim=node_feat_dim
+            in_channels=memory_dim, msg_dim=msg_dim, node_feat_dim=node_feat_dim, hash_dim=hash_dim
         )
 
         # Dedicated structural-compatibility head: projects the (identity-aware)
@@ -115,11 +119,13 @@ class ZTATemporalGraphNetwork(nn.Module):
         """
         z, last_update = self.memory(n_id)
         nf = self.node_feat[n_id]
-        x = torch.cat([z, nf], dim=-1)  # identity-aware node features
+        h_idx = self.node_hash[n_id]
+        he = self.hash_emb(h_idx)
+        x = torch.cat([z, nf, he], dim=-1)  # identity-aware node features
         z = self.gnn(x, last_update, edge_index, hist_t, hist_msg)
         return z
 
-    def score(self, z, nf, src_local, dst_local, cur_msg):
+    def score(self, z, nf, h_idx, src_local, dst_local, cur_msg):
         """Benign-vs-anomalous logit for ``src_local -> dst_local`` carrying ``cur_msg``.
 
         Sum of two complementary signals (shared by training and serving):
@@ -128,8 +134,10 @@ class ZTATemporalGraphNetwork(nn.Module):
           * structural head — scaled cosine compatibility of the projected embeddings
             (catches lateral movement: a valid-but-non-habitual src/dst pairing).
         """
+        he = self.hash_emb(h_idx)
+        feat_with_hash = torch.cat([nf, he], dim=-1)
         feat = self.link_pred(
-            z[src_local], z[dst_local], cur_msg, nf[src_local], nf[dst_local]
+            z[src_local], z[dst_local], cur_msg, feat_with_hash[src_local], feat_with_hash[dst_local]
         ).squeeze(-1)
         hs = F.normalize(self.struct_proj(z[src_local]), dim=-1)
         hd = F.normalize(self.struct_proj(z[dst_local]), dim=-1)
@@ -145,5 +153,6 @@ class ZTATemporalGraphNetwork(nn.Module):
         """
         z = self.embed(n_id, edge_index, hist_t, hist_msg)
         nf = self.node_feat[n_id]
-        return self.score(z, nf, src_local, dst_local, cur_msg)
+        h_idx = self.node_hash[n_id]
+        return self.score(z, nf, h_idx, src_local, dst_local, cur_msg)
 

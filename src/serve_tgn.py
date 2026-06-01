@@ -41,6 +41,8 @@ def build_model(hp: dict, device: torch.device) -> ZTATemporalGraphNetwork:
         memory_dim=int(hp["memory_dim"]),
         time_dim=int(hp["time_dim"]),
         num_hops=int(hp.get("num_hops", 2)),
+        hash_buckets=int(hp.get("hash_buckets", 10000)),
+        hash_dim=int(hp.get("hash_dim", 16)),
     ).to(device)
     # The bounded neighbour loader lives outside the state_dict; build it on the
     # serving device so its buffers match the model's. Its contents are restored
@@ -105,6 +107,7 @@ def _reset_slot(model, idx: int) -> None:
         model.memory.memory[idx].zero_()
         model.memory.last_update[idx] = 0
         model.node_feat[idx].zero_()
+        model.node_hash[idx].zero_()
     for store in (model.memory.msg_s_store, model.memory.msg_d_store):
         store.pop(idx, None)
     # Scrub the reused slot's temporal neighbourhood so a recycled index can't
@@ -151,12 +154,17 @@ def score_event(
     """
     model.eval()
     recency = model.memory.last_update
-    src_idx, _ = registry.get_or_add(
+    src_idx, is_new_src = registry.get_or_add(
         key_src, recency=recency, on_evict=lambda i: _reset_slot(model, i)
     )
-    dst_idx, _ = registry.get_or_add(
+    if is_new_src:
+        model.node_hash[src_idx] = hash(str(key_src)) % model.hash_emb.num_embeddings
+        
+    dst_idx, is_new_dst = registry.get_or_add(
         key_dst, recency=recency, on_evict=lambda i: _reset_slot(model, i)
     )
+    if is_new_dst:
+        model.node_hash[dst_idx] = hash(str(key_dst)) % model.hash_emb.num_embeddings
 
     if src_feat is not None:
         _set_node_features(model, src_idx, src_feat, device)
@@ -196,12 +204,17 @@ def commit_event(
     """
     model.eval()
     recency = model.memory.last_update
-    src_idx, _ = registry.get_or_add(
+    src_idx, is_new_src = registry.get_or_add(
         key_src, recency=recency, on_evict=lambda i: _reset_slot(model, i)
     )
-    dst_idx, _ = registry.get_or_add(
+    if is_new_src:
+        model.node_hash[src_idx] = hash(str(key_src)) % model.hash_emb.num_embeddings
+        
+    dst_idx, is_new_dst = registry.get_or_add(
         key_dst, recency=recency, on_evict=lambda i: _reset_slot(model, i)
     )
+    if is_new_dst:
+        model.node_hash[dst_idx] = hash(str(key_dst)) % model.hash_emb.num_embeddings
 
     if src_feat is not None:
         _set_node_features(model, src_idx, src_feat, device)

@@ -117,6 +117,8 @@ def train_tgn(cfg: TGNConfig = TGNConfig()):
         memory_dim=cfg.memory_dim,
         time_dim=cfg.time_dim,
         num_hops=cfg.num_hops,
+        hash_buckets=cfg.hash_buckets,
+        hash_dim=cfg.hash_dim,
     ).to(device)
 
     # Load the static node attributes (role / clearance / tier) into the model's
@@ -124,6 +126,9 @@ def train_tgn(cfg: TGNConfig = TGNConfig()):
     # first seen at serving time stay zero until those entities supply their features.
     with torch.no_grad():
         model.node_feat[: cfg.total_nodes] = node_features.to(device)
+        # Hashed Identity Trick
+        hashes = [hash(str(registry._idx_to_key[i])) % cfg.hash_buckets for i in range(cfg.total_nodes)]
+        model.node_hash[: cfg.total_nodes] = torch.tensor(hashes, dtype=torch.long, device=device)
 
     # Bounded temporal neighbour loader (built on the model device after .to).
     model.init_neighbor_loader(cfg.neighbor_size, device)
@@ -197,23 +202,24 @@ def train_tgn(cfg: TGNConfig = TGNConfig()):
             z = model.embed(n_id, edge_index, hist_t, hist_msg)
             assoc = model.neighbor_loader._assoc
             nf = model.node_feat[n_id]
+            h_idx = model.node_hash[n_id]
             s_loc, d_loc = assoc[p_src], assoc[p_dst]
             nd_loc, hd_loc = assoc[neg_dst], assoc[hard_dst]
 
             # --- POSITIVE EDGES (healthy behaviour) ---
-            pos_out = model.score(z, nf, s_loc, d_loc, p_msg)
+            pos_out = model.score(z, nf, h_idx, s_loc, d_loc, p_msg)
 
             # --- STRUCTURAL NEGATIVES (src paired with an unrelated target) ---
-            neg_out_struct = model.score(z, nf, s_loc, nd_loc, p_msg)
+            neg_out_struct = model.score(z, nf, h_idx, s_loc, nd_loc, p_msg)
 
             # --- HARD STRUCTURAL NEGATIVES (src paired with a non-habitual resource) ---
-            neg_out_hard = model.score(z, nf, s_loc, hd_loc, p_msg)
+            neg_out_hard = model.score(z, nf, h_idx, s_loc, hd_loc, p_msg)
 
             # --- CONTEXTUAL NEGATIVES (out-of-distribution feature perturbation) ---
             neg_msg = p_msg.clone()
             noise_mask = torch.rand_like(neg_msg) < 0.20
             neg_msg[noise_mask] = 1.0 - neg_msg[noise_mask]
-            neg_out_ctx = model.score(z, nf, s_loc, d_loc, neg_msg)
+            neg_out_ctx = model.score(z, nf, h_idx, s_loc, d_loc, neg_msg)
 
             # --- UNSUPERVISED LOSS: positive -> 1, negatives -> 0 ---
             loss = (
@@ -309,6 +315,8 @@ def train_tgn(cfg: TGNConfig = TGNConfig()):
         "memory_dim": cfg.memory_dim,
         "time_dim": cfg.time_dim,
         "num_hops": cfg.num_hops,
+        "hash_buckets": cfg.hash_buckets,
+        "hash_dim": cfg.hash_dim,
         "neighbor_size": cfg.neighbor_size,
         "target_fpr": cfg.target_fpr,
     }

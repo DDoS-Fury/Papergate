@@ -30,7 +30,7 @@ Il modello TGN è stato progettato appositamente per essere **stateful** e gesti
    All'arrivo di una tupla, il TGN utilizza il suo `NodeRegistry` per mappare le chiavi alfanumeriche (es. un nuovo indirizzo IP mai visto prima) in indici interi in tempo reale. Il sistema supporta l'ingresso di nodi non visti durante il training (spazio dei nodi dinamico e illimitato).
 
 3. **Integrazione con la Memoria TGN e il vicinato**
-   Il modello accede allo stato storico dei nodi coinvolti leggendo i propri tensori interni: la memoria ricorrente (`model.memory`) **e** il vicinato temporale recente (`model.neighbor_loader`). Concatena la memoria con l'identità apprendibile di nodo, fa girare la GNN sui vicini reali e combina la *feature head* (policy/contestuale) con la *structural head* (lateral movement). Viene calcolato l'anomaly score (`1 − P(benigno)`, da `0.0` a `1.0`) e restituito all'orchestrator, che lo girerà ad OPA.
+   Il modello accede allo stato storico dei nodi coinvolti leggendo i propri tensori interni: la memoria ricorrente (`model.memory`) **e** il vicinato temporale recente (`model.neighbor_loader`). Concatena la memoria con l'identità hashata di nodo (**Hashed Identity**), fa girare la GNN multi-hop sui vicini reali e combina la *feature head* (policy/contestuale) con la *structural head* (lateral movement). Viene calcolato l'anomaly score (`1 − P(benigno)`, da `0.0` a `1.0`) e restituito all'orchestrator, che lo girerà ad OPA.
 
 4. **Aggiornamento "Anti-Poisoning" (Gatekeeper OPA)**
    Affinché OPA sia il vero decisore finale, l'Orchestrator gestisce le primitive del modello in due step (invece del gate interno di `score_event`):
@@ -134,9 +134,9 @@ Lo schema in due step della sezione precedente si realizza così:
 3. Se **ALLOW** → `POST /update` (committa nel modello). Se **DENY** → nessuna chiamata
    a `/update`: l'evento ostile non entra mai nella baseline.
 
-### Gestione Identità (Nuovi Utenti e Guest)
+### Gestione Identità (Nuovi Utenti e Guest, Hashed Identity)
 
-Essendo stato addestrato su dati sintetici, in produzione il modello vedrà solo entità (utenti/IP) mai viste prima. Grazie alla gestione dinamica della memoria, il modello alloca in tempo reale un nuovo slot in RAM per ogni identità sconosciuta (cold-start).
+Essendo stato addestrato su dati sintetici, in produzione il modello vedrà solo entità (utenti/IP) mai viste prima. Grazie alla gestione dinamica della memoria e all'uso dell'**Hashed Identity**, il modello alloca in tempo reale un nuovo slot in RAM per ogni identità sconosciuta (cold-start) calcolando al volo l'hashing scalabile dell'URI (`hash(URI) % buckets`). Questo fornisce da sùbito una base di embedding coerente e induttiva anche per i nodi appena scoperti.
 
 Per questo motivo, l'Orchestrator deve iniettare i privilegi a runtime tramite `src_feat`:
 

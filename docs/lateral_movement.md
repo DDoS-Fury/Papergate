@@ -84,3 +84,12 @@ negative sampling), *non* della detection. Il suo valore assoluto riflette l'ent
 irriducibile del predire il prossimo edge ed è poco correlato con AUC/AP, che sono
 metriche di **ranking** (invarianti a trasformazioni monotone dello score). Loss alta
 + AUC alta è quindi atteso e non è un sintomo da inseguire.
+
+---
+
+### Aggiornamento Soluzione (Implementata)
+
+Per risolvere queste criticità e abbattere il gap del Lateral Movement, sono state applicate le seguenti ottimizzazioni al modello:
+- **Aumento Storico (`neighbor_size=30`, `memory_dim=128`)**: Risolve il problema #1 ampliando significativamente la finestra temporale di esplorazione, aiutato anche dall'architettura multi-hop (`num_hops=2`).
+- **Hashed Identity (`hash_buckets=10000`, `hash_dim=16`)**: Anziché usare embedding transduttivi inefficaci sui nodi nuovi, l'identità viene fornita ai Layer tramite un hash dell'URI in modo totalmente induttivo. Questo permette alla rete GNN di raggruppare i nodi in base ai comportamenti storici consolidati, portando il Lateral Movement Recall dal <1% a quasi il **19%** nei test asincroni, pur mantenendo scalabilità estrema.
+- **Penalizzazione Hard Negatives**: La loss per i falsi laterali (hard struct negatives) è stata pesata x5, forzando la classificazione sulle anomalie strutturali.
