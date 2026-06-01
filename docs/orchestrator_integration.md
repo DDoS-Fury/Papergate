@@ -22,8 +22,9 @@ Il modello TGN è stato progettato appositamente per essere **stateful** e gesti
      device tier. L'orchestrator/OPA li conosce già per ogni richiesta, quindi vengono
      passati per-evento (nessun datastore aggiuntivo). Sono il segnale che permette al
      modello di rilevare le **violazioni di policy** — anomalie che hanno feature d'arco
-     identiche al traffico benigno. Se omessi, lo slot mantiene le feature già note
-     (es. quelle apprese per le entità preregistrate al training).
+     identiche al traffico benigno. Poiché il training avviene su dati sintetici, gli
+     utenti in produzione saranno tutti "nuovi": è **obbligatorio** passare queste feature
+     perché il modello conosca i privilegi dell'utente reale appena incontrato.
 
 2. **Gestione del `NodeRegistry`**
    All'arrivo di una tupla, il TGN utilizza il suo `NodeRegistry` per mappare le chiavi alfanumeriche (es. un nuovo indirizzo IP mai visto prima) in indici interi in tempo reale. Il sistema supporta l'ingresso di nodi non visti durante il training (spazio dei nodi dinamico e illimitato).
@@ -108,7 +109,11 @@ Configurazione via variabili d'ambiente (tutte opzionali):
   "key_src": "10.0.0.7",          // chiave entità sorgente (string o int)
   "key_dst": "https://crm/db",    // chiave entità destinazione
   "timestamp": 1717000000,         // intero (es. Unix epoch)
-  "features": [1,0,0,0,0,2],       // messaggio d'arco, len == msg_dim (default 6)
+  "features": [1.0, 0.0, 0.0, 0.0, 0.0, 2.0], // messaggio d'arco (array di 6 float):
+                                              // [0] JA3: 1.0 (ok), 0.0 (anomalia)
+                                              // [1] Snort: 0.0 (ok), 1.0 (alert)
+                                              // [2-4] Sonde s1, s2, s3 (0.0 o 1.0)
+                                              // [5] Metodo HTTP (0=GET, 1=POST, 2=PUT, 3=DELETE, 4=PATCH)
   "src_feat": [/* ... */],         // opz., attributi statici, len == node_feat_dim (16)
   "dst_feat": [/* ... */]          // opz.
 }
@@ -129,6 +134,15 @@ Lo schema in due step della sezione precedente si realizza così:
 3. Se **ALLOW** → `POST /update` (committa nel modello). Se **DENY** → nessuna chiamata
    a `/update`: l'evento ostile non entra mai nella baseline.
 
+### Gestione Identità (Nuovi Utenti e Guest)
+
+Essendo stato addestrato su dati sintetici, in produzione il modello vedrà solo entità (utenti/IP) mai viste prima. Grazie alla gestione dinamica della memoria, il modello alloca in tempo reale un nuovo slot in RAM per ogni identità sconosciuta (cold-start).
+
+Per questo motivo, l'Orchestrator deve iniettare i privilegi a runtime tramite `src_feat`:
+
+- **Utenti Autenticati (Nuovi nodi)**: L'Orchestrator deve calcolare ruolo e clearance (es. estratti dal JWT) in valori float e passarli in `src_feat`. Il modello li scriverà nello slot appena allocato, e da quel momento saprà applicare le policy corrette per quell'utente.
+- **Utenti Guest (Non autenticati)**: Quando la richiesta (es. a `/login` o endpoint pubblici) arriva da un IP senza sessione, la chiave sorgente sarà l'indirizzo IP, e `src_feat` dovrà essere un array di zeri (`[0.0, 0.0, ...]`). Questo corrisponde al livello minimo di privilegi (Clearance=0, Tier=0). Il modello permetterà le chiamate alle rotte pubbliche, ma bloccherà come anomalo qualsiasi tentativo verso endpoint protetti. Appena l'utente farà login, l'Orchestrator comincerà a passare le sue feature reali, "promuovendone" di fatto i privilegi.
+
 ### Vincoli operativi
 
 - **Un solo processo/replica.** Il modello è uno stato mutabile in RAM (memoria,
@@ -146,7 +160,7 @@ Lo schema in due step della sezione precedente si realizza così:
 # Score read-only di un evento
 curl -s -X POST http://localhost:8088/infer \
   -H 'Content-Type: application/json' \
-  -d '{"key_src":"10.0.0.7","key_dst":"https://crm/db","timestamp":1717000000,"features":[1,0,0,0,0,2]}'
+  -d '{"key_src":"10.0.0.7","key_dst":"https://crm/db","timestamp":1717000000,"features":[1.0,0.0,0.0,0.0,0.0,2.0]}'
 # -> {"anomaly_score":0.83,"is_anomaly":true,"threshold":0.6264}
 ```
 

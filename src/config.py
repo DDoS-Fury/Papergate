@@ -58,7 +58,7 @@ class TGNConfig:
     val_frac: float = 0.1
 
     # Spare memory slots reserved for entities first seen at inference time.
-    capacity_headroom: int = 512
+    capacity_headroom: int = 50000
     # Decision-threshold calibration target (benign false-positive rate).
     target_fpr: float = 0.05
 
