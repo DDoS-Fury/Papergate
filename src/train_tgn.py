@@ -116,6 +116,7 @@ def train_tgn(cfg: TGNConfig = TGNConfig()):
         msg_dim=cfg.msg_dim,
         memory_dim=cfg.memory_dim,
         time_dim=cfg.time_dim,
+        num_hops=cfg.num_hops,
     ).to(device)
 
     # Load the static node attributes (role / clearance / tier) into the model's
@@ -307,6 +308,7 @@ def train_tgn(cfg: TGNConfig = TGNConfig()):
         "msg_dim": cfg.msg_dim,
         "memory_dim": cfg.memory_dim,
         "time_dim": cfg.time_dim,
+        "num_hops": cfg.num_hops,
         "neighbor_size": cfg.neighbor_size,
         "target_fpr": cfg.target_fpr,
     }

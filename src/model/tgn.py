@@ -11,18 +11,29 @@ from torch_geometric.nn import TransformerConv
 from graphagate.model.neighbor import MessageNeighborLoader
 
 class GraphAttentionEmbedding(nn.Module):
-    def __init__(self, in_channels, out_channels, msg_dim, time_enc):
+    def __init__(self, in_channels, out_channels, msg_dim, time_enc, num_hops=2):
         super().__init__()
         self.time_enc = time_enc
+        self.num_hops = num_hops
         edge_dim = msg_dim + time_enc.out_channels
-        self.conv = TransformerConv(in_channels, out_channels, heads=2,
-                                    dropout=0.1, edge_dim=edge_dim, concat=False)
+        self.convs = nn.ModuleList()
+        self.convs.append(TransformerConv(in_channels, out_channels, heads=2, dropout=0.1, edge_dim=edge_dim, concat=False))
+        for _ in range(num_hops - 1):
+            self.convs.append(TransformerConv(out_channels, out_channels, heads=2, dropout=0.1, edge_dim=edge_dim, concat=False))
 
     def forward(self, x, last_update, edge_index, t, msg):
-        rel_t = last_update[edge_index[0]] - t
-        rel_t_enc = self.time_enc(rel_t.to(x.dtype))
-        edge_attr = torch.cat([rel_t_enc, msg], dim=-1)
-        return self.conv(x, edge_index, edge_attr)
+        if edge_index.numel() == 0:
+            edge_attr = torch.empty(0, msg.size(-1) + self.time_enc.out_channels, device=x.device)
+        else:
+            rel_t = last_update[edge_index[0]] - t
+            rel_t_enc = self.time_enc(rel_t.to(x.dtype))
+            edge_attr = torch.cat([rel_t_enc, msg], dim=-1)
+            
+        for i, conv in enumerate(self.convs):
+            x = conv(x, edge_index, edge_attr)
+            if i < len(self.convs) - 1:
+                x = x.relu()
+        return x
 
 class LinkPredictor(nn.Module):
     def __init__(self, in_channels, msg_dim, node_feat_dim):
@@ -39,9 +50,10 @@ class LinkPredictor(nn.Module):
         return self.lin2(h)
 
 class ZTATemporalGraphNetwork(nn.Module):
-    def __init__(self, num_nodes, node_feat_dim, msg_dim, memory_dim=64, time_dim=32):
+    def __init__(self, num_nodes, node_feat_dim, msg_dim, memory_dim=64, time_dim=32, num_hops=2):
         super().__init__()
 
+        self.num_hops = num_hops
         # Kept for (re)building the temporal neighbour loader, which is not an
         # nn.Module and so lives outside the state_dict (see init_neighbor_loader).
         self.num_nodes = num_nodes
@@ -66,6 +78,7 @@ class ZTATemporalGraphNetwork(nn.Module):
             out_channels=memory_dim,
             msg_dim=msg_dim,
             time_enc=self.memory.time_enc,
+            num_hops=num_hops,
         )
 
         self.link_pred = LinkPredictor(
@@ -89,7 +102,7 @@ class ZTATemporalGraphNetwork(nn.Module):
         state_dict; its buffers are persisted separately (see serve_tgn.save_model).
         """
         self.neighbor_loader = MessageNeighborLoader(
-            num_nodes=self.num_nodes, size=size, msg_dim=self.msg_dim, device=device
+            num_nodes=self.num_nodes, size=size, msg_dim=self.msg_dim, device=device, k_hops=self.num_hops
         )
         return self.neighbor_loader
 

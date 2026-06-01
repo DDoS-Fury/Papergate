@@ -22,10 +22,11 @@ from torch_geometric.nn.models.tgn import LastNeighborLoader
 
 
 class MessageNeighborLoader(LastNeighborLoader):
-    def __init__(self, num_nodes: int, size: int, msg_dim: int, device=None):
+    def __init__(self, num_nodes: int, size: int, msg_dim: int, k_hops: int = 1, device=None):
         # Allocate the parallel attribute buffers before super().__init__ (which
         # calls reset_state) so reset_state can clear them too.
         self.msg_dim = msg_dim
+        self.k_hops = k_hops
         self.last_t = torch.zeros((num_nodes, size), dtype=torch.long, device=device)
         self.last_msg = torch.zeros((num_nodes, size, msg_dim), dtype=torch.float,
                                     device=device)
@@ -90,27 +91,38 @@ class MessageNeighborLoader(LastNeighborLoader):
             msg_cat, 1, perm.unsqueeze(-1).expand(-1, -1, self.msg_dim))
 
     def __call__(self, n_id):
-        """Expand ``n_id`` with its stored neighbors.
+        nodes_list, neighbors_list, hist_t_list, hist_msg_list = [], [], [], []
+        current_n_id = n_id
+        
+        for _ in range(self.k_hops):
+            neighbors = self.neighbors[current_n_id]
+            e_id = self.e_id[current_n_id]
+            hist_t = self.last_t[current_n_id]
+            hist_msg = self.last_msg[current_n_id]
+            nodes = current_n_id.view(-1, 1).repeat(1, self.size)
+            
+            mask = e_id >= 0
+            neighbors, nodes = neighbors[mask], nodes[mask]
+            hist_t, hist_msg = hist_t[mask], hist_msg[mask]
+            
+            nodes_list.append(nodes)
+            neighbors_list.append(neighbors)
+            hist_t_list.append(hist_t)
+            hist_msg_list.append(hist_msg)
+            
+            current_n_id = neighbors.unique()
+            if current_n_id.numel() == 0:
+                break
+                
+        all_nodes = torch.cat(nodes_list) if nodes_list else torch.empty(0, dtype=torch.long, device=n_id.device)
+        all_neighbors = torch.cat(neighbors_list) if neighbors_list else torch.empty(0, dtype=torch.long, device=n_id.device)
+        all_hist_t = torch.cat(hist_t_list) if hist_t_list else torch.empty(0, dtype=torch.long, device=n_id.device)
+        all_hist_msg = torch.cat(hist_msg_list) if hist_msg_list else torch.empty(0, self.msg_dim, dtype=torch.float, device=n_id.device)
 
-        Returns ``(out_n_id, edge_index, hist_t, hist_msg)`` where ``edge_index`` is
-        relabelled to positions in ``out_n_id`` (source = neighbor, target = queried
-        node) and ``hist_t`` / ``hist_msg`` are the matching historical edge attrs.
-        ``self._assoc`` maps global ids to local positions in ``out_n_id``.
-        """
-        neighbors = self.neighbors[n_id]
-        e_id = self.e_id[n_id]
-        hist_t = self.last_t[n_id]
-        hist_msg = self.last_msg[n_id]
-        nodes = n_id.view(-1, 1).repeat(1, self.size)
-
-        mask = e_id >= 0
-        neighbors, nodes = neighbors[mask], nodes[mask]
-        hist_t, hist_msg = hist_t[mask], hist_msg[mask]
-
-        out_n_id = torch.cat([n_id, neighbors]).unique()
+        out_n_id = torch.cat([n_id, all_neighbors]).unique()
         self._assoc[out_n_id] = torch.arange(out_n_id.size(0), device=out_n_id.device)
-        edge_index = torch.stack([self._assoc[neighbors], self._assoc[nodes]])
-        return out_n_id, edge_index, hist_t, hist_msg
+        edge_index = torch.stack([self._assoc[all_neighbors], self._assoc[all_nodes]])
+        return out_n_id, edge_index, all_hist_t, all_hist_msg
 
     def reset_node(self, idx: int) -> None:
         """Cold-start a reused slot after registry eviction.

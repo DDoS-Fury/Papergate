@@ -40,6 +40,7 @@ def build_model(hp: dict, device: torch.device) -> ZTATemporalGraphNetwork:
         msg_dim=int(hp["msg_dim"]),
         memory_dim=int(hp["memory_dim"]),
         time_dim=int(hp["time_dim"]),
+        num_hops=int(hp.get("num_hops", 2)),
     ).to(device)
     # The bounded neighbour loader lives outside the state_dict; build it on the
     # serving device so its buffers match the model's. Its contents are restored
