@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Graphagate TGN - 3D Visualizer</title>
+    <!-- Modern Typography -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600&family=Outfit:wght@400;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="./style.css">
+</head>
+<body>
+    <div id="ui-container">
+        <header>
+            <h1>Graphagate TGN</h1>
+            <p>Real-time Zero-Trust Temporal Graph Network</p>
+        </header>
+        
+        <div class="panel controls-panel">
+            <h3>Architecture Layers</h3>
+            <ul id="layer-list">
+                <li class="active" data-layer="all">Full Architecture</li>
+                <li data-layer="input">1. Event Stream & Registry</li>
+                <li data-layer="memory">2. TGNMemory & Identity</li>
+                <li data-layer="gnn">3. Graph Attention (GNN)</li>
+                <li data-layer="scoring">4. Scoring Heads</li>
+                <li data-layer="gate">5. Anomaly Gate</li>
+            </ul>
+        </div>
+        
+        <div class="panel stats-panel">
+            <h3>System Status</h3>
+            <div class="stat-row">
+                <span>Mode:</span>
+                <span class="status-badge simulation">Simulation</span>
+            </div>
+            <div class="stat-row">
+                <span>Total Nodes:</span>
+                <span id="stat-nodes">142</span>
+            </div>
+            <div class="stat-row">
+                <span>Events Scored:</span>
+                <span id="stat-events">1,024</span>
+            </div>
+        </div>
+        
+        <div class="anomaly-alert hidden" id="anomaly-alert">
+            <div class="alert-icon">⚠️</div>
+            <div class="alert-content">
+                <h4>Anomaly Detected</h4>
+                <p id="anomaly-desc">Lateral Movement (Score: 0.92)</p>
+            </div>
+        </div>
+    </div>
+    
+    <div id="canvas-container"></div>
+    
+    <!-- Import map for Three.js -->
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+                "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+            }
+        }
+    </script>
+    <script type="module" src="./main.js"></script>
+</body>
+</html>
