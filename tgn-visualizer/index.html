@@ -17,37 +17,65 @@
             <p>Real-time Zero-Trust Temporal Graph Network</p>
         </header>
         
-        <div class="panel controls-panel">
-            <h3>Architecture Layers</h3>
-            <ul id="layer-list">
-                <li class="active" data-layer="all">Full Architecture</li>
-                <li data-layer="input">1. Event Stream & Registry</li>
-                <li data-layer="memory">2. TGNMemory & Identity</li>
-                <li data-layer="gnn">3. Graph Attention (GNN)</li>
-                <li data-layer="scoring">4. Scoring Heads</li>
-                <li data-layer="gate">5. Anomaly Gate</li>
-            </ul>
-        </div>
-        
-        <div class="panel stats-panel">
-            <h3>System Status</h3>
-            <div class="stat-row">
-                <span>Mode:</span>
-                <div class="toggle-container">
-                    <span id="mode-label" class="status-badge simulation">Simulation</span>
-                    <label class="switch">
-                        <input type="checkbox" id="live-mode-toggle">
-                        <span class="slider round"></span>
-                    </label>
+        <div class="bottom-wrapper" style="display: flex; justify-content: space-between; width: 100%; margin-top: auto; pointer-events: none; align-items: flex-end;">
+            <div class="left-panels" style="display: flex; flex-direction: column; pointer-events: none;">
+                <div class="panel system-specs-panel" style="pointer-events: auto;">
+                    <h3>System Performance</h3>
+                    <div class="stat-row"><span>CPU Usage:</span> <span id="stat-cpu">12%</span></div>
+                    <div class="stat-row"><span>RAM Usage:</span> <span id="stat-ram">4.2 GB</span></div>
+                    <div class="stat-row"><span>Inference Time:</span> <span id="stat-inf">12ms</span></div>
+                    <div id="sys-specs-static" style="border-top: 1px solid rgba(255,255,255,0.1); margin: 10px 0; padding-top: 10px; font-size: 0.8rem; color: var(--text-secondary); line-height: 1.4;">
+                        <strong>Host:</strong> Simulated Environment<br>
+                        <strong>Arch:</strong> Browser Runtime<br>
+                        <strong>Acc:</strong> None (Mocked)
+                    </div>
                 </div>
             </div>
-            <div class="stat-row">
-                <span>Total Nodes:</span>
-                <span id="stat-nodes">142</span>
-            </div>
-            <div class="stat-row">
-                <span>Events Scored:</span>
-                <span id="stat-events">1,024</span>
+            
+            <div class="right-panels" style="display: flex; flex-direction: column; align-items: flex-end; pointer-events: none;">
+                <div class="panel controls-panel" style="pointer-events: auto; margin-top: 0;">
+                    <h3>Architecture Layers</h3>
+                    <ul id="layer-list">
+                        <li class="active" data-layer="all">Full Architecture</li>
+                        <li data-layer="input">1. Event Stream & Registry</li>
+                        <li data-layer="memory">2. TGNMemory & Identity</li>
+                        <li data-layer="gnn">3. Graph Attention (GNN)</li>
+                        <li data-layer="scoring">4. Scoring Heads</li>
+                        <li data-layer="gate">5. Anomaly Gate</li>
+                    </ul>
+                </div>
+                
+                <div class="panel stats-panel" style="pointer-events: auto;">
+                    <h3>System Status</h3>
+                    <div class="stat-row">
+                        <span>Data Stream:</span>
+                        <div class="toggle-container">
+                            <span id="mode-label" class="status-badge simulation">Simulation</span>
+                            <label class="switch">
+                                <input type="checkbox" id="live-mode-toggle">
+                                <span class="slider round"></span>
+                            </label>
+                        </div>
+                    </div>
+                    <div class="stat-row">
+                        <span>Topology:</span>
+                        <div class="toggle-container">
+                            <span id="real-net-label" class="status-badge simulation">Abstract</span>
+                            <label class="switch">
+                                <input type="checkbox" id="real-net-toggle">
+                                <span class="slider round"></span>
+                            </label>
+                        </div>
+                    </div>
+                    <div class="stat-row">
+                        <span>Total Nodes:</span>
+                        <span id="stat-nodes">23</span>
+                    </div>
+                    <div class="stat-row">
+                        <span>Events Scored:</span>
+                        <span id="stat-events">1,024</span>
+                    </div>
+                </div>
             </div>
         </div>
         

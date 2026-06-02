@@ -17,6 +17,7 @@ dependencies = [
     # HTTP inference service (graphagate.serve_api); pydantic ships with fastapi.
     "fastapi>=0.110,<1.0",
     "uvicorn[standard]>=0.29",
+    "psutil>=5.9.0",
 ]
 
 [tool.setuptools]

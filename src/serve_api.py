@@ -31,7 +31,24 @@ from __future__ import annotations
 
 import os
 import threading
+import time
+import socket
+import platform
 from contextlib import asynccontextmanager
+
+try:
+    import psutil
+    HAS_PSUTIL = True
+except ImportError:
+    HAS_PSUTIL = False
+
+def get_sys_stats():
+    if HAS_PSUTIL:
+        return {
+            "cpu_percent": psutil.cpu_percent(),
+            "ram_gb": psutil.virtual_memory().used / (1024**3)
+        }
+    return {"cpu_percent": 0.0, "ram_gb": 0.0}
 from typing import Optional, Union
 
 import torch
@@ -160,10 +177,49 @@ def _validate_dims(ev: EventIn) -> None:
 async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
     STATE.active_websockets.append(websocket)
+    
+    host_name = socket.gethostname()
+    cpu_count = os.cpu_count() or 1
+    arch_name = platform.machine()
+    device_name = "CPU"
+    if STATE.device and STATE.device.type == "cuda":
+        device_name = torch.cuda.get_device_name(STATE.device)
+    elif STATE.device:
+        device_name = str(STATE.device)
+
+    try:
+        await websocket.send_json({
+            "action": "init_sys_info",
+            "host": host_name,
+            "arch": f"{cpu_count}-Core {arch_name}",
+            "device": device_name
+        })
+    except Exception:
+        pass
+        
+    async def _periodic_stats():
+        try:
+            while True:
+                await asyncio.sleep(2.0)
+                stats = get_sys_stats()
+                try:
+                    await websocket.send_json({
+                        "action": "periodic_stats",
+                        "cpu_percent": stats["cpu_percent"],
+                        "ram_gb": stats["ram_gb"]
+                    })
+                except Exception:
+                    break
+        except asyncio.CancelledError:
+            pass
+
+    stats_task = asyncio.create_task(_periodic_stats())
+
     try:
         while True:
             await websocket.receive_text()
     except WebSocketDisconnect:
+        stats_task.cancel()
         if websocket in STATE.active_websockets:
             STATE.active_websockets.remove(websocket)
 
@@ -185,18 +241,25 @@ def health() -> dict:
 def infer(ev: EventIn, background_tasks: BackgroundTasks) -> ScoreOut:
     """Score an event read-only (admits the entities, never advances memory)."""
     _validate_dims(ev)
+    t0 = time.perf_counter()
     with STATE.lock:
         score, is_anomaly = score_event(
             STATE.model, STATE.registry, STATE.threshold,
             ev.key_src, ev.key_dst, ev.timestamp, ev.features, STATE.device,
             src_feat=ev.src_feat, dst_feat=ev.dst_feat, update=False,
         )
+    t1 = time.perf_counter()
+    sys_stats = get_sys_stats()
+    
     background_tasks.add_task(_broadcast_task, {
         "action": "infer",
         "key_src": ev.key_src,
         "key_dst": ev.key_dst,
         "score": float(score),
-        "is_anomaly": bool(is_anomaly)
+        "is_anomaly": bool(is_anomaly),
+        "inf_time_ms": (t1 - t0) * 1000,
+        "cpu_percent": sys_stats["cpu_percent"],
+        "ram_gb": sys_stats["ram_gb"]
     })
     return ScoreOut(anomaly_score=score, is_anomaly=is_anomaly, threshold=STATE.threshold)
 
@@ -218,18 +281,25 @@ def update(ev: EventIn) -> OkOut:
 def score(ev: EventIn, background_tasks: BackgroundTasks) -> ScoreOut:
     """Score + internal anti-poisoning gate + conditional update (OPA-less path)."""
     _validate_dims(ev)
+    t0 = time.perf_counter()
     with STATE.lock:
         s, is_anomaly = score_event(
             STATE.model, STATE.registry, STATE.threshold,
             ev.key_src, ev.key_dst, ev.timestamp, ev.features, STATE.device,
             src_feat=ev.src_feat, dst_feat=ev.dst_feat, update=True,
         )
+    t1 = time.perf_counter()
+    sys_stats = get_sys_stats()
+    
     background_tasks.add_task(_broadcast_task, {
         "action": "score",
         "key_src": ev.key_src,
         "key_dst": ev.key_dst,
         "score": float(s),
-        "is_anomaly": bool(is_anomaly)
+        "is_anomaly": bool(is_anomaly),
+        "inf_time_ms": (t1 - t0) * 1000,
+        "cpu_percent": sys_stats["cpu_percent"],
+        "ram_gb": sys_stats["ram_gb"]
     })
     return ScoreOut(anomaly_score=s, is_anomaly=is_anomaly, threshold=STATE.threshold)
 

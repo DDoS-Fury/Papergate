@@ -106,37 +106,41 @@ const gnnGroup = new THREE.Group();
 gnnGroup.position.y = layerYs.gnn;
 scene.add(gnnGroup);
 
+const abstractGnnGroup = new THREE.Group();
+const realGnnGroup = new THREE.Group();
+realGnnGroup.visible = false;
+gnnGroup.add(abstractGnnGroup);
+gnnGroup.add(realGnnGroup);
+
 const nodeGeom = new THREE.IcosahedronGeometry(1.2, 1);
 const numSources = 15;
 const numDests = 8;
 const nodeCount = numSources + numDests;
 
-// Create Source nodes (e.g., Devices/IPs)
+// Create Abstract Source nodes (e.g., Devices/IPs)
 for (let i = 0; i < numSources; i++) {
     const mesh = new THREE.Mesh(nodeGeom, gnnMat.clone());
     mesh.position.set(-15 + (Math.random() - 0.5) * 10, (Math.random() - 0.5) * 8, (Math.random() - 0.5) * 30);
-    mesh.userData = { rotX: Math.random() * 0.02, rotY: Math.random() * 0.02, title: 'Device IP 10.0.' + i + '.' + Math.floor(Math.random()*255), type: 'Source Node', desc: 'Embedded device initiating access.' };
-    gnnGroup.add(mesh);
+    mesh.userData = { rotX: Math.random() * 0.02, rotY: Math.random() * 0.02, title: 'Mock IP 10.0.' + i + '.' + Math.floor(Math.random()*255), type: 'Abstract Source', desc: 'Embedded device initiating access.' };
+    abstractGnnGroup.add(mesh);
     gnnNodes.push(mesh);
 }
 
-// Create Dest nodes (e.g., Resources)
+// Create Abstract Dest nodes (e.g., Resources)
 for (let i = 0; i < numDests; i++) {
     const mesh = new THREE.Mesh(nodeGeom, gnnMat.clone());
     mesh.position.set(15 + (Math.random() - 0.5) * 10, (Math.random() - 0.5) * 8, (Math.random() - 0.5) * 30);
-    // Differentiate color for destination nodes slightly
     mesh.material.color.setHex(0xffaa00);
     mesh.material.emissive.setHex(0xffaa00);
-    mesh.userData = { rotX: Math.random() * 0.02, rotY: Math.random() * 0.02, title: 'Resource /api/v1/data_' + i, type: 'Destination Node', desc: 'Target zero-trust resource.' };
-    gnnGroup.add(mesh);
+    mesh.userData = { rotX: Math.random() * 0.02, rotY: Math.random() * 0.02, title: 'Mock Resource /api/v1/data_' + i, type: 'Abstract Destination', desc: 'Target zero-trust resource.' };
+    abstractGnnGroup.add(mesh);
     gnnNodes.push(mesh);
 }
 
-// GNN Edges: Bipartite connections (Src -> Dest) to simulate Zero-Trust temporal access
+// Abstract GNN Edges
 const edgesGeometry = new THREE.BufferGeometry();
 const edgesPositions = [];
 for (let i = 0; i < numSources; i++) {
-    // Each source accesses 1 to 3 random resources (temporal neighbors)
     const numConnections = Math.floor(Math.random() * 3) + 1;
     for (let c = 0; c < numConnections; c++) {
         const destIdx = numSources + Math.floor(Math.random() * numDests);
@@ -148,7 +152,53 @@ for (let i = 0; i < numSources; i++) {
 }
 edgesGeometry.setAttribute('position', new THREE.Float32BufferAttribute(edgesPositions, 3));
 const edgesLines = new THREE.LineSegments(edgesGeometry, lineMat);
-gnnGroup.add(edgesLines);
+abstractGnnGroup.add(edgesLines);
+
+// Real Network Data Structures
+let isExactTopology = false;
+const realNodesMap = new Map();
+const realEdgesSet = new Set();
+const realEdgesPositions = [];
+const realEdgesGeometry = new THREE.BufferGeometry();
+realEdgesGeometry.setAttribute('position', new THREE.Float32BufferAttribute([], 3));
+const realEdgesLines = new THREE.LineSegments(realEdgesGeometry, lineMat);
+realGnnGroup.add(realEdgesLines);
+
+function getOrCreateRealNode(key, isSource) {
+    if (realNodesMap.has(key)) return realNodesMap.get(key);
+    
+    const mesh = new THREE.Mesh(nodeGeom, gnnMat.clone());
+    if (isSource) {
+        mesh.position.set(-15 + (Math.random() - 0.5) * 15, (Math.random() - 0.5) * 15, (Math.random() - 0.5) * 30);
+        mesh.userData = { rotX: Math.random() * 0.02, rotY: Math.random() * 0.02, title: 'Source: ' + key, type: 'Real Source Node', desc: 'Observed Source Entity' };
+    } else {
+        mesh.position.set(15 + (Math.random() - 0.5) * 15, (Math.random() - 0.5) * 15, (Math.random() - 0.5) * 30);
+        mesh.material.color.setHex(0xffaa00);
+        mesh.material.emissive.setHex(0xffaa00);
+        mesh.userData = { rotX: Math.random() * 0.02, rotY: Math.random() * 0.02, title: 'Dest: ' + key, type: 'Real Destination Node', desc: 'Observed Dest Entity' };
+    }
+    
+    realGnnGroup.add(mesh);
+    gnnNodes.push(mesh);
+    realNodesMap.set(key, mesh);
+    
+    const statNodes = document.getElementById('stat-nodes');
+    if (statNodes) statNodes.textContent = abstractGnnGroup.visible ? 23 : realNodesMap.size;
+    return mesh;
+}
+
+function processEventForRealNet(srcKey, dstKey) {
+    const srcNode = getOrCreateRealNode(srcKey, true);
+    const dstNode = getOrCreateRealNode(dstKey, false);
+    
+    const edgeKey = srcKey + '|' + dstKey;
+    if (!realEdgesSet.has(edgeKey)) {
+        realEdgesSet.add(edgeKey);
+        realEdgesPositions.push(srcNode.position.x, srcNode.position.y, srcNode.position.z, dstNode.position.x, dstNode.position.y, dstNode.position.z);
+        realEdgesGeometry.setAttribute('position', new THREE.Float32BufferAttribute(realEdgesPositions, 3));
+        realEdgesGeometry.attributes.position.needsUpdate = true;
+    }
+}
 
 // --- 4. Scoring Heads (y = 20) ---
 const scoringGroup = new THREE.Group();
@@ -371,9 +421,12 @@ document.querySelectorAll('#layer-list li').forEach(li => {
     });
 });
 
-// --- Live Mode WebSocket ---
+// --- Data Stream & Toggles ---
 const liveToggle = document.getElementById('live-mode-toggle');
 const modeLabel = document.getElementById('mode-label');
+const realNetToggle = document.getElementById('real-net-toggle');
+const realNetLabel = document.getElementById('real-net-label');
+const statNodes = document.getElementById('stat-nodes');
 const statEvents = document.getElementById('stat-events');
 const alertBox = document.getElementById('anomaly-alert');
 const alertDesc = document.getElementById('anomaly-desc');
@@ -381,56 +434,144 @@ const alertDesc = document.getElementById('anomaly-desc');
 let ws = null;
 let eventCount = 1024;
 
-liveToggle.addEventListener('change', (e) => {
-    if (e.target.checked) {
-        modeLabel.textContent = "Live Stream";
-        modeLabel.className = "status-badge live";
-        connectWebSocket();
-    } else {
-        modeLabel.textContent = "Simulation";
-        modeLabel.className = "status-badge simulation";
-        if (ws) {
-            ws.close();
-            ws = null;
+if (realNetToggle) {
+    realNetToggle.addEventListener('change', (e) => {
+        isExactTopology = e.target.checked;
+        if (isExactTopology) {
+            realNetLabel.textContent = "Exact";
+            realNetLabel.className = "status-badge live";
+            abstractGnnGroup.visible = false;
+            realGnnGroup.visible = true;
+            statNodes.textContent = realNodesMap.size;
+        } else {
+            realNetLabel.textContent = "Abstract";
+            realNetLabel.className = "status-badge simulation";
+            abstractGnnGroup.visible = true;
+            realGnnGroup.visible = false;
+            statNodes.textContent = "23";
         }
+    });
+}
+
+let simInterval = null;
+
+function handleStreamEvent(data) {
+    eventCount++;
+    if(statEvents) statEvents.textContent = eventCount.toLocaleString();
+    
+    // Update real system stats if provided by backend (Live Mode)
+    if (liveToggle && liveToggle.checked) {
+        if (data.cpu_percent !== undefined && statCpu) statCpu.textContent = data.cpu_percent.toFixed(1) + '%';
+        if (data.ram_gb !== undefined && statRam) statRam.textContent = data.ram_gb.toFixed(2) + ' GB';
+        if (data.inf_time_ms !== undefined && statInf) statInf.textContent = data.inf_time_ms.toFixed(1) + 'ms';
     }
-});
+    
+    processEventForRealNet(data.key_src, data.key_dst);
+    
+    // Spawn a fast red or green particle for the event
+    const mesh = new THREE.Mesh(flowGeom, new THREE.MeshBasicMaterial({ color: data.is_anomaly ? 0xff3366 : 0x00ffcc, transparent: true, opacity: 0.9 }));
+    mesh.position.set(0, layerYs.events, 0);
+    mesh.userData = {
+        target: new THREE.Vector3(0, layerYs.gate, 0),
+        speed: 0.1
+    };
+    flowGroup.add(mesh);
+    flowingParticles.push(mesh);
+    
+    if (data.is_anomaly && alertBox) {
+        alertDesc.textContent = `Alert on ${data.key_src} -> ${data.key_dst} (Score: ${data.score.toFixed(3)})`;
+        alertBox.classList.remove('hidden');
+        setTimeout(() => alertBox.classList.add('hidden'), 3000);
+        
+        gateMesh.material.color.setHex(0xff3366);
+        gateMesh.material.emissive.setHex(0xff3366);
+        setTimeout(() => {
+            gateMesh.material.color.setHex(0xffffff);
+            gateMesh.material.emissive.setHex(0xffffff);
+        }, 500);
+    }
+}
+
+function startSimulation() {
+    const specsDiv = document.getElementById('sys-specs-static');
+    if (specsDiv && (!liveToggle || !liveToggle.checked)) {
+        specsDiv.innerHTML = `<strong>Host:</strong> Simulated Environment<br><strong>Arch:</strong> Browser Runtime<br><strong>Acc:</strong> None (Mocked)`;
+    }
+
+    if (simInterval) clearInterval(simInterval);
+    simInterval = setInterval(() => {
+        const fakeSrc = '192.168.1.' + Math.floor(Math.random() * 50);
+        const fakeDst = '/api/v1/resource_' + Math.floor(Math.random() * 8);
+        const isAnomaly = Math.random() > 0.95;
+        const score = isAnomaly ? 0.85 + Math.random() * 0.15 : Math.random() * 0.3;
+        handleStreamEvent({ is_anomaly: isAnomaly, key_src: fakeSrc, key_dst: fakeDst, score: score });
+    }, 800);
+}
+
+function stopSimulation() {
+    if (simInterval) clearInterval(simInterval);
+}
+
+if (liveToggle) {
+    liveToggle.addEventListener('change', (e) => {
+        if (e.target.checked) {
+            modeLabel.textContent = "Live Stream";
+            modeLabel.className = "status-badge live";
+            stopSimulation();
+            connectWebSocket();
+        } else {
+            modeLabel.textContent = "Simulation";
+            modeLabel.className = "status-badge simulation";
+            if (ws) {
+                ws.close();
+                ws = null;
+            }
+            startSimulation();
+        }
+    });
+}
 
 function connectWebSocket() {
     const wsHost = window.location.hostname || 'localhost';
     ws = new WebSocket(`ws://${wsHost}:8088/stream`);
     ws.onmessage = (event) => {
         const data = JSON.parse(event.data);
-        eventCount++;
-        statEvents.textContent = eventCount.toLocaleString();
-        
-        // Spawn a fast red or green particle for the live event
-        const mesh = new THREE.Mesh(flowGeom, new THREE.MeshBasicMaterial({ color: data.is_anomaly ? 0xff3366 : 0x00ffcc, transparent: true, opacity: 0.9 }));
-        mesh.position.set(0, layerYs.events, 0);
-        mesh.userData = {
-            target: new THREE.Vector3(0, layerYs.gate, 0),
-            speed: 0.1
-        };
-        flowGroup.add(mesh);
-        flowingParticles.push(mesh);
-        
-        if (data.is_anomaly) {
-            alertDesc.textContent = `Alert on ${data.key_src} -> ${data.key_dst} (Score: ${data.score.toFixed(3)})`;
-            alertBox.classList.remove('hidden');
-            setTimeout(() => alertBox.classList.add('hidden'), 3000);
-            
-            gateMesh.material.color.setHex(0xff3366);
-            gateMesh.material.emissive.setHex(0xff3366);
-            setTimeout(() => {
-                gateMesh.material.color.setHex(0xffffff);
-                gateMesh.material.emissive.setHex(0xffffff);
-            }, 500);
+        if (data.action === "init_sys_info") {
+            const specsDiv = document.getElementById('sys-specs-static');
+            if (specsDiv) {
+                specsDiv.innerHTML = `<strong>Host:</strong> ${data.host}<br><strong>Arch:</strong> ${data.arch}<br><strong>Acc:</strong> ${data.device}`;
+            }
+            return;
+        } else if (data.action === "periodic_stats") {
+            if (liveToggle && liveToggle.checked) {
+                if (data.cpu_percent !== undefined && statCpu) statCpu.textContent = data.cpu_percent.toFixed(1) + '%';
+                if (data.ram_gb !== undefined && statRam) statRam.textContent = data.ram_gb.toFixed(2) + ' GB';
+            }
+            return;
         }
+        
+        handleStreamEvent(data);
     };
     ws.onerror = () => {
         console.error("Live Mode: Could not connect to backend.");
-        liveToggle.checked = false;
-        modeLabel.textContent = "Simulation";
-        modeLabel.className = "status-badge simulation";
+        if (liveToggle) liveToggle.checked = false;
+        if (modeLabel) {
+            modeLabel.textContent = "Simulation";
+            modeLabel.className = "status-badge simulation";
+        }
+        startSimulation();
     }
 }
+
+startSimulation();
+
+// --- System Performance Simulation ---
+const statCpu = document.getElementById('stat-cpu');
+const statRam = document.getElementById('stat-ram');
+const statInf = document.getElementById('stat-inf');
+setInterval(() => {
+    if (liveToggle && liveToggle.checked) return; // Yield to real backend data in Live Mode
+    if(statCpu) statCpu.textContent = (10 + Math.random() * 5).toFixed(1) + '%';
+    if(statRam) statRam.textContent = (4.1 + Math.random() * 0.3).toFixed(2) + ' GB';
+    if(statInf) statInf.textContent = (10 + Math.random() * 4).toFixed(1) + 'ms';
+}, 2000);
