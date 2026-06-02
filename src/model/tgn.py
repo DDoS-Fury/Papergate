@@ -11,15 +11,16 @@ from torch_geometric.nn import TransformerConv
 from graphagate.model.neighbor import MessageNeighborLoader
 
 class GraphAttentionEmbedding(nn.Module):
-    def __init__(self, in_channels, out_channels, msg_dim, time_enc, num_hops=2):
+    def __init__(self, in_channels, out_channels, msg_dim, time_enc, num_hops=3):
         super().__init__()
         self.time_enc = time_enc
         self.num_hops = num_hops
         edge_dim = msg_dim + time_enc.out_channels
         self.convs = nn.ModuleList()
-        self.convs.append(TransformerConv(in_channels, out_channels, heads=2, dropout=0.1, edge_dim=edge_dim, concat=False))
+        self.convs.append(TransformerConv(in_channels, out_channels, heads=4, dropout=0.1, edge_dim=edge_dim, concat=False))
         for _ in range(num_hops - 1):
-            self.convs.append(TransformerConv(out_channels, out_channels, heads=2, dropout=0.1, edge_dim=edge_dim, concat=False))
+            self.convs.append(TransformerConv(out_channels, out_channels, heads=4, dropout=0.1, edge_dim=edge_dim, concat=False))
+        self.norms = nn.ModuleList([nn.LayerNorm(out_channels) for _ in range(num_hops)])
 
     def forward(self, x, last_update, edge_index, t, msg):
         if edge_index.numel() == 0:
@@ -30,7 +31,12 @@ class GraphAttentionEmbedding(nn.Module):
             edge_attr = torch.cat([rel_t_enc, msg], dim=-1)
             
         for i, conv in enumerate(self.convs):
-            x = conv(x, edge_index, edge_attr)
+            x_new = conv(x, edge_index, edge_attr)
+            if i > 0:
+                x = x + x_new  # Residual connection
+            else:
+                x = x_new
+            x = self.norms[i](x)
             if i < len(self.convs) - 1:
                 x = x.relu()
         return x
@@ -95,7 +101,12 @@ class ZTATemporalGraphNetwork(nn.Module):
         # edge message and static attributes — this head measures whether the pair
         # "belongs together" given the entities' history, the only signal that flags a
         # valid-but-non-habitual access (lateral movement).
-        self.struct_proj = nn.Linear(memory_dim, memory_dim)
+        self.struct_proj = nn.Sequential(
+            nn.Linear(memory_dim, memory_dim * 2),
+            nn.ReLU(),
+            nn.Dropout(0.1),
+            nn.Linear(memory_dim * 2, memory_dim)
+        )
         self.struct_scale = nn.Parameter(torch.tensor(5.0))
 
     def init_neighbor_loader(self, size, device=None):

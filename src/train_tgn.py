@@ -225,7 +225,7 @@ def train_tgn(cfg: TGNConfig = TGNConfig()):
             loss = (
                 criterion(pos_out, torch.ones_like(pos_out))
                 + criterion(neg_out_struct, torch.zeros_like(neg_out_struct))
-                + 5.0 * criterion(neg_out_hard, torch.zeros_like(neg_out_hard))
+                + 10.0 * criterion(neg_out_hard, torch.zeros_like(neg_out_hard))
                 + criterion(neg_out_ctx, torch.zeros_like(neg_out_ctx))
             )
 

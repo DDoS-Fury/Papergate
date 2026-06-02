@@ -193,7 +193,7 @@ async def event_generator(num_users=50, num_ips=100, num_resources=20, seed=None
         dst_feat = node_features[dst_val].tolist()
         
         yield {
-            "key_src": f"user_{src_val}",
+            "key_src": int(src_val),
             "key_dst": resource_uris[res_idx],
             "timestamp": int(current_time),
             "features": edge_feat,

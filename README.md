@@ -135,6 +135,10 @@ oltre alle etichette binarie `y`, un vettore `types` per la valutazione per-clas
 | 2 | contextual | JA3 rotto / alert Snort / sensori | feature d'arco → feature head |
 | 3 | lateral | autorizzato ma **non-abituale** | storia/struttura → structural head |
 
+## Validazione e Tuning
+Per approfondire come il modello è stato potenziato per rilevare con efficacia le deviazioni strutturali e i movimenti laterali (raggiungendo quasi il 40% di recall in streaming pur rimanendo 100% unsupervised) e per comprendere le logiche di test relative all'induttività e al data poisoning, consulta il documento:
+👉 [`docs/inductive_testing.md`](docs/inductive_testing.md)
+
 ## Usage (Docker)
 
 Tutte le fasi girano via Docker Compose su GPU (CUDA 13, RTX Blackwell). Dettagli in

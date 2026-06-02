@@ -9,7 +9,7 @@ async def test_client(duration_seconds=120):
     tracker = MetricsTracker()
     tracker.start()
     
-    gen = event_generator()
+    gen = event_generator(seed=42)
     
     print(f"Starting test client for {duration_seconds} seconds...")
     user_counts = {}
@@ -53,7 +53,7 @@ async def test_client(duration_seconds=120):
             
             # GRACE PERIOD: Per i primissimi eventi di un nuovo utente (cold-start),
             # l'Orchestrator si fida delle policy statiche (JWT/OPA) per fargli creare una baseline.
-            if user_counts[key_src] <= 50:
+            if user_counts[key_src] <= 5:
                 allow = not is_policy_violation
             else:
                 allow = (not is_policy_violation) and (not opa_is_anomaly)

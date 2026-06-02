@@ -21,3 +21,5 @@ public/*.json
 .idea/
 .vscode/
 .antigravitycli/
+.claude/
+
