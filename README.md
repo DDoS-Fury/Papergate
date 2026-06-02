@@ -58,10 +58,10 @@ flowchart TD
     EV --> REG --> NL
 
     subgraph EMB["embed() — identity- & history-aware node embeddings"]
-        MEM["TGNMemory<br/>recurrent per-node state (GRU)<br/>z_mem + last_update (memory_dim=128)"]
+        MEM["TGNMemory<br/>recurrent per-node state (GRU)<br/>z_mem + last_update (memory_dim=256)"]
         ID["Hashed Identity<br/>hash(key) % buckets → nn.Embedding [hash_buckets, hash_dim]"]
         CAT["concat → x = [ z_mem ‖ id ]"]
-        GNN["GraphAttentionEmbedding<br/>TransformerConv (2 heads, num_hops=2)<br/>edge_attr = [ time_enc(Δt) ‖ hist_msg ]"]
+        GNN["GraphAttentionEmbedding<br/>TransformerConv (4 heads, num_hops=3, + residual)<br/>edge_attr = [ time_enc(Δt) ‖ hist_msg ]"]
         MEM --> CAT
         ID --> CAT
         CAT --> GNN
@@ -71,7 +71,7 @@ flowchart TD
 
     subgraph SCOREG["score() — logit = feature head + structural head"]
         FEAT["Feature head · LinkPredictor (MLP)<br/>[ z_src ‖ z_dst ‖ cur_msg ‖ feat_src ‖ feat_dst ]<br/>→ policy & contextual anomalies"]
-        STR["Structural head<br/>scale · cosine( proj z_src , proj z_dst )<br/>→ lateral movement"]
+        STR["Structural head<br/>scale · cosine( MLP z_src , MLP z_dst )<br/>→ lateral movement"]
         SUM["logit = feat_logit + struct_logit"]
         FEAT --> SUM
         STR --> SUM
@@ -90,13 +90,13 @@ flowchart TD
 
 | Componente (`attributo`) | Ruolo |
 |---|---|
-| **TGNMemory** (`memory`) | Stato ricorrente per-nodo aggiornato via GRU dai messaggi degli eventi: la "memoria storica" del comportamento di ogni entità. Espone `z_mem` e `last_update`. `memory_dim` è stata aumentata a 128 per gestire l'impronta comportamentale complessa. |
+| **TGNMemory** (`memory`) | Stato ricorrente per-nodo aggiornato via GRU dai messaggi degli eventi: la "memoria storica" del comportamento di ogni entità. Espone `z_mem` e `last_update`. `memory_dim` è stata aumentata a 256 per gestire l'impronta comportamentale complessa. |
 | **Hashed Identity** (`hash_emb`) | Embedding apprendibile calcolato tramite hashing della chiave dell'entità (`hash(URI) % hash_buckets`). Mantiene induttività strutturale al 100% per i nodi nuovi e dà a ogni entità — incluse le **risorse** — un'identità distinguibile, fondamentale per rilevare i movimenti laterali. |
 | **Static node features** (`node_feat`) | Attributi statici ZTA per-nodo (ruolo, clearance, device tier), buffer `[num_nodes, 16]`. Forniti per-evento dall'orchestrator/OPA; sono il segnale che separa una violazione di **policy** (stesse feature d'arco del benigno) dal traffico lecito. |
 | **MessageNeighborLoader** (`neighbor_loader`) | Ring-buffer **bounded in RAM** con gli ultimi `neighbor_size=30` vicini temporali per nodo. Abilita il message-passing sul vicinato storico — il segnale **strutturale** per il lateral movement — con memoria `O(num_nodes·K·msg_dim)` costante. **Nessun database a grafo.** |
-| **GraphAttentionEmbedding** (`gnn`) | Reti multi-hop (`num_hops=2`) di `TransformerConv` (2 teste) che calcolano l'embedding di nodo `z` attendendo sui vicini temporali estesi; `edge_attr` = encoding del tempo relativo `Δt` concatenato al messaggio storico dell'arco. |
+| **GraphAttentionEmbedding** (`gnn`) | Reti multi-hop (`num_hops=3`) di `TransformerConv` (4 teste, con connessioni residuali) che calcolano l'embedding di nodo `z` attendendo sui vicini temporali estesi; `edge_attr` = encoding del tempo relativo `Δt` concatenato al messaggio storico dell'arco. |
 | **Feature head** (`link_pred`, `LinkPredictor`) | MLP su `[z_src, z_dst, hash_id_src, feat_src, feat_dst, cur_msg]`. Cattura le anomalie **contestuali** e di **policy**. |
-| **Structural head** (`struct_proj`, `struct_scale`) | Similarità coseno tra le proiezioni di `z_src` e `z_dst`, scalata da una temperatura apprendibile. Misura se la coppia src↔dst "si appartiene" data la storia: cattura il **lateral movement** (accesso valido ma non-abituale). Sommata alla feature head per formare il logit finale. |
+| **Structural head** (`struct_proj`, `struct_scale`) | Similarità coseno tra le proiezioni non-lineari (MLP) di `z_src` e `z_dst`, scalata da una temperatura apprendibile. Misura se la coppia src↔dst "si appartiene" data la storia: cattura il **lateral movement** (accesso valido ma non-abituale). Sommata alla feature head per formare il logit finale. |
 | **NodeRegistry** (`registry`) | Mappa le chiavi-entità esterne → slot di memoria, con **ammissione dinamica** di entità mai viste e **eviction LRU**. Su eviction azzera lo slot in memoria, feature statiche, message store e vicinato. |
 | **Calibrazione soglia** | Soglia di decisione calibrata su uno slice benigno held-out al *target FPR* (default 0.05). |
 | **Anti-poisoning gate** | Memoria e neighbour loader vengono aggiornati **solo** per eventi classificati benigni → la baseline non viene avvelenata da eventi ostili. |
