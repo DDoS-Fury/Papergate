@@ -35,8 +35,9 @@ from contextlib import asynccontextmanager
 from typing import Optional, Union
 
 import torch
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, BackgroundTasks
 from pydantic import BaseModel, Field
+import asyncio
 
 from graphagate.config import TGN_CHECKPOINT_PATH, TGN_STATS_PATH
 from graphagate.serve_tgn import (
@@ -64,6 +65,7 @@ class _State:
         self.stats_path = os.environ.get("GRAPHAGATE_STATS", str(TGN_STATS_PATH))
         # Serialises all access to the (mutable, sequential) model state.
         self.lock = threading.Lock()
+        self.active_websockets: list[WebSocket] = []
 
     @property
     def loaded(self) -> bool:
@@ -72,6 +74,18 @@ class _State:
 
 STATE = _State()
 
+async def _broadcast_task(event_data: dict):
+    if not STATE.active_websockets:
+        return
+    dead = []
+    for ws in STATE.active_websockets:
+        try:
+            await ws.send_json(event_data)
+        except Exception:
+            dead.append(ws)
+    for ws in dead:
+        if ws in STATE.active_websockets:
+            STATE.active_websockets.remove(ws)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -141,6 +155,18 @@ def _validate_dims(ev: EventIn) -> None:
 
 
 # --- endpoints -----------------------------------------------------------------
+
+@app.websocket("/stream")
+async def websocket_endpoint(websocket: WebSocket):
+    await websocket.accept()
+    STATE.active_websockets.append(websocket)
+    try:
+        while True:
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        if websocket in STATE.active_websockets:
+            STATE.active_websockets.remove(websocket)
+
 @app.get("/health")
 def health() -> dict:
     return {
@@ -156,7 +182,7 @@ def health() -> dict:
 
 
 @app.post("/infer", response_model=ScoreOut)
-def infer(ev: EventIn) -> ScoreOut:
+def infer(ev: EventIn, background_tasks: BackgroundTasks) -> ScoreOut:
     """Score an event read-only (admits the entities, never advances memory)."""
     _validate_dims(ev)
     with STATE.lock:
@@ -165,6 +191,13 @@ def infer(ev: EventIn) -> ScoreOut:
             ev.key_src, ev.key_dst, ev.timestamp, ev.features, STATE.device,
             src_feat=ev.src_feat, dst_feat=ev.dst_feat, update=False,
         )
+    background_tasks.add_task(_broadcast_task, {
+        "action": "infer",
+        "key_src": ev.key_src,
+        "key_dst": ev.key_dst,
+        "score": float(score),
+        "is_anomaly": bool(is_anomaly)
+    })
     return ScoreOut(anomaly_score=score, is_anomaly=is_anomaly, threshold=STATE.threshold)
 
 
@@ -182,7 +215,7 @@ def update(ev: EventIn) -> OkOut:
 
 
 @app.post("/score", response_model=ScoreOut)
-def score(ev: EventIn) -> ScoreOut:
+def score(ev: EventIn, background_tasks: BackgroundTasks) -> ScoreOut:
     """Score + internal anti-poisoning gate + conditional update (OPA-less path)."""
     _validate_dims(ev)
     with STATE.lock:
@@ -191,6 +224,13 @@ def score(ev: EventIn) -> ScoreOut:
             ev.key_src, ev.key_dst, ev.timestamp, ev.features, STATE.device,
             src_feat=ev.src_feat, dst_feat=ev.dst_feat, update=True,
         )
+    background_tasks.add_task(_broadcast_task, {
+        "action": "score",
+        "key_src": ev.key_src,
+        "key_dst": ev.key_dst,
+        "score": float(s),
+        "is_anomaly": bool(is_anomaly)
+    })
     return ScoreOut(anomaly_score=s, is_anomaly=is_anomaly, threshold=STATE.threshold)
 
 

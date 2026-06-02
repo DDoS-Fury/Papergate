@@ -91,7 +91,10 @@ for (let i = -3; i <= 3; i++) {
         mesh.position.set(i * 6, 0, j * 6);
         mesh.userData = {
             baseY: 0,
-            phase: Math.random() * Math.PI * 2
+            phase: Math.random() * Math.PI * 2,
+            title: 'Memory Slot ' + (i*7+j+25),
+            type: 'TGNMemory + Hashed Identity',
+            desc: 'RNN GRU state for historical entity tracking.'
         };
         memoryGroup.add(mesh);
         memoryCubes.push(mesh);
@@ -112,7 +115,7 @@ const nodeCount = numSources + numDests;
 for (let i = 0; i < numSources; i++) {
     const mesh = new THREE.Mesh(nodeGeom, gnnMat.clone());
     mesh.position.set(-15 + (Math.random() - 0.5) * 10, (Math.random() - 0.5) * 8, (Math.random() - 0.5) * 30);
-    mesh.userData = { rotX: Math.random() * 0.02, rotY: Math.random() * 0.02 };
+    mesh.userData = { rotX: Math.random() * 0.02, rotY: Math.random() * 0.02, title: 'Device IP 10.0.' + i + '.' + Math.floor(Math.random()*255), type: 'Source Node', desc: 'Embedded device initiating access.' };
     gnnGroup.add(mesh);
     gnnNodes.push(mesh);
 }
@@ -124,7 +127,7 @@ for (let i = 0; i < numDests; i++) {
     // Differentiate color for destination nodes slightly
     mesh.material.color.setHex(0xffaa00);
     mesh.material.emissive.setHex(0xffaa00);
-    mesh.userData = { rotX: Math.random() * 0.02, rotY: Math.random() * 0.02 };
+    mesh.userData = { rotX: Math.random() * 0.02, rotY: Math.random() * 0.02, title: 'Resource /api/v1/data_' + i, type: 'Destination Node', desc: 'Target zero-trust resource.' };
     gnnGroup.add(mesh);
     gnnNodes.push(mesh);
 }
@@ -156,12 +159,14 @@ scene.add(scoringGroup);
 const featureMat = new THREE.MeshPhongMaterial({ color: 0xffaa00, transparent: true, opacity: 0.8, wireframe: true });
 const featureHead = new THREE.Mesh(new THREE.TorusGeometry(5, 1, 16, 32), featureMat);
 featureHead.position.set(-15, 0, 0);
+featureHead.userData = { title: 'Feature Head', type: 'LinkPredictor (MLP)', desc: 'Detects contextual and policy violations.' };
 scoringGroup.add(featureHead);
 
 // Structural Head
 const structuralMat = new THREE.MeshPhongMaterial({ color: 0xaa00ff, transparent: true, opacity: 0.8, wireframe: true });
 const structuralHead = new THREE.Mesh(new THREE.TorusKnotGeometry(4, 0.8, 64, 16), structuralMat);
 structuralHead.position.set(15, 0, 0);
+structuralHead.userData = { title: 'Structural Head', type: 'Cosine Similarity', desc: 'Detects lateral movement via history compatibility.' };
 scoringGroup.add(structuralHead);
 
 // Lines converging to Gate
@@ -186,6 +191,7 @@ const gateMat = new THREE.MeshStandardMaterial({
 });
 const gateGeom = new THREE.OctahedronGeometry(4, 0);
 const gateMesh = new THREE.Mesh(gateGeom, gateMat);
+gateMesh.userData = { title: 'Anomaly Gate', type: 'Threshold logic', desc: 'Final decision: updates memory if benign, drops if anomaly.' };
 gateGroup.add(gateMesh);
 
 const ringGeom = new THREE.RingGeometry(6, 6.2, 32);
@@ -246,6 +252,23 @@ window.addEventListener('resize', () => {
     renderer.setSize(window.innerWidth, window.innerHeight);
 });
 
+// --- Raycaster & Tooltips Setup ---
+const raycaster = new THREE.Raycaster();
+const mouse = new THREE.Vector2(-2, -2);
+const tooltip = document.getElementById('tooltip');
+const tooltipTitle = document.getElementById('tooltip-title');
+const tooltipType = document.getElementById('tooltip-type');
+const tooltipDesc = document.getElementById('tooltip-desc');
+
+window.addEventListener('mousemove', (event) => {
+    mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+    mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+    if (tooltip) {
+        tooltip.style.left = (event.clientX + 15) + 'px';
+        tooltip.style.top = (event.clientY + 15) + 'px';
+    }
+});
+
 // Animation Loop
 const clock = new THREE.Clock();
 
@@ -291,6 +314,23 @@ function animate() {
     gateMesh.material.emissiveIntensity = 0.5 + Math.sin(time * 5) * 0.5;
     ringMesh.rotation.z = time * -2;
     
+    // Raycasting for Tooltips
+    raycaster.setFromCamera(mouse, camera);
+    const interactables = [...memoryCubes, ...gnnNodes, featureHead, structuralHead, gateMesh];
+    const intersects = raycaster.intersectObjects(interactables);
+    
+    if (intersects.length > 0) {
+        const obj = intersects[0].object;
+        if (obj.userData.title) {
+            tooltipTitle.textContent = obj.userData.title;
+            tooltipType.textContent = 'Type: ' + obj.userData.type;
+            tooltipDesc.textContent = obj.userData.desc;
+            tooltip.classList.remove('hidden');
+        }
+    } else {
+        tooltip.classList.add('hidden');
+    }
+
     // Animate Flowing Particles
     if (Math.random() < 0.25) spawnFlowParticle();
     
@@ -330,3 +370,67 @@ document.querySelectorAll('#layer-list li').forEach(li => {
         }
     });
 });
+
+// --- Live Mode WebSocket ---
+const liveToggle = document.getElementById('live-mode-toggle');
+const modeLabel = document.getElementById('mode-label');
+const statEvents = document.getElementById('stat-events');
+const alertBox = document.getElementById('anomaly-alert');
+const alertDesc = document.getElementById('anomaly-desc');
+
+let ws = null;
+let eventCount = 1024;
+
+liveToggle.addEventListener('change', (e) => {
+    if (e.target.checked) {
+        modeLabel.textContent = "Live Stream";
+        modeLabel.className = "status-badge live";
+        connectWebSocket();
+    } else {
+        modeLabel.textContent = "Simulation";
+        modeLabel.className = "status-badge simulation";
+        if (ws) {
+            ws.close();
+            ws = null;
+        }
+    }
+});
+
+function connectWebSocket() {
+    const wsHost = window.location.hostname || 'localhost';
+    ws = new WebSocket(`ws://${wsHost}:8088/stream`);
+    ws.onmessage = (event) => {
+        const data = JSON.parse(event.data);
+        eventCount++;
+        statEvents.textContent = eventCount.toLocaleString();
+        
+        // Spawn a fast red or green particle for the live event
+        const mesh = new THREE.Mesh(flowGeom, new THREE.MeshBasicMaterial({ color: data.is_anomaly ? 0xff3366 : 0x00ffcc, transparent: true, opacity: 0.9 }));
+        mesh.position.set(0, layerYs.events, 0);
+        mesh.userData = {
+            target: new THREE.Vector3(0, layerYs.gate, 0),
+            speed: 0.1
+        };
+        flowGroup.add(mesh);
+        flowingParticles.push(mesh);
+        
+        if (data.is_anomaly) {
+            alertDesc.textContent = `Alert on ${data.key_src} -> ${data.key_dst} (Score: ${data.score.toFixed(3)})`;
+            alertBox.classList.remove('hidden');
+            setTimeout(() => alertBox.classList.add('hidden'), 3000);
+            
+            gateMesh.material.color.setHex(0xff3366);
+            gateMesh.material.emissive.setHex(0xff3366);
+            setTimeout(() => {
+                gateMesh.material.color.setHex(0xffffff);
+                gateMesh.material.emissive.setHex(0xffffff);
+            }, 500);
+        }
+    };
+    ws.onerror = () => {
+        console.error("Live Mode: Could not connect to backend.");
+        liveToggle.checked = false;
+        modeLabel.textContent = "Simulation";
+        modeLabel.className = "status-badge simulation";
+    }
+}

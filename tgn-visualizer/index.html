@@ -33,7 +33,13 @@
             <h3>System Status</h3>
             <div class="stat-row">
                 <span>Mode:</span>
-                <span class="status-badge simulation">Simulation</span>
+                <div class="toggle-container">
+                    <span id="mode-label" class="status-badge simulation">Simulation</span>
+                    <label class="switch">
+                        <input type="checkbox" id="live-mode-toggle">
+                        <span class="slider round"></span>
+                    </label>
+                </div>
             </div>
             <div class="stat-row">
                 <span>Total Nodes:</span>
@@ -52,6 +58,12 @@
                 <p id="anomaly-desc">Lateral Movement (Score: 0.92)</p>
             </div>
         </div>
+    </div>
+    
+    <div id="tooltip" class="hidden">
+        <div id="tooltip-title">Node Title</div>
+        <div id="tooltip-type">Type: PyTorch Component</div>
+        <div id="tooltip-desc">Description</div>
     </div>
     
     <div id="canvas-container"></div>
