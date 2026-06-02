@@ -18,30 +18,30 @@ GNN model training and serving microservice (and standalone), specialized in
 
 ## Overview (Temporal Graph Network)
 
-Graphagate analyzes a continuous, real-time **Zero-Trust access stream** with a
-**Temporal Graph Network (TGN)**. Every access (an *IP/device → resource* request) is a
-timestamped edge carrying Zero-Trust signals; the model keeps a recurrent **memory** of
-each entity's behaviour and a bounded history of its recent **temporal neighbours**, and
-scores each new event sequentially.
+Graphagate analizza un **flusso di accessi Zero-Trust** continuo e in tempo reale utilizzando una
+**Temporal Graph Network (TGN)**. Ogni accesso (una richiesta *IP/device → risorsa*) rappresenta un
+arco temporale (edge) contenente segnali Zero-Trust; il modello mantiene una **memoria** ricorrente del
+comportamento di ciascuna entità e una cronologia limitata dei suoi **vicini temporali** recenti,
+assegnando uno score a ogni nuovo evento in modo sequenziale.
 
-- **Unsupervised anomaly detection** — trained purely on benign traffic via negative
-  sampling. For each benign event the model is pushed towards *benign* and three kinds of
-  perturbation towards *anomalous*; the anomaly score is `1 − P(benign)`.
-- **Three anomaly classes are detected** — *contextual* (broken TLS trust / sensor
-  alerts), *policy* (an entity acting outside its role/clearance/tier), and *lateral
-  movement* (an authorised but **non-habitual** access — same edge features as benign,
-  detectable only from interaction history).
-- **Real-time serving** — `src/serve_tgn.py` exposes the primitives (`load_model`,
-  `infer_score`, `update_memory`, `score_event`, `commit_event`) and `src/serve_api.py`
-  wraps them in a **REST/JSON inference microservice** (`graphagate.serve_api`, Compose
-  profile `serve-tgn`) that a ZTA orchestrator consumes over HTTP. Scoring is
-  event-by-event; memory and the neighbour history are updated **only for events
-  classified benign** (anti-poisoning gate), and a `NodeRegistry` admits previously unseen
-  entities at runtime (dynamic node space). The deployable artifact is
-  `public/tgn_checkpoint.pt` (weights + memory + raw-message store + neighbour buffers) and
-  `public/tgn_stats.json` (calibrated threshold + registry). Verify with
-  `python -m graphagate.verify_tgn`. Integration details (endpoints, OPA anti-poisoning
-  flow) in [`docs/orchestrator_integration.md`](docs/orchestrator_integration.md).
+- **Unsupervised anomaly detection** — addestrato esclusivamente su traffico benigno tramite negative
+  sampling. Per ogni evento benigno il modello viene spinto verso *benigno* e su tre tipi di
+  perturbazione verso *anomalo*; lo score di anomalia è calcolato come `1 − P(benign)`.
+- **Tre classi di anomalie rilevate** — *contestuale* (fiducia TLS compromessa / allarmi
+  dai sensori), *policy* (un'entità che agisce al di fuori del proprio ruolo/clearance/tier), e *movimento
+  laterale* (un accesso autorizzato ma **non abituale** — stesse feature d'arco del traffico benigno,
+  rilevabile esclusivamente tramite lo storico delle interazioni).
+- **Serving in tempo reale** — `src/serve_tgn.py` espone le primitive (`load_model`,
+  `infer_score`, `update_memory`, `score_event`, `commit_event`) e `src/serve_api.py`
+  le incapsula in un **microservizio di inferenza REST/JSON** (`graphagate.serve_api`, profilo Compose
+  `serve-tgn`) interrogabile da un orchestrator ZTA tramite HTTP. Il calcolo dello score avviene
+  evento per evento; la memoria e lo storico del vicinato vengono aggiornati **solo per gli eventi
+  classificati come benigni** (anti-poisoning gate), e un `NodeRegistry` ammette dinamicamente
+  entità mai viste prima a runtime (spazio dei nodi dinamico). Gli artifact per il deploy sono
+  `public/tgn_checkpoint.pt` (pesi + memoria + raw-message store + buffer del vicinato) e
+  `public/tgn_stats.json` (soglia calibrata + registro). Verifica disponibile con
+  `python -m graphagate.verify_tgn`. Dettagli sull'integrazione (endpoint, flusso anti-poisoning OPA)
+  in [`docs/orchestrator_integration.md`](docs/orchestrator_integration.md).
 
 ## Architettura del modello
 
