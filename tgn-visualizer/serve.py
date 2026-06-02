@@ -14,6 +14,19 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         self.send_header('Cache-Control', 'no-store, must-revalidate')
         super().end_headers()
 
-with socketserver.TCPServer(("", PORT), Handler) as httpd:
+socketserver.TCPServer.allow_reuse_address = True
+httpd = None
+while True:
+    try:
+        httpd = socketserver.TCPServer(("", PORT), Handler)
+        break
+    except OSError as e:
+        if e.errno == 98: # Address already in use
+            print(f"Port {PORT} is in use, trying next port...")
+            PORT += 1
+        else:
+            raise
+
+with httpd:
     print(f"Serving 3D TGN Visualizer at http://localhost:{PORT}")
     httpd.serve_forever()

@@ -533,7 +533,7 @@ if (liveToggle) {
 
 function connectWebSocket() {
     const wsHost = window.location.hostname || 'localhost';
-    ws = new WebSocket(`ws://${wsHost}:8088/stream`);
+    ws = new WebSocket(`ws://${wsHost}:8888/stream`);
     ws.onmessage = (event) => {
         const data = JSON.parse(event.data);
         if (data.action === "init_sys_info") {
