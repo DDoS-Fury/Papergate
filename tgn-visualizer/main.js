@@ -57,20 +57,8 @@ eventGroup.position.y = layerYs.events;
 scene.add(eventGroup);
 
 const sphereGeom = new THREE.SphereGeometry(0.5, 16, 16);
-for (let i = 0; i < 60; i++) {
-    const mesh = new THREE.Mesh(sphereGeom, eventMat);
-    mesh.position.set(
-        (Math.random() - 0.5) * 60,
-        (Math.random() - 0.5) * 5,
-        (Math.random() - 0.5) * 60
-    );
-    mesh.userData = {
-        speed: Math.random() * 0.03 + 0.01,
-        angle: Math.random() * Math.PI * 2,
-        radius: Math.random() * 25 + 5
-    };
-    eventGroup.add(mesh);
-    eventParticles.push(mesh);
+for (let i = 0; i < 0; i++) {
+    // Particles are now generated dynamically based on incoming events
 }
 
 // Grid for Event Stream
@@ -382,15 +370,20 @@ function animate() {
     }
 
     // Animate Flowing Particles
-    if (Math.random() < 0.25) spawnFlowParticle();
+    const isLive = document.getElementById('live-mode-toggle')?.checked;
+    if (!isLive && Math.random() < 0.25) spawnFlowParticle();
     
     for (let i = flowingParticles.length - 1; i >= 0; i--) {
         const p = flowingParticles[i];
         p.position.lerp(p.userData.target, p.userData.speed);
         
         if (p.position.distanceTo(p.userData.target) < 0.5) {
-            flowGroup.remove(p);
-            flowingParticles.splice(i, 1);
+            if (p.userData.path && p.userData.path.length > 0) {
+                p.userData.target = p.userData.path.shift();
+            } else {
+                flowGroup.remove(p);
+                flowingParticles.splice(i, 1);
+            }
         }
     }
     
@@ -468,12 +461,61 @@ function handleStreamEvent(data) {
     
     processEventForRealNet(data.key_src, data.key_dst);
     
-    // Spawn a fast red or green particle for the event
-    const mesh = new THREE.Mesh(flowGeom, new THREE.MeshBasicMaterial({ color: data.is_anomaly ? 0xff3366 : 0x00ffcc, transparent: true, opacity: 0.9 }));
-    mesh.position.set(0, layerYs.events, 0);
+    // Spawn rotating event particle to reflect real event
+    const evParticleColor = data.is_anomaly ? 0xff3366 : 0x00ffcc;
+    const evParticle = new THREE.Mesh(sphereGeom, new THREE.MeshBasicMaterial({ color: evParticleColor, transparent: true, opacity: 0.8 }));
+    const evAngle = Math.random() * Math.PI * 2;
+    const evRadius = Math.random() * 25 + 5;
+    evParticle.position.set(Math.cos(evAngle) * evRadius, 0, Math.sin(evAngle) * evRadius);
+    evParticle.userData = {
+        speed: Math.random() * 0.03 + 0.01,
+        angle: evAngle,
+        radius: evRadius
+    };
+    eventGroup.add(evParticle);
+    eventParticles.push(evParticle);
+    
+    if (eventParticles.length > 100) {
+        const old = eventParticles.shift();
+        eventGroup.remove(old);
+        if (old.material) old.material.dispose();
+    }
+
+    // Determine path through the network
+    let srcPos, dstPos;
+    const isLiveMode = document.getElementById('live-mode-toggle')?.checked;
+    const isExact = isLiveMode || isExactTopology;
+    
+    if (isExact) {
+        const srcNode = getOrCreateRealNode(data.key_src, true);
+        const dstNode = getOrCreateRealNode(data.key_dst, false);
+        srcPos = srcNode.position;
+        dstPos = dstNode.position;
+    } else {
+        const abstractSources = gnnNodes.filter(n => n.userData.type === 'Abstract Source');
+        const abstractDests = gnnNodes.filter(n => n.userData.type === 'Abstract Destination');
+        const srcNode = abstractSources.length > 0 ? abstractSources[Math.floor(Math.random() * abstractSources.length)] : { position: new THREE.Vector3(-10, 0, 0) };
+        const dstNode = abstractDests.length > 0 ? abstractDests[Math.floor(Math.random() * abstractDests.length)] : { position: new THREE.Vector3(10, 0, 0) };
+        srcPos = srcNode.position;
+        dstPos = dstNode.position;
+    }
+
+    const memCube = memoryCubes[Math.floor(Math.random() * memoryCubes.length)];
+    const path = [
+        new THREE.Vector3(memCube.position.x, memCube.position.y + layerYs.memory, memCube.position.z),
+        new THREE.Vector3(srcPos.x, srcPos.y + layerYs.gnn, srcPos.z),
+        new THREE.Vector3(dstPos.x, dstPos.y + layerYs.gnn, dstPos.z),
+        new THREE.Vector3(Math.random() > 0.5 ? -15 : 15, layerYs.scoring, 0),
+        new THREE.Vector3(0, layerYs.gate, 0)
+    ];
+
+    // Spawn flowing particle following the path
+    const mesh = new THREE.Mesh(flowGeom, new THREE.MeshBasicMaterial({ color: evParticleColor, transparent: true, opacity: 0.9 }));
+    mesh.position.set(evParticle.position.x, layerYs.events, evParticle.position.z);
     mesh.userData = {
-        target: new THREE.Vector3(0, layerYs.gate, 0),
-        speed: 0.1
+        target: path.shift(),
+        path: path,
+        speed: 0.15
     };
     flowGroup.add(mesh);
     flowingParticles.push(mesh);
@@ -517,6 +559,12 @@ if (liveToggle) {
         if (e.target.checked) {
             modeLabel.textContent = "Live Stream";
             modeLabel.className = "status-badge live";
+            
+            if (realNetToggle && !realNetToggle.checked) {
+                realNetToggle.checked = true;
+                realNetToggle.dispatchEvent(new Event('change'));
+            }
+            
             stopSimulation();
             connectWebSocket();
         } else {
