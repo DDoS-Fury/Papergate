@@ -33,17 +33,18 @@ L'architettura del modello TGN combina la memoria ricorrente tipica dei TGN (Ros
     font=\sffamily\footnotesize,
     box/.style={draw, rectangle, rounded corners, align=center, fill=blue!5, inner sep=5pt, minimum height=0.6cm},
     input/.style={draw, rectangle, rounded corners, align=center, fill=green!10, inner sep=5pt, minimum height=0.6cm},
-    edge/.style={->, >=Stealth, thick},
+    edge/.style={->, >=Stealth, thick, rounded corners},
+    dashededge/.style={->, >=Stealth, thick, dashed, rounded corners},
     group/.style={draw, rectangle, dashed, rounded corners, inner sep=10pt, fill=gray!5}
 ]
 
 % ==================== EMBED() ====================
 \node[input] (NID) {n\_id};
-\node[input, right=3.5cm of NID] (HIST) {edge\_index, hist\_t, hist\_msg};
+\node[box, below=1cm of NID] (FEAT) {node\_feat[n\_id]\\(nf)};
+\node[box, left=0.5cm of FEAT] (MEM) {TGNMemory\\(z\_mem, last\_update)};
+\node[box, right=0.5cm of FEAT] (HASH) {node\_hash[n\_id] $\rightarrow$ nn.Embedding\\(he)};
 
-\node[box, below=1cm of NID, xshift=-2.5cm] (MEM) {TGNMemory\\(z\_mem, last\_update)};
-\node[box, right=0.3cm of MEM] (FEAT) {node\_feat[n\_id]\\(nf)};
-\node[box, right=0.3cm of FEAT] (HASH) {node\_hash[n\_id] $\rightarrow$ nn.Embedding\\(he)};
+\node[input, right=1.5cm of HASH] (HIST) {edge\_index, hist\_t, hist\_msg};
 
 \draw[edge] (NID) -| (MEM);
 \draw[edge] (NID) -- (FEAT);
@@ -57,7 +58,7 @@ L'architettura del modello TGN combina la memoria ricorrente tipica dei TGN (Ros
 \node[box, below=0.8cm of XCAT] (GNN) {GraphAttentionEmbedding\\TransformerConv (num\_hops=3, +residual)\\edge\_attr = [ time\_enc($\Delta$t) $\parallel$ hist\_msg ]\\$\rightarrow$ \textbf{z} (Node Embeddings)};
 
 \draw[edge] (XCAT) -- (GNN);
-\draw[edge] (MEM.180) |- ++(-0.5, -2.5) |- (GNN.170); % last_update
+\draw[edge] (MEM.190) |- ++(-0.5, -2.5) |- (GNN.170); % last_update loop
 \draw[edge] (HIST.south) |- (GNN.east);
 
 \begin{scope}[on background layer]
@@ -65,29 +66,34 @@ L'architettura del modello TGN combina la memoria ricorrente tipica dei TGN (Ros
 \end{scope}
 
 % ==================== SCORE() ====================
-\node[input, below=1.5cm of EMBED_GROUP, xshift=-4cm] (Z_IN) {z};
-\node[input, right=0.5cm of Z_IN] (NF_IN) {nf};
+\node[input, below=1.5cm of EMBED_GROUP, xshift=-3cm] (Z_IN) {z};
+\node[input, right=1cm of Z_IN] (CUR) {src\_local, dst\_local, cur\_msg};
+\node[input, right=1cm of CUR] (NF_IN) {nf};
 \node[input, right=0.5cm of NF_IN] (HIDX_IN) {h\_idx};
-\node[input, right=0.5cm of HIDX_IN] (CUR) {src\_local, dst\_local, cur\_msg};
 
-\node[box, below=0.8cm of HIDX_IN] (HE2) {nn.Embedding\\(he)};
+\node[box, below=0.6cm of HIDX_IN] (HE2) {nn.Embedding\\(he)};
 \draw[edge] (HIDX_IN) -- (HE2);
 
-\node[box, below=0.8cm of NF_IN, xshift=0.5cm] (FWH) {feat\_with\_hash\\[ nf $\parallel$ he ]};
+\node[box, below=0.6cm of NF_IN, xshift=1cm] (FWH) {feat\_with\_hash\\[ nf $\parallel$ he ]};
 \draw[edge] (NF_IN) |- (FWH);
 \draw[edge] (HE2) |- (FWH);
 
-\node[box, below=1cm of FWH] (LINK) {LinkPredictor (MLP)\\[ z\_src $\parallel$ z\_dst $\parallel$ cur\_msg $\parallel$ fwh\_src $\parallel$ fwh\_dst ]\\$\rightarrow$ feat\_logit};
+\node[box, below=2.5cm of Z_IN] (STRUCT) {Structural Head\\struct\_scale $\cdot$ $\sum$ (norm(proj(z\_src)) $\odot$ norm(proj(z\_dst)))\\$\rightarrow$ struct\_logit};
 
-\node[box, right=0.5cm of LINK] (STRUCT) {Structural Head\\struct\_scale $\cdot$ $\sum$ (norm(proj(z\_src)) $\odot$ norm(proj(z\_dst)))\\$\rightarrow$ struct\_logit};
+\node[box, below=2.5cm of CUR, xshift=2.5cm] (LINK) {LinkPredictor (MLP)\\[ z\_src $\parallel$ z\_dst $\parallel$ cur\_msg $\parallel$ fwh\_src $\parallel$ fwh\_dst ]\\$\rightarrow$ feat\_logit};
 
-\draw[edge] (FWH) -- (LINK);
-\draw[edge] (Z_IN) |- (LINK.160);
-\draw[edge] (Z_IN) |- (STRUCT.160);
-\draw[edge] (CUR) |- (LINK.20);
-\draw[edge] (CUR) |- (STRUCT.20);
+% Orthogonal routing into LINK
+\draw[edge] (FWH.south) |- ++(0, -0.4) -| (LINK.50);
 
-\node[box, below=1cm of LINK, xshift=3cm] (SUM) {logit = feat\_logit + struct\_logit};
+% Orthogonal routing for CUR
+\draw[edge] (CUR.south) -- ++(0,-0.6) -| (STRUCT.50);
+\draw[edge] (CUR.south) -- ++(0,-0.6) -| (LINK.110);
+
+% Orthogonal routing for Z_IN
+\draw[edge] (Z_IN.south) -- (STRUCT.north);
+\draw[edge] (Z_IN.south) -- ++(0,-1.2) -| (LINK.150);
+
+\node[box, below=1cm of LINK, xshift=-3.5cm] (SUM) {logit = feat\_logit + struct\_logit};
 \draw[edge] (LINK) |- (SUM);
 \draw[edge] (STRUCT) |- (SUM);
 
@@ -95,10 +101,10 @@ L'architettura del modello TGN combina la memoria ricorrente tipica dei TGN (Ros
     \node[group, fit=(Z_IN) (CUR) (HE2) (SUM) (STRUCT), label={[align=center]above:\textbf{score() - feature head + structural head}}] (SCORE_GROUP) {};
 \end{scope}
 
-% Collegamenti logici tra embed e score
-\draw[edge, dashed] (GNN.south) -- (Z_IN.north);
-\draw[edge, dashed] (FEAT.south) -- ++(0,-2) -| (NF_IN.north);
-\draw[edge, dashed] (NID.east) -- ++(0.5,0) |- ++(0,-6) -| (HIDX_IN.north);
+% ==================== LOGICAL CONNECTIONS ====================
+\draw[dashededge] (GNN.south) |- ++(0,-0.5) -| (Z_IN.north);
+\draw[dashededge] (FEAT.0) -- ++(5.5,0) |- ++(0,-6.5) -| (NF_IN.north);
+\draw[dashededge] (NID.0) -- ++(7.5,0) |- ++(0,-8) -| (HIDX_IN.north);
 
 \end{tikzpicture}
 }
