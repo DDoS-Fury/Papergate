@@ -10,7 +10,7 @@ Questa struttura permette di eseguire le diverse fasi del progetto isolando gli 
 
 ## Profili Disponibili
 
-Il `docker-compose.yml` contiene tre profili: `training-tgn`, `verify-tgn` e `serve-tgn`.
+Il `docker-compose.yml` contiene cinque profili: `training-tgn`, `verify-tgn`, `serve-tgn` e i due profili di confronto `baseline-iforest` e `baseline-gnn`.
 
 ### 1. Training (Modello Temporale TGN)
 Avvia il container per l'addestramento della rete dinamica basata su grafi temporali (Temporal Graph Network). Questo profilo genera dati in stream continuo con contesti Zero Trust (JA3, alert snort, sonde). Gli artifact risultanti vengono salvati nella cartella `public/`.
@@ -68,6 +68,34 @@ Gli artifact TGN persistiti in `public/` sono:
   lo stato temporale e la storia dei vicini tra riavvii);
 - `tgn_stats.json` — soglia di decisione calibrata, `capacity` e mappatura
   `NodeRegistry` (entità esterne → slot di memoria).
+
+### 4. Baseline di confronto (batch, one-shot)
+Due detector più semplici, eseguibili in container dedicati per un confronto
+riproducibile col TGN (stesso stream sintetico, split cronologico, soglia calibrata
+all'1% di FPR e protocollo di valutazione). Dettagli e metriche attese in
+[`../tests/baselines/README.md`](../tests/baselines/README.md).
+
+- **Isolation Forest** (sklearn): detector non relazionale sulle sole feature
+  statiche per-evento — il "pavimento" privo di informazione strutturale.
+
+  ```bash
+  docker compose --profile baseline-iforest up
+  ```
+  *(Esegue `python tests/baselines/isolation_forest/isolation_forest_baseline.py`)*
+
+- **GNN non temporale** (GraphSAGE): ablation del TGN su grafo statico aggregato,
+  con lo stesso curriculum di negative sampling (strutturale, hard-negative ×10,
+  contestuale) ma senza memoria ricorrente né vicinato temporale — isola il
+  contributo della sola componente temporale.
+
+  ```bash
+  docker compose --profile baseline-gnn up
+  ```
+  *(Esegue `python tests/baselines/simple_gnn/simple_gnn_baseline.py`)*
+
+> **Prerequisito**: i container delle baseline montano la cartella `./tests`
+> dell'host (gli script non sono copiati nell'immagine) e sovrascrivono l'entrypoint
+> `python -m`. Non producono artifact in `public/`: stampano le metriche a console.
 
 ## Dettagli tecnici
 Gli artifact (`tgn_checkpoint.pt`, `tgn_stats.json`) sono automaticamente persistiti tramite un volume bind-mount sulla cartella `./public` dell'host. Tali artefatti potranno poi essere utilizzati dai microservizi di validazione ZTA (Zero Trust Architecture).

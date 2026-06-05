@@ -49,3 +49,33 @@ services:
       timeout: 5s
       retries: 3
       start_period: 40s
+
+  # --- BASELINE DI CONFRONTO (batch, one-shot) ---
+  # Detector di anomalie più semplici, eseguibili in container dedicati per un
+  # confronto riproducibile col TGN (vedi tests/baselines/README.md). Gli script
+  # vivono in tests/ (non copiata nell'immagine): la si monta come volume e si
+  # sovrascrive l'entrypoint `python -m` con `python <path>`.
+
+  # Isolation Forest (sklearn): non-relazionale, solo feature statiche per-evento.
+  baseline-iforest:
+    <<: *base
+    profiles: ["baseline-iforest"]
+    container_name: graphagate-baseline-iforest
+    volumes:
+      - ./public:/app/public
+      - ./src:/app/src
+      - ./tests:/app/tests
+    entrypoint: ["python"]
+    command: ["/app/tests/baselines/isolation_forest/isolation_forest_baseline.py"]
+
+  # GNN non temporale (GraphSAGE): ablation del TGN senza memoria/vicinato temporale.
+  baseline-gnn:
+    <<: *base
+    profiles: ["baseline-gnn"]
+    container_name: graphagate-baseline-gnn
+    volumes:
+      - ./public:/app/public
+      - ./src:/app/src
+      - ./tests:/app/tests
+    entrypoint: ["python"]
+    command: ["/app/tests/baselines/simple_gnn/simple_gnn_baseline.py"]
