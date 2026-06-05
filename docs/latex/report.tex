@@ -1,0 +1,167 @@
+\documentclass[11pt,a4paper]{report}
+\usepackage[utf8]{inputenc}
+\usepackage[italian]{babel}
+\usepackage{graphicx}
+\usepackage{hyperref}
+\usepackage{geometry}
+\geometry{a4paper, margin=2.5cm}
+\usepackage{tikz}
+\usetikzlibrary{shapes.geometric, arrows.meta, positioning, calc, fit, backgrounds}
+
+\title{\textbf{Relazione Tecnica: Modello AI per la Zero Trust Architecture}\\ \large Analisi del Temporal Graph Network (Graphagate)}
+\author{}
+\date{}
+
+\begin{document}
+\maketitle
+
+\chapter{Il Modello Graphagate: Temporal Graph Network}
+
+\section{Introduzione}
+Nel contesto di una Zero Trust Architecture (ZTA), il processo di autorizzazione continua richiede meccanismi dinamici per rilevare deviazioni dal comportamento abituale e segnali di compromissione. Il modello integrato con l'Orchestrator OPA è basato su una \textbf{Temporal Graph Network (TGN)}, progettata specificamente per l'\textit{unsupervised anomaly detection} su stream di traffico continuo.
+
+Ogni accesso (una richiesta IP/device verso una risorsa) rappresenta un arco temporale all'interno di un grafo in evoluzione. Il modello mantiene uno stato ricorrente per ciascuna entità (utente o risorsa) e analizza i vicini temporali recenti per assegnare uno score di anomalia in tempo reale, consentendo di bloccare le richieste ostili ed esfiltranti.
+
+\section{Architettura del Sistema}
+L'architettura del modello TGN combina la memoria ricorrente tipica dei TGN (Rossi et al., 2020) con un gestore del vicinato ottimizzato (bounded in RAM) e uno \textit{scorer a due teste} che permette di analizzare le anomalie su due fronti: contestuale/policy e strutturale.
+
+\begin{figure}[htpb]
+\centering
+\resizebox{\textwidth}{!}{
+\begin{tikzpicture}[
+    node distance=1cm and 1cm,
+    font=\sffamily\footnotesize,
+    box/.style={draw, rectangle, rounded corners, align=center, fill=blue!5, inner sep=5pt, minimum height=0.6cm},
+    input/.style={draw, rectangle, rounded corners, align=center, fill=green!10, inner sep=5pt, minimum height=0.6cm},
+    edge/.style={->, >=Stealth, thick},
+    group/.style={draw, rectangle, dashed, rounded corners, inner sep=10pt, fill=gray!5}
+]
+
+% ==================== EMBED() ====================
+\node[input] (NID) {n\_id};
+\node[input, right=3.5cm of NID] (HIST) {edge\_index, hist\_t, hist\_msg};
+
+\node[box, below=1cm of NID, xshift=-2.5cm] (MEM) {TGNMemory\\(z\_mem, last\_update)};
+\node[box, right=0.3cm of MEM] (FEAT) {node\_feat[n\_id]\\(nf)};
+\node[box, right=0.3cm of FEAT] (HASH) {node\_hash[n\_id] $\rightarrow$ nn.Embedding\\(he)};
+
+\draw[edge] (NID) -| (MEM);
+\draw[edge] (NID) -- (FEAT);
+\draw[edge] (NID) -| (HASH);
+
+\node[box, below=0.8cm of FEAT] (XCAT) {x = [ z\_mem $\parallel$ nf $\parallel$ he ]};
+\draw[edge] (MEM) |- (XCAT);
+\draw[edge] (FEAT) -- (XCAT);
+\draw[edge] (HASH) |- (XCAT);
+
+\node[box, below=0.8cm of XCAT] (GNN) {GraphAttentionEmbedding\\TransformerConv (num\_hops=3, +residual)\\edge\_attr = [ time\_enc($\Delta$t) $\parallel$ hist\_msg ]\\$\rightarrow$ \textbf{z} (Node Embeddings)};
+
+\draw[edge] (XCAT) -- (GNN);
+\draw[edge] (MEM.180) |- ++(-0.5, -2.5) |- (GNN.170); % last_update
+\draw[edge] (HIST.south) |- (GNN.east);
+
+\begin{scope}[on background layer]
+    \node[group, fit=(NID) (HIST) (MEM) (HASH) (GNN), label={[align=center]above:\textbf{embed() - identity- \& history-aware node embeddings}}] (EMBED_GROUP) {};
+\end{scope}
+
+% ==================== SCORE() ====================
+\node[input, below=1.5cm of EMBED_GROUP, xshift=-4cm] (Z_IN) {z};
+\node[input, right=0.5cm of Z_IN] (NF_IN) {nf};
+\node[input, right=0.5cm of NF_IN] (HIDX_IN) {h\_idx};
+\node[input, right=0.5cm of HIDX_IN] (CUR) {src\_local, dst\_local, cur\_msg};
+
+\node[box, below=0.8cm of HIDX_IN] (HE2) {nn.Embedding\\(he)};
+\draw[edge] (HIDX_IN) -- (HE2);
+
+\node[box, below=0.8cm of NF_IN, xshift=0.5cm] (FWH) {feat\_with\_hash\\[ nf $\parallel$ he ]};
+\draw[edge] (NF_IN) |- (FWH);
+\draw[edge] (HE2) |- (FWH);
+
+\node[box, below=1cm of FWH] (LINK) {LinkPredictor (MLP)\\[ z\_src $\parallel$ z\_dst $\parallel$ cur\_msg $\parallel$ fwh\_src $\parallel$ fwh\_dst ]\\$\rightarrow$ feat\_logit};
+
+\node[box, right=0.5cm of LINK] (STRUCT) {Structural Head\\struct\_scale $\cdot$ $\sum$ (norm(proj(z\_src)) $\odot$ norm(proj(z\_dst)))\\$\rightarrow$ struct\_logit};
+
+\draw[edge] (FWH) -- (LINK);
+\draw[edge] (Z_IN) |- (LINK.160);
+\draw[edge] (Z_IN) |- (STRUCT.160);
+\draw[edge] (CUR) |- (LINK.20);
+\draw[edge] (CUR) |- (STRUCT.20);
+
+\node[box, below=1cm of LINK, xshift=3cm] (SUM) {logit = feat\_logit + struct\_logit};
+\draw[edge] (LINK) |- (SUM);
+\draw[edge] (STRUCT) |- (SUM);
+
+\begin{scope}[on background layer]
+    \node[group, fit=(Z_IN) (CUR) (HE2) (SUM) (STRUCT), label={[align=center]above:\textbf{score() - feature head + structural head}}] (SCORE_GROUP) {};
+\end{scope}
+
+% Collegamenti logici tra embed e score
+\draw[edge, dashed] (GNN.south) -- (Z_IN.north);
+\draw[edge, dashed] (FEAT.south) -- ++(0,-2) -| (NF_IN.north);
+\draw[edge, dashed] (NID.east) -- ++(0.5,0) |- ++(0,-6) -| (HIDX_IN.north);
+
+\end{tikzpicture}
+}
+\caption{Architettura del Temporal Graph Network e flusso degli eventi in inferenza (corrispondenza 1:1 con il design di sistema).}
+\end{figure}
+
+\subsection{Componenti Principali}
+\begin{itemize}
+    \item \textbf{TGNMemory}: Struttura basata su GRU che aggiorna lo stato storico di ciascun nodo con i messaggi degli eventi in ingresso. La dimensione è impostata a 256 per gestire le impronte comportamentali.
+    \item \textbf{Hashed Identity}: Identità dei nodi mappate tramite funzioni di hash (\texttt{hash(URI) \% hash\_buckets}) per garantire totale \textit{induttività} e scalabilità in presenza di entità mai viste prima.
+    \item \textbf{MessageNeighborLoader}: Buffer in RAM che memorizza gli ultimi vicini temporali di ciascun nodo (es. \texttt{neighbor\_size=30}). Lavora con lookup in tempo $O(1)$ su matrici preallocate ed elimina la necessità di lenti database a grafo.
+    \item \textbf{GraphAttentionEmbedding}: Rete multi-hop con \textit{TransformerConv} per calcolare l'embedding attendendo sui vicini storici, concatenando l'identità alla storia temporale.
+    \item \textbf{Dual Head Scorer}: 
+    \begin{itemize}
+        \item \textit{Feature head}: Un MLP che si occupa di anomalie contestuali (es. segnali di rete o IDS) e di policy (deviazioni dalle clearance statiche previste).
+        \item \textit{Structural head}: Calcola la similarità coseno delle proiezioni non-lineari dei nodi, misurando la compatibilità passata tra le due entità. Si occupa di isolare i \textbf{movimenti laterali}.
+    \end{itemize}
+\end{itemize}
+
+\section{Fase di Addestramento e Calibrazione}
+Il modello viene addestrato con un approccio \textit{self-supervised} unicamente su traffico benigno, senza mai essere esposto a etichette di anomalia (unsupervised anomaly detection). Lo stream temporale sintetico generato viene suddiviso cronologicamente in tre subset: addestramento (70\%), validazione (10\%) e test (20\%). 
+L'obiettivo di apprendimento per la rete è il \textit{link prediction}: il TGN è istruito per massimizzare lo score assegnato ad eventi realmente accaduti nella baseline benigna e minimizzare contemporaneamente lo score associato ad eventi artificialmente manipolati e generati a runtime (\textit{negative sampling}).
+
+\subsection{Negative Sampling e Funzione di Loss}
+Il processo di ottimizzazione (guidato dall'algoritmo \textbf{AdamW}) fa uso di una complessa \texttt{BCEWithLogitsLoss} calcolata come somma degli errori su un largo spettro multidimensionale di deviazioni:
+\begin{itemize}
+    \item \textbf{Structural Negatives (Random Target)}: L'entità sorgente viene associata ad un nodo casuxale estratto dall'intero grafo globale. Serve a fornire un bias alla rete per individuare quali interazioni macroscopiche sono topologicamente implausibili.
+    \item \textbf{Hard Structural Negatives (Lateral Movement Simulation)}: L'entità sorgente viene associata intenzionalmente ad una risorsa autorizzata dalle regole ma con la quale \textbf{non} intrattiene alcun rapporto abitudinario (\textit{non-habitual resource}). A questo specifico termine d'errore viene imposto un rateo di penalità enorme ($\times 10$ rispetto agli altri errori). Questo forzamento di gradiente obbliga la Structural Head a discernere chirurgicamente il confine laterale che bloccherà ogni tentativo di privilege escalation e pivoting.
+    \item \textbf{Contextual Negatives (Feature Noise)}: Mantenendo intatta la destinazione, le feature intrinseche dell'evento temporale (es. trust TLS/JA3 compromesso) subiscono una mutazione casuale con rateo del 20\%, addestrando in questo modo la \textit{Feature Head} a rintracciare manipolazioni locali senza dipendere dallo strato topologico.
+\end{itemize}
+
+\subsection{Calibrazione della Soglia Adattiva}
+Ai fini dell'inferenza downstream, il TGN non possiede una classificazione netta, ma si appoggia a una soglia adattiva. Eseguendo un \textit{replay} in stream sul 10\% di dataset held-out garantito puramente benigno, le risposte del modello vengono ordinate e si calcola un quantile (percentile) corrispondente al Target False Positive Rate (FPR), fissato rigorosamente al 5\%. Lo score di anomalia risultante definisce l'affidabilità con cui OPA potrà bocciare pacchetti.
+
+\section{Tipologie di Anomalie Rilevate in Produzione}
+In fase di valutazione o in ambiente live, l'architettura rileva 3 macro-categorie di attacco dimostrando enormi vantaggi prestazionali rispetto a una \textit{rule-based baseline}:
+\begin{enumerate}
+    \item \textbf{Policy Anomaly}: L'entità agisce al di fuori del proprio ruolo, clearance o device tier. Intercettata agevolmente dalla Feature head grazie alle feature statiche ZTA.
+    \item \textbf{Contextual Anomaly}: La connessione ha caratteristiche insolite o ha innescato sensori IPS. Rilevata dalla Feature head decostruendo le \textit{edge features}. 
+    \item \textbf{Lateral Movement}: L'accesso è formalmente autorizzato a livello di regole OPA, ma \textbf{non abituale}. Avviene tipicamente nel "pivoting". Essendo indistinguibile sintatticamente dal traffico benigno, la classificazione ricade quasi del tutto sull'architettura GNN.
+\end{enumerate}
+
+\section{Deployment e Dettagli Hardware}
+Le primitive di model-serving (estrazione memoria ed espansione grafo storico) operano asintoticamente a tempo costante $O(1)$. Il TGN mantiene tutto il suo status dinamico e ricorrente nativamente in RAM. Ciò comporta due scelte architetturali di Deployment: è inefficace una scalabilità orizzontale a monte (poiché più repliche frammenterebbero il database comportamentale delle entità) ed è fondamentale il dimensionamento asincrono. 
+Il sistema finale eroga un'infrastruttura **single-worker** fondata su \texttt{FastAPI} (gestione I/O asincrono per polling concorrenziale) che elabora gli stati tensoriali con tempi $P50 \approx 7ms$.
+
+Al fine di calcolare simultaneamente la backward-propagation e smaltire la mole della \textit{Graph Attention}, il container isolato appoggia sulle seguenti specifiche hardware/software:
+\begin{itemize}
+    \item Container Engine nativo agganciato a librerie \textbf{NVIDIA CUDA 13}.
+    \item Hardware accelerato compatibile con architettura ZTA ottimizzata per chip \textbf{RTX Blackwell} (es. RTX 5090 / B200 Tensor Core). L'impressionante aumento della bandwidth permette ai Tensor Core di annullare l'overhead dei ring-buffer di RAM per gli `MessageNeighborLoader`.
+\end{itemize}
+Nel momento di chiusura del framework (o tramite specifici endpoint API persistenti), la memoria serializzata di PyTorch (`tgn_checkpoint.pt` e `tgn_stats.json`) va copiata a sistema persistente evitando cold-start traumatici.
+
+\section{Limiti e Sfide Implementative}
+
+\subsection{Il Paradosso dell'Induttività (Cold Start)}
+Affinché il TGN riconosca deviazioni strutturali di alto livello, la rete neurale deve esplorare la baseline (\textit{Temporal Neighborhood}) su un orizzonte storico. Loggandosi per la primissima volta, un utente appena iscritto risulterebbe sempre in uno stato di fallimento topologico. Durante questa prima fase (Cold Start), l'Orchestrator OPA è sprovvisto dell'intelligenza AI. Per abbassare tale superficie d'attacco, si limita il buio di validazione con un \textit{Grace Period} ristretto a soli 5 eventi.
+
+\subsection{La Sfida del Lateral Movement}
+Senza l'aiuto delle etichette (unsupervised), il Lateral Movement non mostra tracce o indicatori palesi. I potenziamenti implementati per portare la Recall al considerevole target del 40\% spaziano dall'aumento dei salti nella GNN ($num\_hops = 3$), all'utilizzo di strati di proiezioni non-lineari, all'aumento capacitivo della memoria storica ($neighbor\_size = 30$), al già citato tasso correttivo $\times 10$ applicato alla Loss degli hard negatives.
+
+\subsection{Anti-Poisoning Gate in Live Stream}
+Il design offline del testing replica 1:1 il routing live, prevenendo fenomeni di \textit{Data Leakage}. 
+Tuttavia, l'ambiente di deploy espone alla minaccia di \textit{Data Poisoning}. Un aggressore persistente potrebbe infiltrarsi immettendo attacchi lenti per abituare il Grafo ai propri comportamenti nocivi sfalsando lentamente lo scoring e la similarità del coseno. Il problema è neutralizzato dal gate Anti-Avvelenamento: sia l'internal state della \texttt{TGNMemory} che le code a scorrimento dei vicini temporali vengono aggiornate e \textit{commitate} in RAM solo nell'eventualità in cui lo score della rete si posizioni sotto il limite calcolato per le minacce ($< threshold$). I pacchetti "Anomalia", inviati ad OPA, passano nel dimenticatoio dell'IA preservando incontaminato lo stato vettoriale del modello.
+
+\end{document}

@@ -41,7 +41,7 @@ services:
     container_name: graphagate-serve-tgn
     command: ["graphagate.serve_api"]
     ports:
-      - "8088:8088"
+      - "8888:8088"
     healthcheck:
       # L'immagine CUDA non ha curl: si usa la stdlib Python.
       test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0) if urllib.request.urlopen('http://localhost:8088/health').status==200 else sys.exit(1)"]

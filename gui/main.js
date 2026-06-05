@@ -354,7 +354,14 @@ function animate() {
     
     // Raycasting for Tooltips
     raycaster.setFromCamera(mouse, camera);
-    const interactables = [...memoryCubes, ...gnnNodes, featureHead, structuralHead, gateMesh];
+    const interactables = [...memoryCubes, ...gnnNodes, featureHead, structuralHead, gateMesh].filter(obj => {
+        let p = obj;
+        while (p) {
+            if (p.visible === false) return false;
+            p = p.parent;
+        }
+        return true;
+    });
     const intersects = raycaster.intersectObjects(interactables);
     
     if (intersects.length > 0) {
@@ -554,6 +561,40 @@ function stopSimulation() {
     if (simInterval) clearInterval(simInterval);
 }
 
+function clearGraphState() {
+    // Rimuove i pacchetti evento
+    eventParticles.forEach(p => {
+        eventGroup.remove(p);
+        if (p.material) p.material.dispose();
+    });
+    eventParticles.length = 0;
+    
+    // Rimuove i pacchi flusso
+    flowingParticles.forEach(p => {
+        flowGroup.remove(p);
+        if (p.material) p.material.dispose();
+    });
+    flowingParticles.length = 0;
+    
+    // Rimuove i nodi reali
+    realNodesMap.forEach(mesh => {
+        realGnnGroup.remove(mesh);
+        const idx = gnnNodes.indexOf(mesh);
+        if (idx !== -1) gnnNodes.splice(idx, 1);
+    });
+    realNodesMap.clear();
+    
+    // Resetta gli archi reali
+    realEdgesSet.clear();
+    realEdgesPositions.length = 0;
+    realEdgesGeometry.setAttribute('position', new THREE.Float32BufferAttribute(realEdgesPositions, 3));
+    realEdgesGeometry.attributes.position.needsUpdate = true;
+    
+    eventCount = 0;
+    if (statEvents) statEvents.textContent = '0';
+    if (statNodes) statNodes.textContent = abstractGnnGroup.visible ? 23 : 0;
+}
+
 if (liveToggle) {
     liveToggle.addEventListener('change', (e) => {
         if (e.target.checked) {
@@ -566,6 +607,7 @@ if (liveToggle) {
             }
             
             stopSimulation();
+            clearGraphState();
             connectWebSocket();
         } else {
             modeLabel.textContent = "Simulation";
@@ -574,6 +616,7 @@ if (liveToggle) {
                 ws.close();
                 ws = null;
             }
+            clearGraphState();
             startSimulation();
         }
     });

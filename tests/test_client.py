@@ -28,7 +28,7 @@ async def test_client(duration_seconds=120):
             # 2. Call /infer
             req_start = time.time()
             try:
-                async with session.post("http://localhost:8088/infer", json=event) as resp:
+                async with session.post("http://localhost:8888/infer", json=event) as resp:
                     resp_data = await resp.json()
             except Exception as e:
                 print(f"Error during /infer: {e}")
@@ -60,7 +60,7 @@ async def test_client(duration_seconds=120):
                 
             if allow:
                 try:
-                    async with session.post("http://localhost:8088/update", json=event) as resp:
+                    async with session.post("http://localhost:8888/update", json=event) as resp:
                         if resp.status != 200:
                             print(f"Warning: /update returned {resp.status}")
                 except Exception as e:

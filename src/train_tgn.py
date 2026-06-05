@@ -15,7 +15,7 @@ import random
 
 import numpy as np
 import torch
-from torch.optim import Adam
+from torch.optim import AdamW
 from sklearn.metrics import average_precision_score, roc_auc_score
 
 from graphagate.config import TGNConfig, TGN_CHECKPOINT_PATH, TGN_STATS_PATH
@@ -133,7 +133,7 @@ def train_tgn(cfg: TGNConfig = TGNConfig()):
     # Bounded temporal neighbour loader (built on the model device after .to).
     model.init_neighbor_loader(cfg.neighbor_size, device)
 
-    optimizer = Adam(model.parameters(), lr=cfg.learning_rate)
+    optimizer = AdamW(model.parameters(), lr=cfg.learning_rate)
     criterion = torch.nn.BCEWithLogitsLoss()
 
     # Chronological split (the stream is already time-ordered).
