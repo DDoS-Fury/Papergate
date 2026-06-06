@@ -118,6 +118,7 @@ def _reset_slot(model, idx: int) -> None:
         model.memory.memory[idx].zero_()
         model.memory.last_update[idx] = 0
         model.node_feat[idx].zero_()
+        model.node_feat[idx, 14] = 1.0  # Reset Trust Score to max
         model.node_hash[idx].zero_()
     for store in (model.memory.msg_s_store, model.memory.msg_d_store):
         store.pop(idx, None)
@@ -133,9 +134,11 @@ def _reset_slot(model, idx: int) -> None:
 def _set_node_features(model, idx: int, feat, device) -> None:
     """Write a node's static attributes (role / clearance / tier) into its slot."""
     with torch.no_grad():
+        trust = model.node_feat[idx, 14].item()
         model.node_feat[idx] = torch.as_tensor(
             feat, dtype=model.node_feat.dtype, device=device
         )
+        model.node_feat[idx, 14] = trust
 
 
 def score_event(
@@ -188,6 +191,12 @@ def score_event(
 
     score = infer_score(model, src_idx, dst_idx, timestamp, features, device)
     is_anomaly = score >= threshold
+
+    snort_alert = features[1] > 0.5
+    if is_anomaly or snort_alert:
+        model.node_feat[src_idx, 14] = max(0.0, model.node_feat[src_idx, 14].item() - 0.5)
+    else:
+        model.node_feat[src_idx, 14] = min(1.0, model.node_feat[src_idx, 14].item() + 0.01)
 
     if update and not is_anomaly:
         update_memory(model, src_idx, dst_idx, timestamp, features, device)

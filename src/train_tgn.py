@@ -52,6 +52,13 @@ def _replay(model, src, dst, t, msg, y, device, *, threshold=None, gate_by_label
         if do_update:
             update_memory(model, s, d, tv, msg_vec, device)
 
+        snort_alert = msg_vec[1] > 0.5
+        is_anomaly = (score >= threshold) if not gate_by_label else (lab == 1)
+        if is_anomaly or snort_alert:
+            model.node_feat[s, 14] = max(0.0, model.node_feat[s, 14].item() - 0.5)
+        else:
+            model.node_feat[s, 14] = min(1.0, model.node_feat[s, 14].item() + 0.01)
+
     return scores, labels
 
 
@@ -170,7 +177,18 @@ def train_tgn(cfg: TGNConfig = TGNConfig()):
             b_msg = msg[start_idx:end_idx].to(device)
             b_y = y[start_idx:end_idx].to(device)
 
-            # The baseline is learned from benign traffic only.
+            # Update Trust Scores dynamically during training
+            snort_alerts = b_msg[:, 1] > 0.5
+            anomalies = b_y == 1
+            bad_mask = anomalies | snort_alerts
+            for j in range(len(b_src)):
+                s = b_src[j].item()
+                if bad_mask[j]:
+                    model.node_feat[s, 14] = max(0.0, model.node_feat[s, 14].item() - 0.5)
+                else:
+                    model.node_feat[s, 14] = min(1.0, model.node_feat[s, 14].item() + 0.01)
+
+            # Only train on benign events.
             benign_mask = b_y == 0
             if not benign_mask.any():
                 continue
@@ -244,11 +262,17 @@ def train_tgn(cfg: TGNConfig = TGNConfig()):
             neg_msg[noise_mask] = 1.0 - neg_msg[noise_mask]
             neg_out_ctx = model.score(z, nf, h_idx, s_loc, d_loc, neg_msg, delta_t_pos, delta_t_src)
 
+            # --- TRUST PENALTY NEGATIVES (benign edge, but we pretend the user is compromised) ---
+            nf_trust = nf.clone()
+            nf_trust[s_loc, 14] = torch.rand(len(p_src), device=device) * 0.3  # Low trust [0, 0.3]
+            neg_out_trust = model.score(z, nf_trust, h_idx, s_loc, d_loc, p_msg, delta_t_pos, delta_t_src)
+
             # --- UNSUPERVISED LOSS (BCE su Lateral e Contextual) ---
             loss = (
                 F.binary_cross_entropy_with_logits(pos_out, torch.ones_like(pos_out))
                 + 10.0 * F.binary_cross_entropy_with_logits(neg_out_hard, torch.zeros_like(neg_out_hard))
                 + F.binary_cross_entropy_with_logits(neg_out_ctx, torch.zeros_like(neg_out_ctx))
+                + 1.0 * F.binary_cross_entropy_with_logits(neg_out_trust, torch.zeros_like(neg_out_trust))
             )
 
             loss.backward()

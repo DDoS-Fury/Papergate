@@ -95,6 +95,7 @@ def generate_streaming_data(num_users=50, num_ips=100, num_resources=20, num_eve
     # Node features (static): 16-dim
     # Encode roles, clearance, tier into the features.
     node_features = torch.zeros(total_nodes, 16)
+    node_features[:, 14] = 1.0  # Trust Score
     for i in range(num_users):
         node_features[i, 0] = ROLES.index(user_roles[i]) / float(len(ROLES))
         node_features[i, 1] = user_clearances[i] / 4.0
