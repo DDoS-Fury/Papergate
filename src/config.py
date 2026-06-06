@@ -35,13 +35,14 @@ class TGNConfig:
     num_resources: int = 20
     num_events: int = 50000
 
-    msg_dim: int = 6
-    memory_dim: int = 256
-    time_dim: int = 32
+    # TGN Architecture
     node_feat_dim: int = 16
+    msg_dim: int = 6
+    time_dim: int = 32
+    memory_dim: int = 256
+    num_hops: int = 3
     hash_buckets: int = 10000
     hash_dim: int = 16
-    num_hops: int = 3
     # Temporal neighbours kept per node in the (bounded, in-memory) neighbour loader.
     # Enables message passing over each entity's recent interaction history → the
     # structural signal for lateral-movement detection. No graph DB required.

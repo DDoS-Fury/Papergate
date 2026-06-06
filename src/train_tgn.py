@@ -15,6 +15,7 @@ import random
 
 import numpy as np
 import torch
+import torch.nn.functional as F
 from torch.optim import AdamW
 from sklearn.metrics import average_precision_score, roc_auc_score
 
@@ -96,8 +97,16 @@ def train_tgn(cfg: TGNConfig = TGNConfig()):
         seed=cfg.seed,
     )
 
+    n = len(src)
+    n_train = int(n * cfg.train_frac)
+    n_val = int(n * cfg.val_frac)
+    train_end, val_end = n_train, n_train + n_val
+    bs = cfg.batch_size
+
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
+
+    print("--- INIZIO ADDESTRAMENTO UNSUPERVISED ---")
 
     # Entity registry: users and IPs are still mapped by their int ids, but resources
     # are registered using their actual string URIs so the Orchestrator can send strings natively.
@@ -142,7 +151,6 @@ def train_tgn(cfg: TGNConfig = TGNConfig()):
     n_val = int(n * cfg.val_frac)
     train_end, val_end = n_train, n_train + n_val
     bs = cfg.batch_size
-
     print("--- INIZIO ADDESTRAMENTO UNSUPERVISED ---")
     for epoch in range(1, cfg.epochs + 1):
         model.memory.reset_state()  # restart the recurrent memory each epoch

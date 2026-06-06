@@ -81,8 +81,8 @@ def isolation_forest_baseline(cfg: TGNConfig = TGNConfig()):
     np.random.seed(cfg.seed)
     random.seed(cfg.seed)
 
-    print("Generating streaming data...")
-    src, dst, t, msg, y, types, node_features, resource_uris = generate_streaming_data(
+    print("Generating synthetic streaming data (same params as TGN)...")
+    src, dst, t, msg, y, types, node_features, resource_uris, _ = generate_streaming_data(
         num_users=cfg.num_users,
         num_ips=cfg.num_ips,
         num_resources=cfg.num_resources,
