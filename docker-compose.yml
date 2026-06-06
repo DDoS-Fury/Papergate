@@ -79,3 +79,30 @@ services:
       - ./tests:/app/tests
     entrypoint: ["python"]
     command: ["/app/tests/baselines/simple_gnn/simple_gnn_baseline.py"]
+
+  # One-Class SVM (sklearn): non-relazionale, solo feature statiche per-evento
+  # (controparte kernel dell'Isolation Forest).
+  baseline-ocsvm:
+    <<: *base
+    profiles: ["baseline-ocsvm"]
+    container_name: graphagate-baseline-ocsvm
+    volumes:
+      - ./public:/app/public
+      - ./src:/app/src
+      - ./tests:/app/tests
+    entrypoint: ["python"]
+    command: ["/app/tests/baselines/ocsvm/ocsvm_baseline.py"]
+
+  # Ablation study: full vs no-struct-head vs no-hashed-identity (save=False, non
+  # tocca gli artifact in public/). Il contributo della parte temporale è invece
+  # isolato dalla baseline Static GNN.
+  ablations:
+    <<: *base
+    profiles: ["ablations"]
+    container_name: graphagate-ablations
+    volumes:
+      - ./public:/app/public
+      - ./src:/app/src
+      - ./tests:/app/tests
+    entrypoint: ["python"]
+    command: ["/app/tests/ablations/run_ablations.py"]

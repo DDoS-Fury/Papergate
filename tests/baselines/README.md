@@ -61,9 +61,13 @@ docker run --rm --gpus all -v "$PWD:/work" -w /work graphagate \
 - `isolation_forest/` — Isolation Forest (sklearn) su vettori statici per-evento
   (edge feature ⊕ feature statiche dei due endpoint). Detector di anomalie
   classico, non relazionale: misura quanto si ottiene **senza** struttura del grafo.
+- `ocsvm/` — One-Class SVM (sklearn, kernel RBF) sugli **stessi** vettori statici
+  per-evento dell'Isolation Forest (fit su subsample benigno per scalabilità). La
+  controparte kernel del "pavimento" non relazionale.
 - `simple_gnn/` — GNN **non temporale** (GraphSAGE) su grafo statico aggregato dal
   train benigno + link predictor MLP. Ablation **equa** del TGN: mantiene lo *stesso*
-  curriculum di negative sampling (strutturale + hard-negative ×10 + contestuale),
-  con l'abitualità IP→risorsa letta dal grafo statico, e rimuove **solo** la memoria
+  curriculum **de-circolarizzato** (negativo strutturale a destinazione casuale +
+  contestuale gaussiano, pesi uguali — niente più hard-negative ×10 basato
+  sull'abitualità/autorizzazione, che era circolare), e rimuove **solo** la memoria
   ricorrente e il vicinato temporale. Isola così il contributo della sola componente
-  *temporale* alla detection del lateral movement.
+  *temporale* alla detection del lateral movement (lateral AUC 0.59 vs 0.71 del TGN).

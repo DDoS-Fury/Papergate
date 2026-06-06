@@ -1,3 +1,5 @@
+import hashlib
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -9,6 +11,19 @@ from torch_geometric.nn.models.tgn import (
 from torch_geometric.nn import TransformerConv
 
 from graphagate.model.neighbor import MessageNeighborLoader
+
+
+def stable_hash(key, buckets: int) -> int:
+    """Deterministic bucket for an entity ``key`` in ``[0, buckets)``.
+
+    Uses BLAKE2b over the key's string form so the bucket assignment is identical
+    across processes and machines. The builtin ``hash()`` is salted per process
+    (``PYTHONHASHSEED``), which would give the *same* entity a *different* hashed
+    identity across restarts / training runs — breaking both reproducibility and
+    the inductive hashed-identity guarantee for entities admitted at serving time.
+    """
+    digest = hashlib.blake2b(str(key).encode("utf-8"), digest_size=8).digest()
+    return int.from_bytes(digest, "big") % buckets
 
 class GraphAttentionEmbedding(nn.Module):
     def __init__(self, in_channels, out_channels, msg_dim, time_enc, num_hops=3):
@@ -112,6 +127,12 @@ class ZTATemporalGraphNetwork(nn.Module):
         self.struct_scale = nn.Parameter(torch.tensor(5.0))
         self.last_contact = {}
 
+        # Ablation switches (runtime-only, not persisted): the normal model keeps both
+        # ON. Used by the ablation driver to isolate the contribution of the structural
+        # head and of the hashed-identity embedding. Serving never toggles these.
+        self.use_struct_head = True
+        self.use_hash_identity = True
+
     def init_neighbor_loader(self, size, device=None):
         """Create (or recreate) the bounded temporal neighbour loader on ``device``.
 
@@ -135,6 +156,8 @@ class ZTATemporalGraphNetwork(nn.Module):
         nf = self.node_feat[n_id]
         h_idx = self.node_hash[n_id]
         he = self.hash_emb(h_idx)
+        if not self.use_hash_identity:
+            he = torch.zeros_like(he)  # ablation: drop the hashed-identity signal
         x = torch.cat([z, nf, he], dim=-1)  # identity-aware node features
         z = self.gnn(x, last_update, edge_index, hist_t, hist_msg)
         return z
@@ -149,12 +172,16 @@ class ZTATemporalGraphNetwork(nn.Module):
             (catches lateral movement: a valid-but-non-habitual src/dst pairing).
         """
         he = self.hash_emb(h_idx)
+        if not self.use_hash_identity:
+            he = torch.zeros_like(he)  # ablation: drop the hashed-identity signal
         feat_with_hash = torch.cat([nf, he], dim=-1)
         recency_enc = self.memory.time_enc(delta_t)
         src_recency_enc = self.memory.time_enc(delta_t_src)
         feat = self.link_pred(
             z[src_local], z[dst_local], cur_msg, feat_with_hash[src_local], feat_with_hash[dst_local], recency_enc, src_recency_enc
         ).squeeze(-1)
+        if not self.use_struct_head:
+            return feat  # ablation: feature head only (no structural compatibility head)
         hs = F.normalize(self.struct_proj(z[src_local]), dim=-1)
         hd = F.normalize(self.struct_proj(z[dst_local]), dim=-1)
         struct = self.struct_scale * (hs * hd).sum(-1)

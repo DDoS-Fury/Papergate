@@ -10,7 +10,7 @@ Questa struttura permette di eseguire le diverse fasi del progetto isolando gli 
 
 ## Profili Disponibili
 
-Il `docker-compose.yml` contiene cinque profili: `training-tgn`, `verify-tgn`, `serve-tgn` e i due profili di confronto `baseline-iforest` e `baseline-gnn`.
+Il `docker-compose.yml` contiene sei profili: `training-tgn`, `verify-tgn`, `serve-tgn` e i tre profili di confronto `baseline-iforest`, `baseline-ocsvm` e `baseline-gnn`.
 
 ### 1. Training (Modello Temporale TGN)
 Avvia il container per l'addestramento della rete dinamica basata su grafi temporali (Temporal Graph Network). Questo profilo genera dati in stream continuo con contesti Zero Trust (JA3, alert snort, sonde). Gli artifact risultanti vengono salvati nella cartella `public/`.
@@ -83,10 +83,20 @@ all'1% di FPR e protocollo di valutazione). Dettagli e metriche attese in
   ```
   *(Esegue `python tests/baselines/isolation_forest/isolation_forest_baseline.py`)*
 
+- **One-Class SVM** (sklearn, kernel RBF): controparte kernel dell'Isolation Forest,
+  anch'essa non relazionale sulle sole feature statiche per-evento (fit su subsample
+  benigno per scalabilità).
+
+  ```bash
+  docker compose --profile baseline-ocsvm up
+  ```
+  *(Esegue `python tests/baselines/ocsvm/ocsvm_baseline.py`)*
+
 - **GNN non temporale** (GraphSAGE): ablation del TGN su grafo statico aggregato,
-  con lo stesso curriculum di negative sampling (strutturale, hard-negative ×10,
-  contestuale) ma senza memoria ricorrente né vicinato temporale — isola il
-  contributo della sola componente temporale.
+  con lo **stesso curriculum de-circolarizzato** del TGN (negativo strutturale a
+  destinazione casuale + contestuale gaussiano, pesi uguali) ma senza memoria
+  ricorrente né vicinato temporale — isola il contributo della sola componente
+  temporale (lateral AUC 0.59 vs 0.71 del TGN completo).
 
   ```bash
   docker compose --profile baseline-gnn up

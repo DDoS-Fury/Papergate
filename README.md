@@ -123,7 +123,7 @@ Il "buffer" della memoria storica e del vicinato (`MessageNeighborLoader`) non c
 > evento-per-evento attraverso esattamente le primitive di serving (`infer_score` /
 > `update_memory`), quindi le metriche riportate riflettono il comportamento in produzione.
 
-> **Nota (Hashed Identity)** — l'identità di nodo non è più *transduttiva*, bensì viene generata tramite hashing: per le entità note e non note al training fornisce un embedding coerente scalabile (bucket), mantenendo il modello totalmente induttivo.
+> **Nota (Hashed Identity)** — l'identità di nodo non è *transduttiva*, bensì generata tramite hashing **deterministico** della chiave (`stable_hash`, BLAKE2b): coerente tra processi e riavvii (il `hash()` builtin è salato per-processo e romperebbe la riproducibilità). Per entità note e non note al training fornisce un embedding coerente e scalabile (bucket), mantenendo il modello totalmente induttivo.
 
 ## Tipi di anomalia (dati sintetici)
 
@@ -137,9 +137,52 @@ oltre alle etichette binarie `y`, un vettore `types` per la valutazione per-clas
 | 2 | contextual | JA3 rotto / alert Snort / sensori | feature d'arco → feature head |
 | 3 | lateral | autorizzato ma **non-abituale** | storia/struttura → structural head |
 
-## Validazione e Tuning
-Per approfondire come il modello è stato potenziato per rilevare con efficacia le deviazioni strutturali e i movimenti laterali (raggiungendo quasi il 40% di recall in streaming pur rimanendo 100% unsupervised) e per comprendere le logiche di test relative all'induttività e al data poisoning, consulta il documento:
-👉 [`docs/inductive_testing.md`](docs/inductive_testing.md)
+## Validazione (risultati onesti)
+
+Valutazione **de-circolarizzata** sullo stream sintetico (FPR target 1%, split
+cronologico 70/10/20, solo benigno in training, soglia calibrata sul benigno di
+validazione). I negativi di training **non** codificano più la definizione di anomalia
+del generatore (vedi `docs/inductive_testing.md`), quindi i numeri riflettono
+generalizzazione, non un curriculum memorizzato.
+
+| Modello | Agg AUC | Agg AP | policy AUC | contextual AUC | **lateral AUC** | lateral Rec@1%FPR |
+|---|---|---|---|---|---|---|
+| Isolation Forest (non-relazionale) | 0.684 | 0.392 | 0.812 | 0.733 | 0.517 | 1.6% |
+| One-Class SVM (non-relazionale) | 0.769 | 0.660 | 0.887 | 0.936 | 0.501 | 2.4% |
+| Static GNN (stesso curriculum, no temporale) | 0.854 | 0.796 | 0.997 | 0.996 | 0.587 | 1.0% |
+| **TGN (full)** | **0.895** | **0.839** | 0.990 | 0.995 | **0.711** | **16.3%** |
+
+- **Policy**: forte e *cieco alle regole* (la rule baseline lo prende allo 0%) → valore reale.
+- **Contextual**: banale — la rule baseline (soli segnali edge) lo prende al ~97%; il TGN non aggiunge nulla qui.
+- **Lateral movement**: il caso difficile. È l'**unica** classe in cui la memoria temporale conta
+  (AUC 0.50 → 0.59 → **0.71**), ma resta debole (recall ~16%). Il precedente «~40%» era un
+  artefatto di valutazione circolare, ora rimosso.
+
+Dettagli su de-circolarizzazione, induttività e anti-poisoning in
+👉 [`docs/inductive_testing.md`](docs/inductive_testing.md). Riproduzione: profili
+Compose `training-tgn`, `baseline-iforest`, `baseline-ocsvm`, `baseline-gnn`, `verify-tgn`.
+
+## Limitazioni e Threat Model
+
+Da leggere prima di trattare le metriche come garanzie di produzione:
+
+- **Validità esterna (il limite principale).** La valutazione è **interamente sintetica**:
+  il generatore definisce esso stesso cosa sia un'anomalia. La de-circolarizzazione rende
+  il confronto onesto *dentro* questo mondo, ma non sostituisce dati reali. Passo successivo
+  per solidità da paper: un dataset reale/pubblico (es. LANL auth, DARPA OpTC, CIC-IDS)
+  rimappato come stream di accessi ZTA.
+- **Anti-poisoning gate auto-deciso.** Memoria/vicinato si aggiornano solo per eventi
+  *scorati* benigni. Conseguenze intrinseche: un attaccante stealthy scorato benigno
+  **avvelena** la baseline; un benigno scorato anomalo non viene mai appreso (**starvation**).
+  Mitigazione demandata all'orchestrator: OPA come vero decisore (`/infer`→`/update`) e un
+  *grace period* breve per i nuovi nodi (vedi `docs/orchestrator_integration.md`).
+- **Endpoint non autenticati.** `/update`, `/score`, `/persist` non hanno auth: chiunque
+  raggiunga il servizio può alterare lo stato, bypassando il gate. Il design assume un
+  orchestrator fidato su rete privata; non esporre il servizio senza TLS + autenticazione.
+- **Lateral movement non risolto.** AUC 0.71 / recall ~16%: utile come unico segnale > caso,
+  non come detector affidabile in isolamento.
+- **Cold start.** Una nuova entità senza storia non ha «abitudini» da cui deviare: il segnale
+  strutturale è assente finché non accumula interazioni.
 
 ## Usage (Docker)
 

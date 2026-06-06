@@ -3,20 +3,18 @@
 Perché esiste questo file
 -------------------------
 Ablation EQUA del TGN che isola la SOLA componente temporale. La baseline mantiene
-lo stesso identico curriculum di negative sampling del TGN — negativo strutturale,
-hard-negative ×10 (risorsa NON abituale) e negativo contestuale (rumore 20%) — e
-la stessa idea di link-prediction; rimuove unicamente la macchina TEMPORALE
-(memoria ricorrente per nodo + vicinato temporale), sostituita da un GNN su un
-grafo **statico** aggregato dalle interazioni benigne di train. Il delta col TGN
-misura quindi quanto valga la dinamica temporale, a parità di curriculum.
+lo stesso identico curriculum di negative sampling del TGN **de-circolarizzato** —
+negativo strutturale a destinazione casuale + negativo contestuale a rumore
+gaussiano, pesi uguali — e la stessa idea di link-prediction; rimuove unicamente la
+macchina TEMPORALE (memoria ricorrente per nodo + vicinato temporale), sostituita da
+un GNN su un grafo **statico** aggregato dalle interazioni benigne di train. Il delta
+col TGN misura quindi quanto valga la dinamica temporale, a parità di curriculum.
 
-L'"abitualità" qui è definita sul grafo statico: una coppia (IP, risorsa) è
-abituale se esiste un arco benigno di train fra le due. L'hard-negative accoppia
-ogni IP con una risorsa a cui NON è connesso — lo stesso segnale che a test
-identifica il lateral movement (accesso autorizzato ma non abituale). È quindi una
-verifica forte: se persino con questo curriculum la GNN statica non aggancia il
-lateral, l'informazione mancante è davvero la cronologia temporale e non il
-semplice fatto di non essere mai stata addestrata a cercarla.
+NB (de-circolarizzazione): i negativi NON usano più l'abitualità/autorizzazione
+(`adj`/`auth_mask`) né l'hard-negative ×10. Quella costruzione rispecchiava
+esattamente la definizione di lateral movement del test (accesso autorizzato ma non
+abituale), gonfiando la recall in modo circolare. La destinazione negativa è ora
+pescata uniformemente sulle risorse, come nel TGN aggiornato.
 
 Protocollo (identico al TGN per confrontabilità 1:1, vedi tests/baselines/README.md):
 stessi dati/seed, stesso split cronologico 70/10/20, training solo su benigno,
@@ -165,14 +163,10 @@ def run(cfg: TGNConfig = TGNConfig()):
     num_pos = p_src.shape[0]
     bs = cfg.batch_size
 
-    # Adiacenza IP->risorsa ABITUALE, definita sul grafo statico: ``adj[ip, r]`` è
-    # True se esiste un arco benigno di train fra l'IP e la risorsa locale ``r``.
-    # È l'analogo statico della "storia" che il neighbour loader dà al TGN, e serve
-    # a costruire l'hard-negative (risorsa NON abituale) con lo stesso significato.
+    # Range id delle risorse per il campionamento dei negativi strutturali (la
+    # destinazione negativa è pescata uniformemente su [res_lo, total_nodes)).
     num_res = cfg.num_resources
     res_lo = total_nodes - num_res                      # primo id globale di risorsa
-    adj = torch.zeros(total_nodes, num_res, dtype=torch.bool, device=device)
-    adj[p_src, p_dst - res_lo] = True                   # p_dst sono risorse (>= res_lo)
 
     print("--- INIZIO ADDESTRAMENTO UNSUPERVISED (GNN non temporale) ---")
     for epoch in range(1, cfg.epochs + 1):
@@ -199,32 +193,28 @@ def run(cfg: TGNConfig = TGNConfig()):
             # POSITIVO: l'arco reale (src, dst, msg) -> 1.
             pos_logit = model.link_pred(z[bp_src], z[bp_dst], bp_msg)
 
-            # NEGATIVO strutturale: (src, nodo casuale, msg) -> 0, pescato in
-            # [num_users, total_nodes) (IP+risorse), come il TGN.
-            neg_dst = torch.randint(cfg.num_users, total_nodes, (idx.numel(),), device=device)
+            # NEGATIVO strutturale: (src, risorsa casuale, msg) -> 0. Identico al TGN
+            # de-circolarizzato: destinazione pescata UNIFORMEMENTE sulle risorse, SENZA
+            # usare abitualità/autorizzazione (che rispecchierebbero la definizione di
+            # lateral del test). Niente più hard-negative ×10.
+            neg_dst = torch.randint(0, num_res, (idx.numel(),), device=device) + res_lo
+            collide = neg_dst == bp_dst
+            if collide.any():
+                neg_dst[collide] = (
+                    torch.randint(0, num_res, (int(collide.sum()),), device=device) + res_lo
+                )
             neg_logit = model.link_pred(z[bp_src], z[neg_dst], bp_msg)
 
-            # HARD-NEGATIVE ×10: (src, risorsa NON abituale, msg) -> 0. È il segnale
-            # del lateral movement, identico nello spirito a quello del TGN ma con
-            # l'abitualità letta dal grafo statico. Si pesca, per ogni src, una
-            # risorsa con adj==False (rumore casuale, posizioni abituali messe a -1).
-            occ = adj[bp_src]                                  # [B, num_res] abituali
-            pick = torch.rand(idx.numel(), num_res, device=device)
-            pick[occ] = -1.0
-            hard_dst = pick.argmax(dim=1) + res_lo
-            hard_logit = model.link_pred(z[bp_src], z[hard_dst], bp_msg)
-
-            # NEGATIVO contestuale: stessa dst, 20% dei bit del msg invertiti (come il TGN).
-            neg_msg = bp_msg.clone()
-            noise_mask = torch.rand_like(neg_msg) < 0.20
-            neg_msg[noise_mask] = 1.0 - neg_msg[noise_mask]
+            # NEGATIVO contestuale: rumore gaussiano additivo sul msg (meccanismo
+            # DIVERSO dalla randomizzazione 0/1 delle anomalie contestuali di test).
+            neg_msg = bp_msg + torch.randn_like(bp_msg) * 0.5
             ctx_logit = model.link_pred(z[bp_src], z[bp_dst], neg_msg)
 
-            # Stessa loss del TGN: pos->1, negativi->0, con hard-negative pesato ×10.
+            # Stessa loss del TGN de-circolarizzato: pos vs strutturale + contestuale,
+            # pesi uguali (niente più ×10 sull'hard-negative).
             loss = (
                 criterion(pos_logit, torch.ones_like(pos_logit))
                 + criterion(neg_logit, torch.zeros_like(neg_logit))
-                + 10.0 * criterion(hard_logit, torch.zeros_like(hard_logit))
                 + criterion(ctx_logit, torch.zeros_like(ctx_logit))
             )
             loss.backward()

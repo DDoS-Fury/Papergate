@@ -22,7 +22,7 @@ from sklearn.metrics import average_precision_score, roc_auc_score
 from graphagate.config import TGNConfig, TGN_CHECKPOINT_PATH, TGN_STATS_PATH
 from graphagate.data.stream_synthetic import generate_streaming_data
 from graphagate.model.registry import NodeRegistry
-from graphagate.model.tgn import ZTATemporalGraphNetwork
+from graphagate.model.tgn import ZTATemporalGraphNetwork, stable_hash
 from graphagate.serve_tgn import infer_score, save_model, update_memory
 
 
@@ -90,7 +90,45 @@ def _rule_baseline(test_msg):
     ).astype(int)
 
 
-def train_tgn(cfg: TGNConfig = TGNConfig()):
+def _sample_structural_negatives(num_events, num_res, res_lo, device, *, avoid=None):
+    """Uniform random resource destinations for self-supervised negatives.
+
+    Standard temporal link-prediction negative sampling: pair each src with a
+    resource drawn *uniformly at random* over the whole resource space. The
+    objective then learns ``P(dst | src, history)`` — each entity's habitual
+    access distribution — so an unusual access (a lateral movement, or a policy
+    violation) is scored as a low-likelihood event under the learned baseline.
+
+    De-circularisation guard: this sampler takes only the resource id-range, **not**
+    the data generator's ``auth_mask`` / habitual sets. It therefore cannot encode
+    the evaluation's *specific* anomaly construction (authorised-but-non-habitual).
+    The previous hard-negative did exactly that (and weighted it 10x), which made
+    the reported recall a memorised curriculum rather than honest generalisation.
+    NOTE: this is the standard self-supervised setup, **not** a zero-shot claim —
+    random destinations are mostly non-habitual, so the objective does learn the
+    generic "unusual access" notion; it simply no longer mirrors the test rule.
+    """
+    neg = torch.randint(0, num_res, (num_events,), device=device) + res_lo
+    if avoid is not None:
+        # Avoid the degenerate case where the random draw equals the true benign dst
+        # (a false negative label). One re-roll suffices at num_res >> 1.
+        collide = neg == avoid
+        if collide.any():
+            neg[collide] = (
+                torch.randint(0, num_res, (int(collide.sum()),), device=device) + res_lo
+            )
+    return neg
+
+
+def train_tgn(cfg: TGNConfig = TGNConfig(), *, use_struct_head=True,
+              use_hash_identity=True, save=True):
+    """Train + evaluate the streaming TGN.
+
+    The keyword flags drive the ablation study (``tests/ablations``): they toggle the
+    structural-compatibility head and the hashed-identity embedding. ``save=False``
+    skips persisting the deployable artifact (ablation runs must not clobber the
+    full-model checkpoint in ``public/``). Returns a metrics dict.
+    """
     torch.manual_seed(cfg.seed)
     np.random.seed(cfg.seed)
     random.seed(cfg.seed)
@@ -112,7 +150,10 @@ def train_tgn(cfg: TGNConfig = TGNConfig()):
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
-    auth_mask = auth_mask.to(device)
+    # NOTE: ``auth_mask`` (the generator's per-IP authorised-resource matrix) is
+    # intentionally NOT used during training — see _sample_structural_negatives.
+    # Using it would re-introduce the circular "authorised-but-non-habitual" negative
+    # that mirrors the lateral-movement test anomaly. It stays unused on purpose.
 
     print("--- INIZIO ADDESTRAMENTO UNSUPERVISED ---")
 
@@ -143,12 +184,18 @@ def train_tgn(cfg: TGNConfig = TGNConfig()):
     # first seen at serving time stay zero until those entities supply their features.
     with torch.no_grad():
         model.node_feat[: cfg.total_nodes] = node_features.to(device)
-        # Hashed Identity Trick
-        hashes = [hash(str(registry._idx_to_key[i])) % cfg.hash_buckets for i in range(cfg.total_nodes)]
+        # Hashed Identity Trick (deterministic across processes/runs — see stable_hash).
+        hashes = [stable_hash(registry._idx_to_key[i], cfg.hash_buckets) for i in range(cfg.total_nodes)]
         model.node_hash[: cfg.total_nodes] = torch.tensor(hashes, dtype=torch.long, device=device)
 
     # Bounded temporal neighbour loader (built on the model device after .to).
     model.init_neighbor_loader(cfg.neighbor_size, device)
+
+    # Ablation switches (default ON = full model).
+    model.use_struct_head = use_struct_head
+    model.use_hash_identity = use_hash_identity
+    if not (use_struct_head and use_hash_identity):
+        print(f"[ablation] use_struct_head={use_struct_head} use_hash_identity={use_hash_identity}")
 
     optimizer = AdamW(model.parameters(), lr=cfg.learning_rate)
 
@@ -162,6 +209,7 @@ def train_tgn(cfg: TGNConfig = TGNConfig()):
     for epoch in range(1, cfg.epochs + 1):
         model.memory.reset_state()  # restart the recurrent memory each epoch
         model.neighbor_loader.reset_state()  # ...and the temporal neighbourhood
+        model.last_contact.clear()  # ...and the per-pair recency cache (Δt must reset too)
         model.train()
 
         total_loss = 0.0
@@ -177,16 +225,11 @@ def train_tgn(cfg: TGNConfig = TGNConfig()):
             b_msg = msg[start_idx:end_idx].to(device)
             b_y = y[start_idx:end_idx].to(device)
 
-            # Update Trust Scores dynamically during training
-            snort_alerts = b_msg[:, 1] > 0.5
-            anomalies = b_y == 1
-            bad_mask = anomalies | snort_alerts
-            for j in range(len(b_src)):
-                s = b_src[j].item()
-                if bad_mask[j]:
-                    model.node_feat[s, 14] = max(0.0, model.node_feat[s, 14].item() - 0.5)
-                else:
-                    model.node_feat[s, 14] = min(1.0, model.node_feat[s, 14].item() + 0.01)
+            # NOTE: the trust score (node_feat[:, 14]) is NO LONGER mutated from
+            # ground-truth labels here. Doing so coupled the labels into a persistent
+            # input feature and trained a self-fulfilling "low trust ⇒ anomaly" signal.
+            # Trust is now a static, orchestrator-supplied attribute (optionally evolved
+            # at serving time only); it is never used to build a training negative.
 
             # Only train on benign events.
             benign_mask = b_y == 0
@@ -198,81 +241,62 @@ def train_tgn(cfg: TGNConfig = TGNConfig()):
             p_t = b_t[benign_mask]
             p_msg = b_msg[benign_mask]
 
-            # HARD structural negatives: src paired with a *non-habitual* resource — one
-            # it is NOT currently a neighbour of, AND that the IP is authorized to access.
+            # STRUCTURAL NEGATIVES — uniform random resource destinations (standard
+            # self-supervised temporal link prediction). Crucially independent of the
+            # generator's auth_mask / habitual sets, so detection is honest
+            # generalisation rather than a memorised test rule (see
+            # _sample_structural_negatives; this is not a zero-shot claim).
             res_lo = cfg.total_nodes - cfg.num_resources
             num_res = cfg.num_resources
-            nl = model.neighbor_loader
-            nbr = nl.neighbors[p_src]                 # [B, K] global neighbour ids
-            res_local = nbr - res_lo                  # -> [0, num_res); non-resources out of range
-            is_res = (nl.e_id[p_src] >= 0) & (res_local >= 0) & (res_local < num_res)
-            occ = torch.zeros(len(p_src), num_res, dtype=torch.bool, device=device)
-            rows = torch.arange(len(p_src), device=device).unsqueeze(1).expand_as(res_local)
-            occ[rows[is_res], res_local[is_res]] = True  # habitual resources so far
-            
-            src_ip_idx = p_src - cfg.num_users
-            auth_for_src = auth_mask[src_ip_idx]  # [B, num_res]
-            
-            pick = torch.rand(len(p_src), num_res, device=device)
-            pick[~auth_for_src] = -1.0
-            pick[occ] = -1.0
-            
-            fallback = (pick.max(dim=1).values == -1.0)
-            if fallback.any():
-                pick_fallback = torch.rand(fallback.sum(), num_res, device=device)
-                pick_fallback[occ[fallback]] = -1.0
-                pick[fallback] = pick_fallback
-                
-            hard_dst = pick.argmax(dim=1) + res_lo
+            neg_dst = _sample_structural_negatives(len(p_src), num_res, res_lo, device, avoid=p_dst)
 
             # Expand every involved node to its stored temporal neighbourhood and embed
             # once; the heads below differ only in which endpoints / message they score,
             # sharing the same history-conditioned embeddings.
-            nodes = torch.cat([p_src, p_dst, hard_dst]).unique()
+            nodes = torch.cat([p_src, p_dst, neg_dst]).unique()
             n_id, edge_index, hist_t, hist_msg = model.neighbor_loader(nodes)
             z = model.embed(n_id, edge_index, hist_t, hist_msg)
             assoc = model.neighbor_loader._assoc
             nf = model.node_feat[n_id]
             h_idx = model.node_hash[n_id]
             s_loc, d_loc = assoc[p_src], assoc[p_dst]
-            hd_loc = assoc[hard_dst]
+            neg_loc = assoc[neg_dst]
 
             # COMPUTE RECENCY FEATURE
             delta_t_pos = torch.zeros(len(p_src), dtype=torch.float, device=device)
-            delta_t_hard = torch.zeros(len(p_src), dtype=torch.float, device=device)
+            delta_t_neg = torch.zeros(len(p_src), dtype=torch.float, device=device)
             for i in range(len(p_src)):
                 s = p_src[i].item()
                 d_pos = p_dst[i].item()
-                d_hard = hard_dst[i].item()
+                d_neg = neg_dst[i].item()
                 tv = p_t[i].item()
                 delta_t_pos[i] = tv - model.last_contact.get((s, d_pos), 0)
-                delta_t_hard[i] = tv - model.last_contact.get((s, d_hard), 0)
+                delta_t_neg[i] = tv - model.last_contact.get((s, d_neg), 0)
 
             delta_t_src = (p_t - model.memory.last_update[p_src]).to(torch.float)
 
             # --- POSITIVE EDGES (healthy behaviour) ---
             pos_out = model.score(z, nf, h_idx, s_loc, d_loc, p_msg, delta_t_pos, delta_t_src)
 
-            # --- HARD STRUCTURAL NEGATIVES (src paired with a non-habitual resource) ---
-            neg_out_hard = model.score(z, nf, h_idx, s_loc, hd_loc, p_msg, delta_t_hard, delta_t_src)
+            # --- STRUCTURAL NEGATIVES (src paired with a random resource) ---
+            neg_out_struct = model.score(z, nf, h_idx, s_loc, neg_loc, p_msg, delta_t_neg, delta_t_src)
 
-            # --- CONTEXTUAL NEGATIVES (out-of-distribution feature perturbation) ---
-            neg_msg = p_msg.clone()
-            noise_mask = torch.rand_like(neg_msg) < 0.20
-            neg_msg[noise_mask] = 1.0 - neg_msg[noise_mask]
+            # --- CONTEXTUAL NEGATIVES (off-manifold edge message via additive Gaussian
+            # noise). A *different mechanism* from the eval's contextual anomalies
+            # (discrete 0/1 signal randomisation), so the model is not handed the test
+            # corruption. Contextual anomalies are near-trivial on edge features (the
+            # rule baseline already catches them — see eval), so this term mainly keeps
+            # the feature head from ignoring the message.
+            neg_msg = p_msg + torch.randn_like(p_msg) * 0.5
             neg_out_ctx = model.score(z, nf, h_idx, s_loc, d_loc, neg_msg, delta_t_pos, delta_t_src)
 
-            # --- TRUST PENALTY NEGATIVES (benign edge, but we pretend the user is compromised) ---
-            nf_trust = nf.clone()
-            nf_trust[s_loc, 14] = torch.rand(len(p_src), device=device) * 0.3  # Low trust [0, 0.3]
-            neg_out_trust = model.score(z, nf_trust, h_idx, s_loc, d_loc, p_msg, delta_t_pos, delta_t_src)
-
-            # --- UNSUPERVISED LOSS (BCE su Lateral e Contextual) ---
+            # --- UNSUPERVISED LOSS — positive vs. structural + contextual negatives,
+            # equally weighted (no hand-tuned 10x weight on the structural term, which
+            # previously over-fit the circular non-habitual definition).
             loss = (
                 F.binary_cross_entropy_with_logits(pos_out, torch.ones_like(pos_out))
-                + 10.0 * F.binary_cross_entropy_with_logits(neg_out_hard, torch.zeros_like(neg_out_hard))
+                + F.binary_cross_entropy_with_logits(neg_out_struct, torch.zeros_like(neg_out_struct))
                 + F.binary_cross_entropy_with_logits(neg_out_ctx, torch.zeros_like(neg_out_ctx))
-                + 1.0 * F.binary_cross_entropy_with_logits(neg_out_trust, torch.zeros_like(neg_out_trust))
             )
 
             loss.backward()
@@ -293,6 +317,10 @@ def train_tgn(cfg: TGNConfig = TGNConfig()):
 
     # --- THRESHOLD CALIBRATION (held-out benign slice) -----------------------
     print("\n--- CALIBRAZIONE SOGLIA (su flusso di validazione benigno) ---")
+    # The eval replay evolves the runtime trust feature (node_feat[:, 14]); snapshot the
+    # post-training node features so calibration does not bleed trust state into the test
+    # replay and so re-runs stay idempotent.
+    node_feat_post_train = model.node_feat.clone()
     val_scores, val_labels = _replay(
         model, src[train_end:val_end], dst[train_end:val_end], t[train_end:val_end],
         msg[train_end:val_end], y[train_end:val_end], device, gate_by_label=True,
@@ -309,6 +337,10 @@ def train_tgn(cfg: TGNConfig = TGNConfig()):
 
     # --- STREAMING EVALUATION (event-by-event, predicted-benign gating) ------
     print("\n--- INIZIO FASE DI INFERENZA / ANOMALY DETECTION (per-evento) ---")
+    # Memory + neighbour history legitimately continue from the (benign) calibration
+    # slice, but reset the runtime trust feature to the post-training snapshot so the
+    # test stream is not pre-conditioned by calibration.
+    model.node_feat.copy_(node_feat_post_train)
     test_scores, test_labels = _replay(
         model, src[val_end:], dst[val_end:], t[val_end:], msg[val_end:], y[val_end:],
         device, threshold=threshold, gate_by_label=False,
@@ -324,13 +356,22 @@ def train_tgn(cfg: TGNConfig = TGNConfig()):
     print(f"At threshold {threshold:.4f} | Precision: {precision:.4f} | Recall: {recall:.4f}")
 
     # --- PER-ANOMALY-TYPE BREAKDOWN ------------------------------------------
-    # AUC/AP per type are computed against benign only (type 0) vs that type, so an
-    # aggregate metric cannot hide a class the model handles poorly. Contextual
-    # anomalies are near-trivial (separable on edge features); policy anomalies share
-    # benign edge features and are the genuinely hard case.
+    # Per-type AUC/AP are benign (type 0) vs that type, so an aggregate cannot mask a
+    # weak class. NONE of the training negatives encode the generator's anomaly rules
+    # (random-destination structural negatives + Gaussian feature noise — see the loss),
+    # so these numbers are honest generalisation, not a memorised curriculum. The
+    # "vs-rule" column says whether the cheap signal-only rule baseline (below) can also
+    # catch the class — i.e. how much the TGN genuinely adds:
+    #   policy  -> rule-blind: same benign edge signals; only structure/features expose it.
+    #   contextual -> rule-trivial: broken JA3 / Snort fires; the rule baseline matches it.
+    #   lateral -> rule-blind and the GENUINELY HARD case (authorised, signal-clean; only
+    #     interaction history hints at it). Its honest recall is far below the inflated
+    #     numbers obtained when the training hard-negative mirrored this exact definition.
     print("\n--- METRICHE PER TIPO DI ANOMALIA ---")
+    vs_rule = {1: "rule-blind ", 2: "rule-trivial", 3: "rule-blind "}
+    per_type = {}
     benign = test_types == 0
-    for type_id, name in ((1, "policy    "), (2, "contextual"), (3, "lateral   ")):
+    for type_id, name in ((1, "policy"), (2, "contextual"), (3, "lateral")):
         sel = benign | (test_types == type_id)
         s_sel, l_sel = test_scores[sel], (test_types[sel] == type_id).astype(int)
         if l_sel.sum() == 0:
@@ -338,7 +379,8 @@ def train_tgn(cfg: TGNConfig = TGNConfig()):
         t_auc = roc_auc_score(l_sel, s_sel)
         t_ap = average_precision_score(l_sel, s_sel)
         _, t_recall = _binary_metrics(s_sel, l_sel, threshold)
-        print(f"  {name} | n={int(l_sel.sum()):4d} | AUC: {t_auc:.4f} | "
+        per_type[name] = {"auc": t_auc, "ap": t_ap, "recall": t_recall, "n": int(l_sel.sum())}
+        print(f"  {name:10s} | {vs_rule[type_id]} | n={int(l_sel.sum()):4d} | AUC: {t_auc:.4f} | "
               f"AP: {t_ap:.4f} | Recall@thr: {t_recall:.4f}")
 
     # --- RULE-BASED BASELINE (value-add reference) ---------------------------
@@ -351,29 +393,48 @@ def train_tgn(cfg: TGNConfig = TGNConfig()):
     base_policy_recall = (
         ((base_pred == 1) & (test_types == 1)).sum() / max((test_types == 1).sum(), 1)
     )
+    base_ctx_recall = (
+        ((base_pred == 1) & (test_types == 2)).sum() / max((test_types == 2).sum(), 1)
+    )
     base_lateral_recall = (
         ((base_pred == 1) & (test_types == 3)).sum() / max((test_types == 3).sum(), 1)
     )
     print("\n--- BASELINE A REGOLE (signal-only) ---")
     print(f"  Precision: {b_precision:.4f} | Recall: {b_recall:.4f} | "
-          f"Recall policy: {base_policy_recall:.4f} | Recall lateral: {base_lateral_recall:.4f}")
+          f"Recall policy: {base_policy_recall:.4f} | Recall contextual: {base_ctx_recall:.4f} | "
+          f"Recall lateral: {base_lateral_recall:.4f}")
+    print("  NOTE: the rule baseline catches contextual anomalies almost entirely (edge "
+          "signals only) but is blind to policy/lateral — that gap is the TGN's value-add.")
 
     # --- PERSIST DEPLOYABLE ARTIFACT -----------------------------------------
-    hp = {
-        "capacity": cfg.capacity,
-        "node_feat_dim": cfg.node_feat_dim,
-        "msg_dim": cfg.msg_dim,
-        "memory_dim": cfg.memory_dim,
-        "time_dim": cfg.time_dim,
-        "num_hops": cfg.num_hops,
-        "hash_buckets": cfg.hash_buckets,
-        "hash_dim": cfg.hash_dim,
-        "neighbor_size": cfg.neighbor_size,
-        "target_fpr": cfg.target_fpr,
+    # Ablation runs (save=False) must not overwrite the full-model artifact in public/.
+    if save:
+        hp = {
+            "capacity": cfg.capacity,
+            "node_feat_dim": cfg.node_feat_dim,
+            "msg_dim": cfg.msg_dim,
+            "memory_dim": cfg.memory_dim,
+            "time_dim": cfg.time_dim,
+            "num_hops": cfg.num_hops,
+            "hash_buckets": cfg.hash_buckets,
+            "hash_dim": cfg.hash_dim,
+            "neighbor_size": cfg.neighbor_size,
+            "target_fpr": cfg.target_fpr,
+        }
+        save_model(model, registry, threshold, hp, TGN_CHECKPOINT_PATH, TGN_STATS_PATH)
+        print(f"\nSaved checkpoint -> {TGN_CHECKPOINT_PATH}")
+        print(f"Saved stats      -> {TGN_STATS_PATH}")
+
+    return {
+        "threshold": threshold,
+        "agg_auc": auc,
+        "agg_ap": ap,
+        "agg_precision": precision,
+        "agg_recall": recall,
+        "per_type": per_type,
+        "use_struct_head": use_struct_head,
+        "use_hash_identity": use_hash_identity,
     }
-    save_model(model, registry, threshold, hp, TGN_CHECKPOINT_PATH, TGN_STATS_PATH)
-    print(f"\nSaved checkpoint -> {TGN_CHECKPOINT_PATH}")
-    print(f"Saved stats      -> {TGN_STATS_PATH}")
 
 
 if __name__ == "__main__":

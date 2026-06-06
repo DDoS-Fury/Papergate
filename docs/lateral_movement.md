@@ -1,7 +1,10 @@
 # Movimenti laterali: cosa sono e come migliorarne la detection
 
-Note di analisi sul caso anomalia più difficile del modello TGN (al momento
-AUC ~0.89 ma **AP ~0.20**, contro AUC ~1.0 di `policy` e `contextual`).
+Note di analisi sul caso anomalia più difficile del modello TGN. Con la valutazione
+**de-circolarizzata** (vedi `inductive_testing.md`) il laterale è onestamente debole:
+**AUC ~0.71, AP ~0.22, recall ~16%** alla soglia dell'1% di FPR — contro AUC ~0.99 di
+`policy` e `contextual`. È comunque l'**unica** classe in cui la macchina temporale
+conta: AUC 0.50 (non-relazionale) → 0.59 (GNN statico) → 0.71 (TGN completo).
 
 ## Cosa rappresentano in questo contesto
 
@@ -29,8 +32,9 @@ di interazione dell'entità*.
 dell'edge) → AUC ~1.0. Il laterale **no**: vive solo nella memoria temporale /
 strutturale. La testa preposta a catturarlo è la **`struct` head** di `tgn.py`
 (cosine similarity degli embedding proiettati, `struct_proj` + `struct_scale`),
-allenata con *hard negative* = src accoppiato a una risorsa non abituale
-(`train_tgn.py`). Il design è corretto, ma diverse leve sono sottosfruttate.
+allenata con negativi strutturali a **destinazione casuale** (`train_tgn.py`,
+`_sample_structural_negatives`). Diverse leve restano sottosfruttate — ma vanno
+perseguite **senza** reintrodurre la fuga di informazione (vedi avviso al punto 2).
 
 ## Leve di miglioramento (ordinate per impatto/sforzo)
 
@@ -41,18 +45,24 @@ allenata con *hard negative* = src accoppiato a una risorsa non abituale
    È la leva più diretta (il laterale è puramente un problema di memoria): alzarlo
    a ~30–50 e salire un po' su `memory_dim`.
 
-2. **Mismatch tra hard-negative di training e laterale di test.** In training
-   l'hard negative è pescato tra *tutte* le risorse non abituali — incluse quelle
-   **non autorizzate**, già coperte dai negativi `policy` (facili). Il laterale di
-   test è invece non-abituale **ma autorizzato**. Restringere gli hard negative alle
-   sole risorse *autorizzate-ma-non-abituali* allena il confine esattamente dove sta
-   il laterale, invece di sprecare gradiente su casi facili.
+2. **⚠️ NON FARE: hard-negative ristretti agli autorizzati-ma-non-abituali.** Una
+   versione precedente faceva esattamente questo (con peso ×10), «allenando il confine
+   dove sta il laterale». Ma quel confine **è la definizione esatta** con cui il
+   generatore crea il laterale di test: equivale ad addestrare sul test → recall
+   gonfiata in modo **circolare** (è da qui che veniva il vecchio ~40%). È stato
+   rimosso di proposito: i negativi strutturali sono ora a destinazione **casuale**,
+   indipendenti da `auth_mask`/abitualità. Qualsiasi miglioria della recall laterale
+   deve venire da architettura/segnale (punti 1, 3, 4, 5), **non** da negativi che
+   rispecchiano la regola di test.
 
-3. **La feature head sporca il segnale.** Lo score è `feat + struct` a peso uguale.
-   Per il laterale la `feat` head vede feature identiche al benigno → contributo
-   quasi costante/rumoroso che diluisce la `struct` head (che porta *tutto* il
-   segnale). Un peso apprendibile tra le due teste, o un gating, lascerebbe la testa
-   strutturale dominare quando le feature non dicono nulla.
+3. **Ripensare le due teste (l'ablation ribalta l'ipotesi iniziale).** Si supponeva che
+   la `struct` head (coseno) portasse «tutto il segnale» laterale e che la `feat` head lo
+   diluisse. L'ablation (vedi `inductive_testing.md`) dice il contrario: togliere la
+   `struct` head **non** peggiora il lateral AUC (0.78 vs 0.74, entro la varianza), mentre
+   togliere l'**hashed identity** lo fa crollare a 0.52. È la feature head *condizionata
+   dall'identità hashata* a fare il lavoro. Quindi: la leva non è «far dominare la struct
+   head», ma capire se la struct head serve davvero (un peso apprendibile tra le teste o un
+   gating può dirlo) e investire sull'identità/storia. Da confermare su più seed.
 
 4. **Loss di ranking invece di BCE per-coppia.** La BCE attuale spinge ogni coppia
    verso 0/1 in assoluto. Per la novità funziona meglio un obiettivo
@@ -72,10 +82,10 @@ allenata con *hard negative* = src accoppiato a una risorsa non abituale
 
 ## Mosse consigliate per prime
 
-**#1 (alzare `neighbor_size`)** e **#2 (hard negative ristretti agli
-autorizzati-non-abituali)**: le più economiche, attaccano la causa radice — il
-modello non ha abbastanza storia e non viene allenato esattamente sul confine che
-poi deve giudicare.
+**#1 (alzare `neighbor_size`)** e **#3 (peso apprendibile tra `feat` e `struct` head)**:
+le più economiche e *non circolari*. Attaccano la causa radice — poca storia e una
+feature head che diluisce il segnale strutturale — senza barare allenando sul confine
+di test. Il punto #2 è esplicitamente da **evitare** (vedi avviso sopra).
 
 ## Nota sulla loss "alta" con buone prestazioni
 
@@ -87,9 +97,16 @@ metriche di **ranking** (invarianti a trasformazioni monotone dello score). Loss
 
 ---
 
-### Aggiornamento Soluzione (Implementata)
+### Stato implementato (de-circolarizzato)
 
-Per risolvere queste criticità e abbattere il gap del Lateral Movement, sono state applicate le seguenti ottimizzazioni al modello:
-- **Aumento Storico (`neighbor_size=30`, `memory_dim=128`)**: Risolve il problema #1 ampliando significativamente la finestra temporale di esplorazione, aiutato anche dall'architettura multi-hop (`num_hops=2`).
-- **Hashed Identity (`hash_buckets=10000`, `hash_dim=16`)**: Anziché usare embedding transduttivi inefficaci sui nodi nuovi, l'identità viene fornita ai Layer tramite un hash dell'URI in modo totalmente induttivo. Questo permette alla rete GNN di raggruppare i nodi in base ai comportamenti storici consolidati, portando il Lateral Movement Recall dal <1% a quasi il **19%** nei test asincroni, pur mantenendo scalabilità estrema.
-- **Penalizzazione Hard Negatives**: La loss per i falsi laterali (hard struct negatives) è stata pesata x5, forzando la classificazione sulle anomalie strutturali.
+Configurazione attuale (`src/config.py`) e relativo effetto onesto:
+- **Storico ampio (`neighbor_size=30`, `memory_dim=256`, `num_hops=3`)**: amplia la
+  finestra temporale/strutturale (leva #1). È la componente che porta il lateral AUC da
+  0.59 (GNN statico, senza memoria) a 0.71 (TGN completo).
+- **Hashed Identity deterministica (`hash_buckets=10000`, `hash_dim=16`, `stable_hash`)**:
+  identità induttiva e coerente tra processi per ogni entità (anche le risorse), senza
+  embedding transduttivi.
+- **Negativi NON circolari**: strutturale a destinazione casuale + contestuale gaussiano,
+  pesi uguali. La precedente penalizzazione ×5/×10 sull'hard-negative
+  «autorizzato-non-abituale» è stata **rimossa** perché circolare (vedi punto 2): è la
+  ragione per cui il recall laterale riportato è sceso dal ~40% gonfiato a ~16% onesto.

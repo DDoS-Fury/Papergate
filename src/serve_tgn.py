@@ -29,7 +29,7 @@ import numpy as np
 import torch
 
 from graphagate.model.registry import NodeRegistry
-from graphagate.model.tgn import ZTATemporalGraphNetwork
+from graphagate.model.tgn import ZTATemporalGraphNetwork, stable_hash
 
 
 def build_model(hp: dict, device: torch.device) -> ZTATemporalGraphNetwork:
@@ -176,13 +176,13 @@ def score_event(
         key_src, recency=recency, on_evict=lambda i: _reset_slot(model, i)
     )
     if is_new_src:
-        model.node_hash[src_idx] = hash(str(key_src)) % model.hash_emb.num_embeddings
-        
+        model.node_hash[src_idx] = stable_hash(key_src, model.hash_emb.num_embeddings)
+
     dst_idx, is_new_dst = registry.get_or_add(
         key_dst, recency=recency, on_evict=lambda i: _reset_slot(model, i)
     )
     if is_new_dst:
-        model.node_hash[dst_idx] = hash(str(key_dst)) % model.hash_emb.num_embeddings
+        model.node_hash[dst_idx] = stable_hash(key_dst, model.hash_emb.num_embeddings)
 
     if src_feat is not None:
         _set_node_features(model, src_idx, src_feat, device)
@@ -232,13 +232,13 @@ def commit_event(
         key_src, recency=recency, on_evict=lambda i: _reset_slot(model, i)
     )
     if is_new_src:
-        model.node_hash[src_idx] = hash(str(key_src)) % model.hash_emb.num_embeddings
-        
+        model.node_hash[src_idx] = stable_hash(key_src, model.hash_emb.num_embeddings)
+
     dst_idx, is_new_dst = registry.get_or_add(
         key_dst, recency=recency, on_evict=lambda i: _reset_slot(model, i)
     )
     if is_new_dst:
-        model.node_hash[dst_idx] = hash(str(key_dst)) % model.hash_emb.num_embeddings
+        model.node_hash[dst_idx] = stable_hash(key_dst, model.hash_emb.num_embeddings)
 
     if src_feat is not None:
         _set_node_features(model, src_idx, src_feat, device)
