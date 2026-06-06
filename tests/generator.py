@@ -25,8 +25,10 @@ async def event_generator(num_users=50, num_ips=100, num_resources=20, seed=None
     
     route_templates = [
         # public (like /health, /login, /materials)
-        {0: (set(ROLES), 0, 0), 1: (set(ROLES), 0, 0)},
+        {0: (set(ROLES), 0, 0), 1: (set(ROLES), 0, 0), 2: (set(ROLES), 0, 0), 3: (set(ROLES), 0, 0)},
         # /api/v1/auth/register/begin
+        {1: ({"plant_manager", "operator", "maintenance_technician", "radiation_protection_officer", "security_officer", "inspector"}, 1, 0)},
+        # /api/v1/auth/register/finish
         {1: ({"plant_manager", "operator", "maintenance_technician", "radiation_protection_officer", "security_officer", "inspector"}, 1, 0)},
         # /api/v1/personnel
         {0: ({"security_officer", "plant_manager", "inspector"}, 1, 1),
@@ -49,19 +51,23 @@ async def event_generator(num_users=50, num_ips=100, num_resources=20, seed=None
          1: ({"plant_manager"}, 2, 2), 2: ({"plant_manager"}, 2, 2), 3: ({"plant_manager"}, 2, 2)},
         # /api/v1/nuclear-materials
         {0: ({"plant_manager", "inspector", "radiation_protection_officer"}, 2, 3),
-         1: ({"plant_manager"}, 2, 4), 2: ({"plant_manager"}, 2, 4), 3: ({"plant_manager"}, 2, 4)}
+         1: ({"plant_manager"}, 2, 4), 2: ({"plant_manager"}, 2, 4), 3: ({"plant_manager"}, 2, 4)},
+        # /api/v1/trusted-guard/sanitized-delete-personnel
+        {1: ({"plant_manager"}, 2, 3)}
     ]
     
     RESOURCE_URIS = [
         "/public",
         "/api/v1/auth/register/begin",
+        "/api/v1/auth/register/finish",
         "/api/v1/personnel",
         "/api/v1/zones",
         "/api/v1/badges",
         "/api/v1/reactor-parameters",
         "/api/v1/maintenance-orders",
         "/api/v1/documents",
-        "/api/v1/nuclear-materials"
+        "/api/v1/nuclear-materials",
+        "/api/v1/trusted-guard/sanitized-delete-personnel"
     ]
     
     resource_rules = []
