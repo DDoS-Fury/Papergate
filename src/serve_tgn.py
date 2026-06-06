@@ -80,8 +80,16 @@ def infer_score(model, src_idx: int, dst_idx: int, t_val: int, msg_vec, device) 
     nodes = torch.unique(torch.cat([b_src, b_dst]))
     n_id, edge_index, hist_t, hist_msg = model.neighbor_loader(nodes)
     assoc = model.neighbor_loader._assoc
+    
+    last_t = getattr(model, "last_contact", {}).get((src_idx, dst_idx), 0)
+    delta_t_val = float(t_val - last_t)
+    delta_t = torch.tensor([delta_t_val], dtype=torch.float, device=device)
+    
+    delta_t_src_val = float(t_val - model.memory.last_update[src_idx].item())
+    delta_t_src = torch.tensor([delta_t_src_val], dtype=torch.float, device=device)
+    
     out = model(
-        n_id, edge_index, hist_t, hist_msg, assoc[b_src], assoc[b_dst], b_msg
+        n_id, edge_index, hist_t, hist_msg, assoc[b_src], assoc[b_dst], b_msg, delta_t, delta_t_src
     ).squeeze(-1)
     prob_benign = torch.sigmoid(out).item()
     return 1.0 - prob_benign
@@ -99,6 +107,9 @@ def update_memory(model, src_idx: int, dst_idx: int, t_val: int, msg_vec, device
     model.memory.update_state(b_src, b_dst, b_t, b_msg)
     model.memory.detach()
     model.neighbor_loader.insert(b_src, b_dst, b_t, b_msg)
+    if not hasattr(model, "last_contact"):
+        model.last_contact = {}
+    model.last_contact[(src_idx, dst_idx)] = t_val
 
 
 def _reset_slot(model, idx: int) -> None:
@@ -110,6 +121,10 @@ def _reset_slot(model, idx: int) -> None:
         model.node_hash[idx].zero_()
     for store in (model.memory.msg_s_store, model.memory.msg_d_store):
         store.pop(idx, None)
+    if hasattr(model, "last_contact"):
+        keys_to_delete = [k for k in model.last_contact.keys() if k[0] == idx or k[1] == idx]
+        for k in keys_to_delete:
+            del model.last_contact[k]
     # Scrub the reused slot's temporal neighbourhood so a recycled index can't
     # inherit the evicted entity's interaction history.
     model.neighbor_loader.reset_node(idx)
@@ -238,6 +253,7 @@ def save_model(model, registry: NodeRegistry, threshold: float, hp: dict,
             "model": model.state_dict(),
             "msg_s_store": model.memory.msg_s_store,
             "msg_d_store": model.memory.msg_d_store,
+            "last_contact": getattr(model, "last_contact", {}),
             "neighbor_loader": model.neighbor_loader.state(),
             "hyperparams": hp,
         },
@@ -268,6 +284,7 @@ def load_model(checkpoint_path, stats_path, device):
     # Restore pending raw messages so memory continuation is exact.
     model.memory.msg_s_store = ckpt.get("msg_s_store", {})
     model.memory.msg_d_store = ckpt.get("msg_d_store", {})
+    model.last_contact = ckpt.get("last_contact", {})
     # Restore the temporal neighbour buffers (map_location already placed the saved
     # tensors on ``device``); build_model created an empty loader of the right shape.
     if "neighbor_loader" in ckpt:

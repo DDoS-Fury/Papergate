@@ -248,5 +248,10 @@ def generate_streaming_data(num_users=50, num_ips=100, num_resources=20, num_eve
     y_tensor = torch.tensor(labels, dtype=torch.long)
     types_tensor = torch.tensor(types, dtype=torch.long)
 
-    return src_tensor, dst_tensor, t_tensor, msg_tensor, y_tensor, types_tensor, node_features, resource_uris
+    auth_mask = torch.zeros((num_ips, num_resources), dtype=torch.bool)
+    for i in range(num_ips):
+        for res_idx, _ in ip_valid_actions[i]:
+            auth_mask[i, res_idx] = True
+
+    return src_tensor, dst_tensor, t_tensor, msg_tensor, y_tensor, types_tensor, node_features, resource_uris, auth_mask
 

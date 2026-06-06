@@ -42,16 +42,16 @@ class GraphAttentionEmbedding(nn.Module):
         return x
 
 class LinkPredictor(nn.Module):
-    def __init__(self, in_channels, msg_dim, node_feat_dim, hash_dim):
+    def __init__(self, in_channels, msg_dim, node_feat_dim, hash_dim, time_dim):
         super().__init__()
         # Static node attributes (role / clearance / device tier) are concatenated
         # for both endpoints: they carry the policy-relevant signal that separates a
         # policy-violation anomaly (same edge features as benign) from benign traffic.
-        self.lin1 = nn.Linear(in_channels * 2 + msg_dim + (node_feat_dim + hash_dim) * 2, in_channels)
+        self.lin1 = nn.Linear(in_channels * 2 + msg_dim + (node_feat_dim + hash_dim) * 2 + time_dim * 2, in_channels)
         self.lin2 = nn.Linear(in_channels, 1)
 
-    def forward(self, z_src, z_dst, msg, feat_src, feat_dst):
-        h = torch.cat([z_src, z_dst, msg, feat_src, feat_dst], dim=-1)
+    def forward(self, z_src, z_dst, msg, feat_src, feat_dst, recency_enc, src_recency_enc):
+        h = torch.cat([z_src, z_dst, msg, feat_src, feat_dst, recency_enc, src_recency_enc], dim=-1)
         h = self.lin1(h).relu()
         return self.lin2(h)
 
@@ -92,7 +92,7 @@ class ZTATemporalGraphNetwork(nn.Module):
         )
 
         self.link_pred = LinkPredictor(
-            in_channels=memory_dim, msg_dim=msg_dim, node_feat_dim=node_feat_dim, hash_dim=hash_dim
+            in_channels=memory_dim, msg_dim=msg_dim, node_feat_dim=node_feat_dim, hash_dim=hash_dim, time_dim=time_dim
         )
 
         # Dedicated structural-compatibility head: projects the (identity-aware)
@@ -108,6 +108,7 @@ class ZTATemporalGraphNetwork(nn.Module):
             nn.Linear(memory_dim * 2, memory_dim)
         )
         self.struct_scale = nn.Parameter(torch.tensor(5.0))
+        self.last_contact = {}
 
     def init_neighbor_loader(self, size, device=None):
         """Create (or recreate) the bounded temporal neighbour loader on ``device``.
@@ -136,7 +137,7 @@ class ZTATemporalGraphNetwork(nn.Module):
         z = self.gnn(x, last_update, edge_index, hist_t, hist_msg)
         return z
 
-    def score(self, z, nf, h_idx, src_local, dst_local, cur_msg):
+    def score(self, z, nf, h_idx, src_local, dst_local, cur_msg, delta_t, delta_t_src):
         """Benign-vs-anomalous logit for ``src_local -> dst_local`` carrying ``cur_msg``.
 
         Sum of two complementary signals (shared by training and serving):
@@ -147,15 +148,17 @@ class ZTATemporalGraphNetwork(nn.Module):
         """
         he = self.hash_emb(h_idx)
         feat_with_hash = torch.cat([nf, he], dim=-1)
+        recency_enc = self.memory.time_enc(delta_t)
+        src_recency_enc = self.memory.time_enc(delta_t_src)
         feat = self.link_pred(
-            z[src_local], z[dst_local], cur_msg, feat_with_hash[src_local], feat_with_hash[dst_local]
+            z[src_local], z[dst_local], cur_msg, feat_with_hash[src_local], feat_with_hash[dst_local], recency_enc, src_recency_enc
         ).squeeze(-1)
         hs = F.normalize(self.struct_proj(z[src_local]), dim=-1)
         hd = F.normalize(self.struct_proj(z[dst_local]), dim=-1)
         struct = self.struct_scale * (hs * hd).sum(-1)
         return feat + struct
 
-    def forward(self, n_id, edge_index, hist_t, hist_msg, src_local, dst_local, cur_msg):
+    def forward(self, n_id, edge_index, hist_t, hist_msg, src_local, dst_local, cur_msg, delta_t, delta_t_src):
         """Score the current edge(s) ``src_local -> dst_local`` carrying ``cur_msg``.
 
         Embeddings come from the historical neighbourhood (``edge_index`` / ``hist_*``);
@@ -165,5 +168,5 @@ class ZTATemporalGraphNetwork(nn.Module):
         z = self.embed(n_id, edge_index, hist_t, hist_msg)
         nf = self.node_feat[n_id]
         h_idx = self.node_hash[n_id]
-        return self.score(z, nf, h_idx, src_local, dst_local, cur_msg)
+        return self.score(z, nf, h_idx, src_local, dst_local, cur_msg, delta_t, delta_t_src)
 

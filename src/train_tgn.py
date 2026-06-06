@@ -89,7 +89,7 @@ def train_tgn(cfg: TGNConfig = TGNConfig()):
     random.seed(cfg.seed)
 
     print("Generating streaming data...")
-    src, dst, t, msg, y, types, node_features, resource_uris = generate_streaming_data(
+    src, dst, t, msg, y, types, node_features, resource_uris, auth_mask = generate_streaming_data(
         num_users=cfg.num_users,
         num_ips=cfg.num_ips,
         num_resources=cfg.num_resources,
@@ -105,6 +105,7 @@ def train_tgn(cfg: TGNConfig = TGNConfig()):
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
+    auth_mask = auth_mask.to(device)
 
     print("--- INIZIO ADDESTRAMENTO UNSUPERVISED ---")
 
@@ -143,7 +144,6 @@ def train_tgn(cfg: TGNConfig = TGNConfig()):
     model.init_neighbor_loader(cfg.neighbor_size, device)
 
     optimizer = AdamW(model.parameters(), lr=cfg.learning_rate)
-    criterion = torch.nn.BCEWithLogitsLoss()
 
     # Chronological split (the stream is already time-ordered).
     n = len(src)
@@ -180,14 +180,8 @@ def train_tgn(cfg: TGNConfig = TGNConfig()):
             p_t = b_t[benign_mask]
             p_msg = b_msg[benign_mask]
 
-            # Structural negatives: src paired with an unrelated node anywhere in the
-            # graph (coarse "wrong target type" signal).
-            neg_dst = torch.randint(cfg.num_users, cfg.total_nodes, (len(p_src),), device=device)
             # HARD structural negatives: src paired with a *non-habitual* resource — one
-            # it is NOT currently a neighbour of. This is exactly the lateral-movement
-            # pattern (authorised-but-unusual access) and forces the model to learn each
-            # entity's habitual resource set, the fine-grained signal a random-resource
-            # negative would wash out (it often collides with a habitual resource).
+            # it is NOT currently a neighbour of, AND that the IP is authorized to access.
             res_lo = cfg.total_nodes - cfg.num_resources
             num_res = cfg.num_resources
             nl = model.neighbor_loader
@@ -197,44 +191,64 @@ def train_tgn(cfg: TGNConfig = TGNConfig()):
             occ = torch.zeros(len(p_src), num_res, dtype=torch.bool, device=device)
             rows = torch.arange(len(p_src), device=device).unsqueeze(1).expand_as(res_local)
             occ[rows[is_res], res_local[is_res]] = True  # habitual resources so far
-            # Random pick among the non-habitual resources (K < num_res => always some).
+            
+            src_ip_idx = p_src - cfg.num_users
+            auth_for_src = auth_mask[src_ip_idx]  # [B, num_res]
+            
             pick = torch.rand(len(p_src), num_res, device=device)
+            pick[~auth_for_src] = -1.0
             pick[occ] = -1.0
+            
+            fallback = (pick.max(dim=1).values == -1.0)
+            if fallback.any():
+                pick_fallback = torch.rand(fallback.sum(), num_res, device=device)
+                pick_fallback[occ[fallback]] = -1.0
+                pick[fallback] = pick_fallback
+                
             hard_dst = pick.argmax(dim=1) + res_lo
 
             # Expand every involved node to its stored temporal neighbourhood and embed
             # once; the heads below differ only in which endpoints / message they score,
             # sharing the same history-conditioned embeddings.
-            nodes = torch.cat([p_src, p_dst, neg_dst, hard_dst]).unique()
+            nodes = torch.cat([p_src, p_dst, hard_dst]).unique()
             n_id, edge_index, hist_t, hist_msg = model.neighbor_loader(nodes)
             z = model.embed(n_id, edge_index, hist_t, hist_msg)
             assoc = model.neighbor_loader._assoc
             nf = model.node_feat[n_id]
             h_idx = model.node_hash[n_id]
             s_loc, d_loc = assoc[p_src], assoc[p_dst]
-            nd_loc, hd_loc = assoc[neg_dst], assoc[hard_dst]
+            hd_loc = assoc[hard_dst]
+
+            # COMPUTE RECENCY FEATURE
+            delta_t_pos = torch.zeros(len(p_src), dtype=torch.float, device=device)
+            delta_t_hard = torch.zeros(len(p_src), dtype=torch.float, device=device)
+            for i in range(len(p_src)):
+                s = p_src[i].item()
+                d_pos = p_dst[i].item()
+                d_hard = hard_dst[i].item()
+                tv = p_t[i].item()
+                delta_t_pos[i] = tv - model.last_contact.get((s, d_pos), 0)
+                delta_t_hard[i] = tv - model.last_contact.get((s, d_hard), 0)
+
+            delta_t_src = (p_t - model.memory.last_update[p_src]).to(torch.float)
 
             # --- POSITIVE EDGES (healthy behaviour) ---
-            pos_out = model.score(z, nf, h_idx, s_loc, d_loc, p_msg)
-
-            # --- STRUCTURAL NEGATIVES (src paired with an unrelated target) ---
-            neg_out_struct = model.score(z, nf, h_idx, s_loc, nd_loc, p_msg)
+            pos_out = model.score(z, nf, h_idx, s_loc, d_loc, p_msg, delta_t_pos, delta_t_src)
 
             # --- HARD STRUCTURAL NEGATIVES (src paired with a non-habitual resource) ---
-            neg_out_hard = model.score(z, nf, h_idx, s_loc, hd_loc, p_msg)
+            neg_out_hard = model.score(z, nf, h_idx, s_loc, hd_loc, p_msg, delta_t_hard, delta_t_src)
 
             # --- CONTEXTUAL NEGATIVES (out-of-distribution feature perturbation) ---
             neg_msg = p_msg.clone()
             noise_mask = torch.rand_like(neg_msg) < 0.20
             neg_msg[noise_mask] = 1.0 - neg_msg[noise_mask]
-            neg_out_ctx = model.score(z, nf, h_idx, s_loc, d_loc, neg_msg)
+            neg_out_ctx = model.score(z, nf, h_idx, s_loc, d_loc, neg_msg, delta_t_pos, delta_t_src)
 
-            # --- UNSUPERVISED LOSS: positive -> 1, negatives -> 0 ---
+            # --- UNSUPERVISED LOSS (BCE su Lateral e Contextual) ---
             loss = (
-                criterion(pos_out, torch.ones_like(pos_out))
-                + criterion(neg_out_struct, torch.zeros_like(neg_out_struct))
-                + 10.0 * criterion(neg_out_hard, torch.zeros_like(neg_out_hard))
-                + criterion(neg_out_ctx, torch.zeros_like(neg_out_ctx))
+                F.binary_cross_entropy_with_logits(pos_out, torch.ones_like(pos_out))
+                + 10.0 * F.binary_cross_entropy_with_logits(neg_out_hard, torch.zeros_like(neg_out_hard))
+                + F.binary_cross_entropy_with_logits(neg_out_ctx, torch.zeros_like(neg_out_ctx))
             )
 
             loss.backward()
@@ -245,6 +259,11 @@ def train_tgn(cfg: TGNConfig = TGNConfig()):
             model.memory.update_state(p_src, p_dst, p_t, p_msg)
             model.memory.detach()
             model.neighbor_loader.insert(p_src, p_dst, p_t, p_msg)
+            for i in range(len(p_src)):
+                s = p_src[i].item()
+                d = p_dst[i].item()
+                tv = p_t[i].item()
+                model.last_contact[(s, d)] = tv
 
         print(f"Epoch {epoch:02d} | Train Loss: {total_loss / max(num_train_batches, 1):.4f}")
 
