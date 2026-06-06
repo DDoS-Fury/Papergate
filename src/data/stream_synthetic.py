@@ -144,13 +144,13 @@ def generate_streaming_data(num_users=50, num_ips=100, num_resources=20, num_eve
     types = []
     
     current_time = 0
+    compromised_state = {}  # ip_idx -> state (1: Recon, 2: Lateral, 3: Exfil)
+    
     for i in range(num_events):
         current_time += int(np.random.exponential(scale=300.0))
         hour_of_day = (current_time // 3600) % 24
         
         # We simulate IP -> Resource interactions
-        # Gradually introduce IPs throughout the stream to simulate continuous cold-starts.
-        # This forces the model to learn to tolerate new entities with empty histories.
         max_ip = max(1, int((i / num_events) * num_ips) + 1)
         if max_ip > num_ips:
             max_ip = num_ips
@@ -162,7 +162,15 @@ def generate_streaming_data(num_users=50, num_ips=100, num_resources=20, num_eve
         u_clearance = user_clearances[user_idx]
         u_tier = ip_tiers[src_ip_idx]
         
-        is_anomalous = np.random.rand() < 0.05
+        # APT Kill Chain Simulation
+        if np.random.rand() < 0.005 and src_ip_idx not in compromised_state:
+            compromised_state[src_ip_idx] = 1  # IP becomes compromised -> Phase 1: Recon
+            
+        is_anomalous = False
+        if src_ip_idx in compromised_state:
+            # Compromised IPs blend in 70% of the time, attack 30% of the time
+            if np.random.rand() < 0.3:
+                is_anomalous = True
         
         if not is_anomalous:
             habit = list(ip_habitual[src_ip_idx])
@@ -182,7 +190,15 @@ def generate_streaming_data(num_users=50, num_ips=100, num_resources=20, num_eve
             etype = 0
 
         else:
-            anomaly_type = np.random.choice(["policy", "context", "lateral"])
+            state = compromised_state[src_ip_idx]
+            if state == 1:
+                anomaly_type = "context"  # Recon phase (often triggers Snort)
+                compromised_state[src_ip_idx] = 2  # Advance to Lateral
+            elif state == 2:
+                anomaly_type = "lateral"  # Lateral Movement phase
+                compromised_state[src_ip_idx] = 3  # Advance to Exfil
+            else:
+                anomaly_type = np.random.choice(["policy", "context", "lateral"])
 
             if anomaly_type == "lateral":
                 # Authorised but non-habitual access: policy-clean and signal-clean,

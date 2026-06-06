@@ -48,11 +48,13 @@ class LinkPredictor(nn.Module):
         # for both endpoints: they carry the policy-relevant signal that separates a
         # policy-violation anomaly (same edge features as benign) from benign traffic.
         self.lin1 = nn.Linear(in_channels * 2 + msg_dim + (node_feat_dim + hash_dim) * 2 + time_dim * 2, in_channels)
+        self.lin_mid = nn.Linear(in_channels, in_channels)
         self.lin2 = nn.Linear(in_channels, 1)
 
     def forward(self, z_src, z_dst, msg, feat_src, feat_dst, recency_enc, src_recency_enc):
         h = torch.cat([z_src, z_dst, msg, feat_src, feat_dst, recency_enc, src_recency_enc], dim=-1)
         h = self.lin1(h).relu()
+        h = self.lin_mid(h).relu()
         return self.lin2(h)
 
 class ZTATemporalGraphNetwork(nn.Module):

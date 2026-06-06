@@ -119,6 +119,7 @@ async def event_generator(num_users=50, num_ips=100, num_resources=20, seed=None
         current_time += int(np.random.exponential(scale=300.0))
         
     print(f"[Generator] Starting seamlessly at t={current_time}")
+    compromised_state = {}
     while True:
         current_time += int(np.random.exponential(scale=300.0))
         
@@ -130,7 +131,15 @@ async def event_generator(num_users=50, num_ips=100, num_resources=20, seed=None
         u_clearance = user_clearances[user_idx]
         u_tier = ip_tiers[src_ip_idx]
         
-        is_anomalous = np.random.rand() < 0.05
+        # APT Kill Chain Simulation
+        if np.random.rand() < 0.005 and src_ip_idx not in compromised_state:
+            compromised_state[src_ip_idx] = 1  # Phase 1: Recon
+            
+        is_anomalous = False
+        if src_ip_idx in compromised_state:
+            # Compromised IPs blend in 70% of the time, attack 30% of the time
+            if np.random.rand() < 0.3:
+                is_anomalous = True
         
         if not is_anomalous:
             habit = list(ip_habitual[src_ip_idx])
@@ -148,7 +157,15 @@ async def event_generator(num_users=50, num_ips=100, num_resources=20, seed=None
             label = 0
             etype = 0
         else:
-            anomaly_type = np.random.choice(["policy", "context", "lateral"])
+            state = compromised_state[src_ip_idx]
+            if state == 1:
+                anomaly_type = "context"  # Recon phase (often triggers Snort)
+                compromised_state[src_ip_idx] = 2  # Advance to Lateral
+            elif state == 2:
+                anomaly_type = "lateral"  # Lateral Movement phase
+                compromised_state[src_ip_idx] = 3  # Advance to Exfil
+            else:
+                anomaly_type = np.random.choice(["policy", "context", "lateral"])
             
             if anomaly_type == "lateral":
                 non_habit = [a for a in ip_valid_actions[src_ip_idx] if a not in ip_habitual[src_ip_idx]]
