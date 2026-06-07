@@ -45,6 +45,9 @@ def build_model(hp: dict, device: torch.device) -> ZTATemporalGraphNetwork:
         hash_dim=int(hp.get("hash_dim", 16)),
         hist_feat_dim=int(hp.get("hist_feat_dim", 3)),
     ).to(device)
+    # Kill-chain precursor prior knobs (serving-time; not in the state_dict).
+    model.precursor_half_life = float(hp.get("precursor_half_life", 100000.0))
+    model.precursor_max_boost = float(hp.get("precursor_max_boost", 3.0))
     # The bounded neighbour loader lives outside the state_dict; build it on the
     # serving device so its buffers match the model's. Its contents are restored
     # from the checkpoint in load_model.
@@ -123,6 +126,37 @@ def update_memory(model, src_idx: int, dst_idx: int, t_val: int, msg_vec, device
     model.src_count[src_idx] = model.src_count.get(src_idx, 0) + 1
 
 
+def precursor_boost(model, src_idx: int, t_val: int) -> float:
+    """Multiplicative anomaly-score factor (>= 1.0) from the kill-chain precursor.
+
+    Lateral movement is signal-clean and feature-identical to a benign non-habitual
+    access; the one tell is that it follows a recon alert (Snort / detected anomaly) on
+    the SAME entity. The predict-then-update memory gate drops that anomalous precursor
+    from the TGN memory, so we carry it in a separate, time-decayed per-entity
+    ``recent_alert`` state and apply it as a SERVING-TIME prior — never a trained input
+    (benign-only training would leave it a dead feature).
+
+    Multiplicative (not additive) on purpose: it lifts an already-suspicious score over
+    the threshold without turning near-zero benign scores into false positives. Returns
+    ``1 + max_boost * 0.5**(Δt / half_life)`` while an alert is recent, else ``1.0``.
+    """
+    if not getattr(model, "use_precursor", False):
+        return 1.0
+    last = getattr(model, "recent_alert", {}).get(src_idx)
+    if last is None:
+        return 1.0
+    dt = max(0.0, float(t_val) - float(last))
+    decay = 0.5 ** (dt / model.precursor_half_life)
+    return 1.0 + model.precursor_max_boost * decay
+
+
+def record_alert(model, src_idx: int, t_val: int) -> None:
+    """Arm the kill-chain precursor: remember that ``src_idx`` just alerted at ``t_val``."""
+    if not hasattr(model, "recent_alert"):
+        model.recent_alert = {}
+    model.recent_alert[src_idx] = t_val
+
+
 def _reset_slot(model, idx: int) -> None:
     """Cold-start a reused memory slot after eviction."""
     with torch.no_grad():
@@ -144,6 +178,8 @@ def _reset_slot(model, idx: int) -> None:
             del model.pair_count[k]
     if hasattr(model, "src_count"):
         model.src_count.pop(idx, None)
+    if hasattr(model, "recent_alert"):
+        model.recent_alert.pop(idx, None)
     # Scrub the reused slot's temporal neighbourhood so a recycled index can't
     # inherit the evicted entity's interaction history.
     model.neighbor_loader.reset_node(idx)
@@ -207,11 +243,16 @@ def score_event(
     if dst_feat is not None:
         _set_node_features(model, dst_idx, dst_feat, device)
 
-    score = infer_score(model, src_idx, dst_idx, timestamp, features, device)
+    raw_score = infer_score(model, src_idx, dst_idx, timestamp, features, device)
+    # Kill-chain precursor prior: boost the score if this entity recently alerted (recon
+    # → lateral). Computed before record_alert so the current event is not boosted by
+    # itself; multiplicative so benign near-zero scores stay benign.
+    score = min(1.0, raw_score * precursor_boost(model, src_idx, timestamp))
     is_anomaly = score >= threshold
 
     snort_alert = features[1] > 0.5
     if is_anomaly or snort_alert:
+        record_alert(model, src_idx, timestamp)  # arm the precursor for this entity's next event
         model.node_feat[src_idx, 14] = max(0.0, model.node_feat[src_idx, 14].item() - 0.5)
     else:
         model.node_feat[src_idx, 14] = min(1.0, model.node_feat[src_idx, 14].item() + 0.01)
@@ -283,6 +324,7 @@ def save_model(model, registry: NodeRegistry, threshold: float, hp: dict,
             "last_contact": getattr(model, "last_contact", {}),
             "pair_count": getattr(model, "pair_count", {}),
             "src_count": getattr(model, "src_count", {}),
+            "recent_alert": getattr(model, "recent_alert", {}),
             "neighbor_loader": model.neighbor_loader.state(),
             "hyperparams": hp,
         },
@@ -316,6 +358,7 @@ def load_model(checkpoint_path, stats_path, device):
     model.last_contact = ckpt.get("last_contact", {})
     model.pair_count = ckpt.get("pair_count", {})
     model.src_count = ckpt.get("src_count", {})
+    model.recent_alert = ckpt.get("recent_alert", {})
     # Restore the temporal neighbour buffers (map_location already placed the saved
     # tensors on ``device``); build_model created an empty loader of the right shape.
     if "neighbor_loader" in ckpt:

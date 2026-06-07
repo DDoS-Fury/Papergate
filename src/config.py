@@ -62,6 +62,13 @@ class TGNConfig:
     # The lateral signal is "rank the true dst above K alternatives given src history".
     infonce_k: int = 5
 
+    # Kill-chain precursor prior (serving-time, not trained). Lateral movement follows a
+    # recon alert on the same entity; we multiply an entity's anomaly score by up to
+    # (1 + precursor_max_boost) right after it alerts, decaying with half-life
+    # ``precursor_half_life`` (seconds). See serve_tgn.precursor_boost.
+    precursor_half_life: float = 100000.0
+    precursor_max_boost: float = 3.0
+
     # Optimisation.
     batch_size: int = 200
     epochs: int = 15

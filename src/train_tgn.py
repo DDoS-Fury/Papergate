@@ -23,7 +23,13 @@ from graphagate.config import TGNConfig, TGN_CHECKPOINT_PATH, TGN_STATS_PATH
 from graphagate.data.stream_synthetic import generate_streaming_data
 from graphagate.model.registry import NodeRegistry
 from graphagate.model.tgn import ZTATemporalGraphNetwork, stable_hash
-from graphagate.serve_tgn import infer_score, save_model, update_memory
+from graphagate.serve_tgn import (
+    infer_score,
+    precursor_boost,
+    record_alert,
+    save_model,
+    update_memory,
+)
 
 
 def _replay(model, src, dst, t, msg, y, device, *, threshold=None, gate_by_label=False):
@@ -44,7 +50,10 @@ def _replay(model, src, dst, t, msg, y, device, *, threshold=None, gate_by_label
     for i in range(len(src_l)):
         s, d, tv, lab = src_l[i], dst_l[i], t_l[i], y_l[i]
         msg_vec = msg[i]
-        score = infer_score(model, s, d, tv, msg_vec, device)
+        # Same scoring path as serving: raw model score then the kill-chain precursor
+        # prior (boosts an entity that recently alerted). Computed before record_alert.
+        raw_score = infer_score(model, s, d, tv, msg_vec, device)
+        score = min(1.0, raw_score * precursor_boost(model, s, tv))
         scores[i] = score
         labels[i] = lab
 
@@ -55,6 +64,7 @@ def _replay(model, src, dst, t, msg, y, device, *, threshold=None, gate_by_label
         snort_alert = msg_vec[1] > 0.5
         is_anomaly = (score >= threshold) if not gate_by_label else (lab == 1)
         if is_anomaly or snort_alert:
+            record_alert(model, s, tv)  # arm the precursor (recon → lateral)
             model.node_feat[s, 14] = max(0.0, model.node_feat[s, 14].item() - 0.5)
         else:
             model.node_feat[s, 14] = min(1.0, model.node_feat[s, 14].item() + 0.01)
@@ -121,7 +131,7 @@ def _sample_structural_negatives(num_events, num_res, res_lo, device, *, avoid=N
 
 
 def train_tgn(cfg: TGNConfig = TGNConfig(), *, use_struct_head=True,
-              use_hash_identity=True, use_hist_feats=True, save=True):
+              use_hash_identity=True, use_hist_feats=True, use_precursor=True, save=True):
     """Train + evaluate the streaming TGN.
 
     The keyword flags drive the ablation study (``tests/ablations``): they toggle the
@@ -197,9 +207,13 @@ def train_tgn(cfg: TGNConfig = TGNConfig(), *, use_struct_head=True,
     model.use_struct_head = use_struct_head
     model.use_hash_identity = use_hash_identity
     model.use_hist_feats = use_hist_feats
-    if not (use_struct_head and use_hash_identity and use_hist_feats):
+    model.use_precursor = use_precursor
+    # Kill-chain precursor knobs (serving-time prior; see serve_tgn.precursor_boost).
+    model.precursor_half_life = cfg.precursor_half_life
+    model.precursor_max_boost = cfg.precursor_max_boost
+    if not (use_struct_head and use_hash_identity and use_hist_feats and use_precursor):
         print(f"[ablation] use_struct_head={use_struct_head} use_hash_identity={use_hash_identity} "
-              f"use_hist_feats={use_hist_feats}")
+              f"use_hist_feats={use_hist_feats} use_precursor={use_precursor}")
 
     optimizer = AdamW(model.parameters(), lr=cfg.learning_rate)
 
@@ -371,6 +385,7 @@ def train_tgn(cfg: TGNConfig = TGNConfig(), *, use_struct_head=True,
     # slice, but reset the runtime trust feature to the post-training snapshot so the
     # test stream is not pre-conditioned by calibration.
     model.node_feat.copy_(node_feat_post_train)
+    model.recent_alert.clear()  # don't let calibration-slice alerts pre-condition the test stream
     test_scores, test_labels = _replay(
         model, src[val_end:], dst[val_end:], t[val_end:], msg[val_end:], y[val_end:],
         device, threshold=threshold, gate_by_label=False,
@@ -455,6 +470,8 @@ def train_tgn(cfg: TGNConfig = TGNConfig(), *, use_struct_head=True,
             "hist_feat_dim": cfg.hist_feat_dim,
             "neighbor_size": cfg.neighbor_size,
             "target_fpr": cfg.target_fpr,
+            "precursor_half_life": cfg.precursor_half_life,
+            "precursor_max_boost": cfg.precursor_max_boost,
         }
         save_model(model, registry, threshold, hp, TGN_CHECKPOINT_PATH, TGN_STATS_PATH)
         print(f"\nSaved checkpoint -> {TGN_CHECKPOINT_PATH}")
@@ -470,6 +487,7 @@ def train_tgn(cfg: TGNConfig = TGNConfig(), *, use_struct_head=True,
         "use_struct_head": use_struct_head,
         "use_hash_identity": use_hash_identity,
         "use_hist_feats": use_hist_feats,
+        "use_precursor": use_precursor,
     }
 
 

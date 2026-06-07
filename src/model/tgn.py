@@ -142,14 +142,24 @@ class ZTATemporalGraphNetwork(nn.Module):
         # state_dict) and reset/purged on the same events.
         self.pair_count = {}
         self.src_count = {}
+        # Kill-chain precursor state: per-entity timestamp of the last alert (Snort /
+        # detected anomaly). Lateral movement follows a recon alert on the SAME entity,
+        # but the predict-then-update gate drops that precursor from the TGN memory — so
+        # it is carried here and used as a time-decayed SERVING-TIME prior (see
+        # serve_tgn.precursor_boost). It is NOT a trained input (benign-only training
+        # would make it a dead feature). Persisted/purged like last_contact.
+        self.recent_alert = {}
+        self.precursor_half_life = 100000.0
+        self.precursor_max_boost = 3.0
 
         # Ablation switches (runtime-only, not persisted): the normal model keeps them
         # ON. Used by the ablation driver to isolate the contribution of the structural
-        # head, the hashed-identity embedding and the explicit history features. Serving
-        # never toggles these.
+        # head, the hashed-identity embedding, the explicit history features and the
+        # kill-chain precursor prior. Serving never toggles these.
         self.use_struct_head = True
         self.use_hash_identity = True
         self.use_hist_feats = True
+        self.use_precursor = True
 
     def init_neighbor_loader(self, size, device=None):
         """Create (or recreate) the bounded temporal neighbour loader on ``device``.
