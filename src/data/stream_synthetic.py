@@ -3,7 +3,7 @@ import numpy as np
 import random
 
 def generate_streaming_data(num_users=50, num_ips=100, num_resources=20, num_events=5000,
-                            seed=None):
+                            benign_explore_prob=0.15, seed=None):
     """
     Generates mock streaming data for TGN based on ZTA policies.
     We map all entities to a single node index space:
@@ -113,9 +113,13 @@ def generate_streaming_data(num_users=50, num_ips=100, num_resources=20, num_eve
     # Per-IP behaviour model. For each IP we precompute the (resource, method) actions
     # its associated user is *authorised* to perform, then carve out a "habitual" subset
     # — the routes that device actually uses day-to-day. Benign traffic is drawn from the
-    # habitual subset; a *lateral-movement* anomaly is an authorised-but-non-habitual
-    # action (policy-clean, signal-clean) — only the interaction history reveals it,
-    # which is exactly what the temporal neighbour loader supplies to the model.
+    # habitual subset, EXCEPT a ``benign_explore_prob`` fraction that legitimately
+    # exercises an authorised-but-non-habitual route (benign exploration). A
+    # *lateral-movement* anomaly is *also* an authorised-but-non-habitual action
+    # (policy-clean, signal-clean) — so novelty alone no longer separates the two: the
+    # model must use the temporal/relational *pattern* (lateral is clustered on a
+    # compromised IP, inside a recon→lateral→exfil kill chain) that the neighbour loader
+    # and memory expose. Setting benign_explore_prob=0 recovers the old degenerate task.
     ip_valid_actions = []
     ip_habitual = []
     for ip_idx in range(num_ips):
@@ -139,8 +143,11 @@ def generate_streaming_data(num_users=50, num_ips=100, num_resources=20, num_eve
     timestamps = []
     edge_features = []
     labels = []
-    # Anomaly type for per-class evaluation: 0=benign, 1=policy violation, 2=contextual.
-    # The binary ``labels`` above are unchanged (training/serving consume only those).
+    # Anomaly type for per-class evaluation: 0=benign, 1=policy violation, 2=contextual,
+    # 3=lateral movement. The binary ``labels`` above are unchanged (training/serving
+    # consume only those). NOTE: policy (etype=1) is the OPA orchestrator's job — it is
+    # blocked deterministically upstream and is NOT a value-add of this model; it is kept
+    # only as a sanity column. The model's genuine target is lateral (etype=3).
     types = []
     
     current_time = 0
@@ -174,7 +181,15 @@ def generate_streaming_data(num_users=50, num_ips=100, num_resources=20, num_eve
         
         if not is_anomalous:
             habit = list(ip_habitual[src_ip_idx])
-            if habit:
+            non_habit = [a for a in ip_valid_actions[src_ip_idx]
+                         if a not in ip_habitual[src_ip_idx]]
+            # Benign exploration: occasionally a legitimate device performs an
+            # authorised-but-non-habitual action. This is policy-clean and signal-clean
+            # and label=0 — so "non-habitual" is no longer a sufficient anomaly cue, and
+            # the model cannot trivially equate novelty with lateral movement.
+            if non_habit and random.random() < benign_explore_prob:
+                res_idx, method = random.choice(non_habit)
+            elif habit:
                 res_idx, method = random.choice(habit)
             elif ip_valid_actions[src_ip_idx]:
                 res_idx, method = random.choice(ip_valid_actions[src_ip_idx])

@@ -57,23 +57,31 @@ class GraphAttentionEmbedding(nn.Module):
         return x
 
 class LinkPredictor(nn.Module):
-    def __init__(self, in_channels, msg_dim, node_feat_dim, hash_dim, time_dim):
+    def __init__(self, in_channels, msg_dim, node_feat_dim, hash_dim, time_dim, hist_feat_dim=0):
         super().__init__()
         # Static node attributes (role / clearance / device tier) are concatenated
         # for both endpoints: they carry the policy-relevant signal that separates a
         # policy-violation anomaly (same edge features as benign) from benign traffic.
-        self.lin1 = nn.Linear(in_channels * 2 + msg_dim + (node_feat_dim + hash_dim) * 2 + time_dim * 2, in_channels)
+        # ``hist_feat_dim`` adds the explicit interaction-history features for the scored
+        # src→dst pair (how habitual this access is) — the runtime-derivable, non-circular
+        # novelty signal that, combined with the temporal memory, flags lateral movement.
+        self.lin1 = nn.Linear(
+            in_channels * 2 + msg_dim + (node_feat_dim + hash_dim) * 2 + time_dim * 2 + hist_feat_dim,
+            in_channels,
+        )
         self.lin_mid = nn.Linear(in_channels, in_channels)
         self.lin2 = nn.Linear(in_channels, 1)
 
-    def forward(self, z_src, z_dst, msg, feat_src, feat_dst, recency_enc, src_recency_enc):
-        h = torch.cat([z_src, z_dst, msg, feat_src, feat_dst, recency_enc, src_recency_enc], dim=-1)
+    def forward(self, z_src, z_dst, msg, feat_src, feat_dst, recency_enc, src_recency_enc, hist_feats):
+        h = torch.cat(
+            [z_src, z_dst, msg, feat_src, feat_dst, recency_enc, src_recency_enc, hist_feats], dim=-1
+        )
         h = self.lin1(h).relu()
         h = self.lin_mid(h).relu()
         return self.lin2(h)
 
 class ZTATemporalGraphNetwork(nn.Module):
-    def __init__(self, num_nodes, node_feat_dim, msg_dim, memory_dim=64, time_dim=32, num_hops=2, hash_buckets=10000, hash_dim=16):
+    def __init__(self, num_nodes, node_feat_dim, msg_dim, memory_dim=64, time_dim=32, num_hops=2, hash_buckets=10000, hash_dim=16, hist_feat_dim=3):
         super().__init__()
 
         self.num_hops = num_hops
@@ -81,6 +89,7 @@ class ZTATemporalGraphNetwork(nn.Module):
         # nn.Module and so lives outside the state_dict (see init_neighbor_loader).
         self.num_nodes = num_nodes
         self.msg_dim = msg_dim
+        self.hist_feat_dim = hist_feat_dim
 
         # Static per-node attributes (role / clearance / device tier), indexed by the
         # global node id. Populated from the data at train time and persisted in the
@@ -109,7 +118,8 @@ class ZTATemporalGraphNetwork(nn.Module):
         )
 
         self.link_pred = LinkPredictor(
-            in_channels=memory_dim, msg_dim=msg_dim, node_feat_dim=node_feat_dim, hash_dim=hash_dim, time_dim=time_dim
+            in_channels=memory_dim, msg_dim=msg_dim, node_feat_dim=node_feat_dim, hash_dim=hash_dim,
+            time_dim=time_dim, hist_feat_dim=hist_feat_dim,
         )
 
         # Dedicated structural-compatibility head: projects the (identity-aware)
@@ -126,12 +136,20 @@ class ZTATemporalGraphNetwork(nn.Module):
         )
         self.struct_scale = nn.Parameter(torch.tensor(5.0))
         self.last_contact = {}
+        # Interaction-history counters (benign-gated, like last_contact): how many times
+        # each src→dst pair and each src have been committed to memory. They feed
+        # ``compute_hist_feats``; they are persisted alongside last_contact (not in the
+        # state_dict) and reset/purged on the same events.
+        self.pair_count = {}
+        self.src_count = {}
 
-        # Ablation switches (runtime-only, not persisted): the normal model keeps both
+        # Ablation switches (runtime-only, not persisted): the normal model keeps them
         # ON. Used by the ablation driver to isolate the contribution of the structural
-        # head and of the hashed-identity embedding. Serving never toggles these.
+        # head, the hashed-identity embedding and the explicit history features. Serving
+        # never toggles these.
         self.use_struct_head = True
         self.use_hash_identity = True
+        self.use_hist_feats = True
 
     def init_neighbor_loader(self, size, device=None):
         """Create (or recreate) the bounded temporal neighbour loader on ``device``.
@@ -162,12 +180,35 @@ class ZTATemporalGraphNetwork(nn.Module):
         z = self.gnn(x, last_update, edge_index, hist_t, hist_msg)
         return z
 
-    def score(self, z, nf, h_idx, src_local, dst_local, cur_msg, delta_t, delta_t_src):
+    def compute_hist_feats(self, src_ids, dst_ids, device):
+        """Per-event interaction-history features for the directed ``src→dst`` pairs.
+
+        Returns ``[log1p(pair_count), log1p(src_count), pair_count/(src_count+1)]``:
+        how often this exact pair was seen, how active the src is, and the fraction of
+        the src's traffic that habitually targets this dst. A never-seen pair from an
+        active src (ratio≈0) is the novelty cue for lateral movement — but benign
+        *exploration* shares it, so this signal is only discriminative in combination
+        with the temporal memory / structural head (that is the honest, non-degenerate
+        contribution). Counts come from benign-gated history only (anti-poisoning).
+
+        ``src_ids`` / ``dst_ids`` are iterables of *global* node ids (ints).
+        """
+        pc = torch.tensor(
+            [self.pair_count.get((int(s), int(d)), 0) for s, d in zip(src_ids, dst_ids)],
+            dtype=torch.float, device=device,
+        )
+        sc = torch.tensor(
+            [self.src_count.get(int(s), 0) for s in src_ids], dtype=torch.float, device=device,
+        )
+        return torch.stack([torch.log1p(pc), torch.log1p(sc), pc / (sc + 1.0)], dim=-1)
+
+    def score(self, z, nf, h_idx, src_local, dst_local, cur_msg, delta_t, delta_t_src, hist_feats):
         """Benign-vs-anomalous logit for ``src_local -> dst_local`` carrying ``cur_msg``.
 
         Sum of two complementary signals (shared by training and serving):
-          * feature head — concat-MLP over embeddings, message and static attributes
-            (catches policy / contextual anomalies);
+          * feature head — concat-MLP over embeddings, message, static attributes and the
+            explicit interaction-history features (catches policy / contextual anomalies
+            and supplies the novelty cue for lateral movement);
           * structural head — scaled cosine compatibility of the projected embeddings
             (catches lateral movement: a valid-but-non-habitual src/dst pairing).
         """
@@ -177,8 +218,11 @@ class ZTATemporalGraphNetwork(nn.Module):
         feat_with_hash = torch.cat([nf, he], dim=-1)
         recency_enc = self.memory.time_enc(delta_t)
         src_recency_enc = self.memory.time_enc(delta_t_src)
+        if not self.use_hist_feats:
+            hist_feats = torch.zeros_like(hist_feats)  # ablation: drop history features
         feat = self.link_pred(
-            z[src_local], z[dst_local], cur_msg, feat_with_hash[src_local], feat_with_hash[dst_local], recency_enc, src_recency_enc
+            z[src_local], z[dst_local], cur_msg, feat_with_hash[src_local], feat_with_hash[dst_local],
+            recency_enc, src_recency_enc, hist_feats,
         ).squeeze(-1)
         if not self.use_struct_head:
             return feat  # ablation: feature head only (no structural compatibility head)
@@ -187,15 +231,16 @@ class ZTATemporalGraphNetwork(nn.Module):
         struct = self.struct_scale * (hs * hd).sum(-1)
         return feat + struct
 
-    def forward(self, n_id, edge_index, hist_t, hist_msg, src_local, dst_local, cur_msg, delta_t, delta_t_src):
+    def forward(self, n_id, edge_index, hist_t, hist_msg, src_local, dst_local, cur_msg, delta_t, delta_t_src, hist_feats):
         """Score the current edge(s) ``src_local -> dst_local`` carrying ``cur_msg``.
 
         Embeddings come from the historical neighbourhood (``edge_index`` / ``hist_*``);
-        ``src_local`` / ``dst_local`` index the queried endpoints within ``n_id``, and
-        ``cur_msg`` is the message of the event under evaluation.
+        ``src_local`` / ``dst_local`` index the queried endpoints within ``n_id``,
+        ``cur_msg`` is the message of the event under evaluation, and ``hist_feats`` are
+        the precomputed interaction-history features for the scored pairs.
         """
         z = self.embed(n_id, edge_index, hist_t, hist_msg)
         nf = self.node_feat[n_id]
         h_idx = self.node_hash[n_id]
-        return self.score(z, nf, h_idx, src_local, dst_local, cur_msg, delta_t, delta_t_src)
+        return self.score(z, nf, h_idx, src_local, dst_local, cur_msg, delta_t, delta_t_src, hist_feats)
 

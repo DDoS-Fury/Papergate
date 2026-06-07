@@ -35,6 +35,13 @@ class TGNConfig:
     num_resources: int = 20
     num_events: int = 50000
 
+    # De-degeneration knob: probability that a *benign* event performs an
+    # authorised-but-non-habitual access (legitimate exploration). With this > 0 the
+    # task is no longer the tautology "non-habitual ⟺ malicious" — lateral movement
+    # must be told apart from benign novelty by its temporal/relational *pattern*,
+    # not by novelty alone. See stream_synthetic.generate_streaming_data.
+    benign_explore_prob: float = 0.15
+
     # TGN Architecture
     node_feat_dim: int = 16
     msg_dim: int = 6
@@ -47,6 +54,13 @@ class TGNConfig:
     # Enables message passing over each entity's recent interaction history → the
     # structural signal for lateral-movement detection. No graph DB required.
     neighbor_size: int = 30
+    # Explicit interaction-history features per scored event (runtime-derivable,
+    # non-circular): [log1p(pair_count), log1p(src_count), pair_count/(src_count+1)].
+    # See ZTATemporalGraphNetwork.compute_hist_feats.
+    hist_feat_dim: int = 3
+    # InfoNCE ranking objective: number of random-destination negatives per positive.
+    # The lateral signal is "rank the true dst above K alternatives given src history".
+    infonce_k: int = 5
 
     # Optimisation.
     batch_size: int = 200

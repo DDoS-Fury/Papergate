@@ -121,7 +121,7 @@ def _sample_structural_negatives(num_events, num_res, res_lo, device, *, avoid=N
 
 
 def train_tgn(cfg: TGNConfig = TGNConfig(), *, use_struct_head=True,
-              use_hash_identity=True, save=True):
+              use_hash_identity=True, use_hist_feats=True, save=True):
     """Train + evaluate the streaming TGN.
 
     The keyword flags drive the ablation study (``tests/ablations``): they toggle the
@@ -139,6 +139,7 @@ def train_tgn(cfg: TGNConfig = TGNConfig(), *, use_struct_head=True,
         num_ips=cfg.num_ips,
         num_resources=cfg.num_resources,
         num_events=cfg.num_events,
+        benign_explore_prob=cfg.benign_explore_prob,
         seed=cfg.seed,
     )
 
@@ -177,6 +178,7 @@ def train_tgn(cfg: TGNConfig = TGNConfig(), *, use_struct_head=True,
         num_hops=cfg.num_hops,
         hash_buckets=cfg.hash_buckets,
         hash_dim=cfg.hash_dim,
+        hist_feat_dim=cfg.hist_feat_dim,
     ).to(device)
 
     # Load the static node attributes (role / clearance / tier) into the model's
@@ -194,8 +196,10 @@ def train_tgn(cfg: TGNConfig = TGNConfig(), *, use_struct_head=True,
     # Ablation switches (default ON = full model).
     model.use_struct_head = use_struct_head
     model.use_hash_identity = use_hash_identity
-    if not (use_struct_head and use_hash_identity):
-        print(f"[ablation] use_struct_head={use_struct_head} use_hash_identity={use_hash_identity}")
+    model.use_hist_feats = use_hist_feats
+    if not (use_struct_head and use_hash_identity and use_hist_feats):
+        print(f"[ablation] use_struct_head={use_struct_head} use_hash_identity={use_hash_identity} "
+              f"use_hist_feats={use_hist_feats}")
 
     optimizer = AdamW(model.parameters(), lr=cfg.learning_rate)
 
@@ -210,6 +214,8 @@ def train_tgn(cfg: TGNConfig = TGNConfig(), *, use_struct_head=True,
         model.memory.reset_state()  # restart the recurrent memory each epoch
         model.neighbor_loader.reset_state()  # ...and the temporal neighbourhood
         model.last_contact.clear()  # ...and the per-pair recency cache (Δt must reset too)
+        model.pair_count.clear()  # ...and the interaction-history counters
+        model.src_count.clear()
         model.train()
 
         total_loss = 0.0
@@ -241,45 +247,59 @@ def train_tgn(cfg: TGNConfig = TGNConfig(), *, use_struct_head=True,
             p_t = b_t[benign_mask]
             p_msg = b_msg[benign_mask]
 
-            # STRUCTURAL NEGATIVES — uniform random resource destinations (standard
-            # self-supervised temporal link prediction). Crucially independent of the
-            # generator's auth_mask / habitual sets, so detection is honest
-            # generalisation rather than a memorised test rule (see
-            # _sample_structural_negatives; this is not a zero-shot claim).
+            # STRUCTURAL NEGATIVES — for each positive, K uniform random resource
+            # destinations (standard self-supervised temporal link prediction). They are
+            # independent of the generator's auth_mask / habitual sets, so detection is
+            # honest generalisation, not a memorised test rule. The objective below is a
+            # *ranking* loss (InfoNCE): rank the true dst above the K alternatives given
+            # the src's history — the likelihood signal that exposes lateral movement.
+            P = len(p_src)
+            K = cfg.infonce_k
             res_lo = cfg.total_nodes - cfg.num_resources
             num_res = cfg.num_resources
-            neg_dst = _sample_structural_negatives(len(p_src), num_res, res_lo, device, avoid=p_dst)
+            neg_flat = _sample_structural_negatives(
+                P * K, num_res, res_lo, device, avoid=p_dst.repeat_interleave(K)
+            )  # (P*K,)
+            src_rep = p_src.repeat_interleave(K)  # (P*K,)
 
             # Expand every involved node to its stored temporal neighbourhood and embed
             # once; the heads below differ only in which endpoints / message they score,
             # sharing the same history-conditioned embeddings.
-            nodes = torch.cat([p_src, p_dst, neg_dst]).unique()
+            nodes = torch.cat([p_src, p_dst, neg_flat]).unique()
             n_id, edge_index, hist_t, hist_msg = model.neighbor_loader(nodes)
             z = model.embed(n_id, edge_index, hist_t, hist_msg)
             assoc = model.neighbor_loader._assoc
             nf = model.node_feat[n_id]
             h_idx = model.node_hash[n_id]
             s_loc, d_loc = assoc[p_src], assoc[p_dst]
-            neg_loc = assoc[neg_dst]
+            sK_loc, negK_loc = assoc[src_rep], assoc[neg_flat]
 
-            # COMPUTE RECENCY FEATURE
-            delta_t_pos = torch.zeros(len(p_src), dtype=torch.float, device=device)
-            delta_t_neg = torch.zeros(len(p_src), dtype=torch.float, device=device)
-            for i in range(len(p_src)):
-                s = p_src[i].item()
-                d_pos = p_dst[i].item()
-                d_neg = neg_dst[i].item()
-                tv = p_t[i].item()
-                delta_t_pos[i] = tv - model.last_contact.get((s, d_pos), 0)
-                delta_t_neg[i] = tv - model.last_contact.get((s, d_neg), 0)
-
+            # RECENCY (Δt since last src→dst contact) + interaction-history features.
+            tv_l, s_l, dpos_l = p_t.tolist(), p_src.tolist(), p_dst.tolist()
+            delta_t_pos = torch.tensor(
+                [tv_l[i] - model.last_contact.get((s_l[i], dpos_l[i]), 0) for i in range(P)],
+                dtype=torch.float, device=device,
+            )
+            srcrep_l, negflat_l = src_rep.tolist(), neg_flat.tolist()
+            tvrep_l = p_t.repeat_interleave(K).tolist()
+            delta_t_neg = torch.tensor(
+                [tvrep_l[j] - model.last_contact.get((srcrep_l[j], negflat_l[j]), 0) for j in range(P * K)],
+                dtype=torch.float, device=device,
+            )
             delta_t_src = (p_t - model.memory.last_update[p_src]).to(torch.float)
+            delta_t_src_rep = delta_t_src.repeat_interleave(K)
+
+            hist_pos = model.compute_hist_feats(s_l, dpos_l, device)
+            hist_neg = model.compute_hist_feats(srcrep_l, negflat_l, device)
+            msg_rep = p_msg.repeat_interleave(K, dim=0)
 
             # --- POSITIVE EDGES (healthy behaviour) ---
-            pos_out = model.score(z, nf, h_idx, s_loc, d_loc, p_msg, delta_t_pos, delta_t_src)
+            pos_out = model.score(z, nf, h_idx, s_loc, d_loc, p_msg, delta_t_pos, delta_t_src, hist_pos)
 
-            # --- STRUCTURAL NEGATIVES (src paired with a random resource) ---
-            neg_out_struct = model.score(z, nf, h_idx, s_loc, neg_loc, p_msg, delta_t_neg, delta_t_src)
+            # --- STRUCTURAL NEGATIVES (src paired with K random resources) ---
+            negK_out = model.score(
+                z, nf, h_idx, sK_loc, negK_loc, msg_rep, delta_t_neg, delta_t_src_rep, hist_neg
+            ).view(P, K)
 
             # --- CONTEXTUAL NEGATIVES (off-manifold edge message via additive Gaussian
             # noise). A *different mechanism* from the eval's contextual anomalies
@@ -288,14 +308,21 @@ def train_tgn(cfg: TGNConfig = TGNConfig(), *, use_struct_head=True,
             # rule baseline already catches them — see eval), so this term mainly keeps
             # the feature head from ignoring the message.
             neg_msg = p_msg + torch.randn_like(p_msg) * 0.5
-            neg_out_ctx = model.score(z, nf, h_idx, s_loc, d_loc, neg_msg, delta_t_pos, delta_t_src)
+            neg_out_ctx = model.score(z, nf, h_idx, s_loc, d_loc, neg_msg, delta_t_pos, delta_t_src, hist_pos)
 
-            # --- UNSUPERVISED LOSS — positive vs. structural + contextual negatives,
-            # equally weighted (no hand-tuned 10x weight on the structural term, which
-            # previously over-fit the circular non-habitual definition).
+            # --- UNSUPERVISED LOSS ---
+            #   * InfoNCE ranking: among {true dst, K random dsts} the true dst must score
+            #     most-benign (highest logit) given the src's history. This is the lateral
+            #     objective and is AP-aligned (a relative/soft target, unlike the old hard
+            #     0/1 negative that over-fit the circular non-habitual definition).
+            #   * positive BCE anchor: keeps benign logits high so the FPR-calibrated
+            #     threshold is meaningful (InfoNCE alone fixes only relative order).
+            #   * contextual BCE: off-manifold message ⇒ anomalous.
+            logits = torch.cat([pos_out.unsqueeze(1), negK_out], dim=1)  # (P, 1+K); col 0 = positive
+            target = torch.zeros(P, dtype=torch.long, device=device)
             loss = (
-                F.binary_cross_entropy_with_logits(pos_out, torch.ones_like(pos_out))
-                + F.binary_cross_entropy_with_logits(neg_out_struct, torch.zeros_like(neg_out_struct))
+                F.cross_entropy(logits, target)
+                + F.binary_cross_entropy_with_logits(pos_out, torch.ones_like(pos_out))
                 + F.binary_cross_entropy_with_logits(neg_out_ctx, torch.zeros_like(neg_out_ctx))
             )
 
@@ -303,15 +330,18 @@ def train_tgn(cfg: TGNConfig = TGNConfig(), *, use_struct_head=True,
             optimizer.step()
             total_loss += loss.item()
 
-            # Predict-then-update: commit benign traffic to memory and neighbour store.
+            # Predict-then-update: commit benign traffic to memory, neighbour store, the
+            # recency cache and the interaction-history counters (benign-only — anomalies
+            # never enter the baseline, matching the serving anti-poisoning gate).
             model.memory.update_state(p_src, p_dst, p_t, p_msg)
             model.memory.detach()
             model.neighbor_loader.insert(p_src, p_dst, p_t, p_msg)
-            for i in range(len(p_src)):
-                s = p_src[i].item()
-                d = p_dst[i].item()
-                tv = p_t[i].item()
-                model.last_contact[(s, d)] = tv
+            for i in range(P):
+                s = s_l[i]
+                d = dpos_l[i]
+                model.last_contact[(s, d)] = tv_l[i]
+                model.pair_count[(s, d)] = model.pair_count.get((s, d), 0) + 1
+                model.src_count[s] = model.src_count.get(s, 0) + 1
 
         print(f"Epoch {epoch:02d} | Train Loss: {total_loss / max(num_train_batches, 1):.4f}")
 
@@ -358,17 +388,21 @@ def train_tgn(cfg: TGNConfig = TGNConfig(), *, use_struct_head=True,
     # --- PER-ANOMALY-TYPE BREAKDOWN ------------------------------------------
     # Per-type AUC/AP are benign (type 0) vs that type, so an aggregate cannot mask a
     # weak class. NONE of the training negatives encode the generator's anomaly rules
-    # (random-destination structural negatives + Gaussian feature noise — see the loss),
-    # so these numbers are honest generalisation, not a memorised curriculum. The
-    # "vs-rule" column says whether the cheap signal-only rule baseline (below) can also
-    # catch the class — i.e. how much the TGN genuinely adds:
-    #   policy  -> rule-blind: same benign edge signals; only structure/features expose it.
+    # (InfoNCE over random-destination negatives + Gaussian feature noise — see the loss),
+    # AND the task is no longer degenerate: benign traffic now *also* makes
+    # authorised-but-non-habitual accesses (benign_explore_prob), so "non-habitual" is not
+    # a free label for lateral — the model must use the temporal pattern + history signals.
+    # These numbers are therefore honest generalisation. The "vs-rule" column says whether
+    # the cheap signal-only rule baseline (below) can also catch the class — i.e. how much
+    # the TGN genuinely adds:
+    #   policy  -> OPA-OWNED: blocked deterministically upstream; reported only as a sanity
+    #     column, NOT a value-add of this model (kept for completeness).
     #   contextual -> rule-trivial: broken JA3 / Snort fires; the rule baseline matches it.
-    #   lateral -> rule-blind and the GENUINELY HARD case (authorised, signal-clean; only
-    #     interaction history hints at it). Its honest recall is far below the inflated
-    #     numbers obtained when the training hard-negative mirrored this exact definition.
+    #   lateral -> rule-blind and the GENUINELY HARD case (authorised, signal-clean,
+    #     indistinguishable from benign exploration except by temporal/relational pattern).
+    #     This is the model's real target.
     print("\n--- METRICHE PER TIPO DI ANOMALIA ---")
-    vs_rule = {1: "rule-blind ", 2: "rule-trivial", 3: "rule-blind "}
+    vs_rule = {1: "OPA-owned  ", 2: "rule-trivial", 3: "rule-blind "}
     per_type = {}
     benign = test_types == 0
     for type_id, name in ((1, "policy"), (2, "contextual"), (3, "lateral")):
@@ -418,6 +452,7 @@ def train_tgn(cfg: TGNConfig = TGNConfig(), *, use_struct_head=True,
             "num_hops": cfg.num_hops,
             "hash_buckets": cfg.hash_buckets,
             "hash_dim": cfg.hash_dim,
+            "hist_feat_dim": cfg.hist_feat_dim,
             "neighbor_size": cfg.neighbor_size,
             "target_fpr": cfg.target_fpr,
         }
@@ -434,6 +469,7 @@ def train_tgn(cfg: TGNConfig = TGNConfig(), *, use_struct_head=True,
         "per_type": per_type,
         "use_struct_head": use_struct_head,
         "use_hash_identity": use_hash_identity,
+        "use_hist_feats": use_hist_feats,
     }
 
 

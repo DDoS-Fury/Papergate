@@ -43,6 +43,7 @@ def build_model(hp: dict, device: torch.device) -> ZTATemporalGraphNetwork:
         num_hops=int(hp.get("num_hops", 2)),
         hash_buckets=int(hp.get("hash_buckets", 10000)),
         hash_dim=int(hp.get("hash_dim", 16)),
+        hist_feat_dim=int(hp.get("hist_feat_dim", 3)),
     ).to(device)
     # The bounded neighbour loader lives outside the state_dict; build it on the
     # serving device so its buffers match the model's. Its contents are restored
@@ -87,9 +88,13 @@ def infer_score(model, src_idx: int, dst_idx: int, t_val: int, msg_vec, device) 
     
     delta_t_src_val = float(t_val - model.memory.last_update[src_idx].item())
     delta_t_src = torch.tensor([delta_t_src_val], dtype=torch.float, device=device)
-    
+
+    # Explicit interaction-history features for this src→dst pair (read-only; counts are
+    # advanced in update_memory, exactly mirroring the train-time predict-then-update order).
+    hist_feats = model.compute_hist_feats([src_idx], [dst_idx], device)
+
     out = model(
-        n_id, edge_index, hist_t, hist_msg, assoc[b_src], assoc[b_dst], b_msg, delta_t, delta_t_src
+        n_id, edge_index, hist_t, hist_msg, assoc[b_src], assoc[b_dst], b_msg, delta_t, delta_t_src, hist_feats
     ).squeeze(-1)
     prob_benign = torch.sigmoid(out).item()
     return 1.0 - prob_benign
@@ -110,6 +115,12 @@ def update_memory(model, src_idx: int, dst_idx: int, t_val: int, msg_vec, device
     if not hasattr(model, "last_contact"):
         model.last_contact = {}
     model.last_contact[(src_idx, dst_idx)] = t_val
+    # Advance the interaction-history counters (benign-gated: update_memory is only
+    # called for events judged benign, so anomalies never inflate an entity's history).
+    if not hasattr(model, "pair_count"):
+        model.pair_count, model.src_count = {}, {}
+    model.pair_count[(src_idx, dst_idx)] = model.pair_count.get((src_idx, dst_idx), 0) + 1
+    model.src_count[src_idx] = model.src_count.get(src_idx, 0) + 1
 
 
 def _reset_slot(model, idx: int) -> None:
@@ -126,6 +137,13 @@ def _reset_slot(model, idx: int) -> None:
         keys_to_delete = [k for k in model.last_contact.keys() if k[0] == idx or k[1] == idx]
         for k in keys_to_delete:
             del model.last_contact[k]
+    # Purge the recycled slot's interaction-history counters too, so a reused index
+    # cannot inherit the evicted entity's habituality.
+    if hasattr(model, "pair_count"):
+        for k in [k for k in model.pair_count if k[0] == idx or k[1] == idx]:
+            del model.pair_count[k]
+    if hasattr(model, "src_count"):
+        model.src_count.pop(idx, None)
     # Scrub the reused slot's temporal neighbourhood so a recycled index can't
     # inherit the evicted entity's interaction history.
     model.neighbor_loader.reset_node(idx)
@@ -263,6 +281,8 @@ def save_model(model, registry: NodeRegistry, threshold: float, hp: dict,
             "msg_s_store": model.memory.msg_s_store,
             "msg_d_store": model.memory.msg_d_store,
             "last_contact": getattr(model, "last_contact", {}),
+            "pair_count": getattr(model, "pair_count", {}),
+            "src_count": getattr(model, "src_count", {}),
             "neighbor_loader": model.neighbor_loader.state(),
             "hyperparams": hp,
         },
@@ -294,6 +314,8 @@ def load_model(checkpoint_path, stats_path, device):
     model.memory.msg_s_store = ckpt.get("msg_s_store", {})
     model.memory.msg_d_store = ckpt.get("msg_d_store", {})
     model.last_contact = ckpt.get("last_contact", {})
+    model.pair_count = ckpt.get("pair_count", {})
+    model.src_count = ckpt.get("src_count", {})
     # Restore the temporal neighbour buffers (map_location already placed the saved
     # tensors on ``device``); build_model created an empty loader of the right shape.
     if "neighbor_loader" in ckpt:
