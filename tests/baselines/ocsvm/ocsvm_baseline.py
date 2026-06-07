@@ -36,6 +36,7 @@ from sklearn.metrics import average_precision_score, roc_auc_score
 
 from graphagate.config import TGNConfig
 from graphagate.data.stream_synthetic import generate_streaming_data
+from graphagate.eval_common import causal_hist_features, causal_precursor_factor
 
 # Subsample size for the (O(n^2)) kernel fit.
 OCSVM_FIT_SAMPLES = 5000
@@ -52,17 +53,19 @@ def _binary_metrics(scores, labels, threshold):
     return precision, recall
 
 
-def _build_features(msg, src, dst, node_features):
-    """Per-event static feature matrix: edge msg (6) ⊕ src attrs (16) ⊕ dst attrs (16).
+def _build_features(msg, src, dst, node_features, y):
+    """Per-event features: edge msg (6) ⊕ src attrs (16) ⊕ dst attrs (16) ⊕ hist (3) = 41.
 
-    Identical to the Isolation Forest baseline so the two non-relational detectors
-    see exactly the same information.
+    Identical to the Isolation Forest baseline (incl. the causal interaction-history
+    counts) so the two non-relational detectors see exactly the same information, and the
+    comparison to the TGN is fair (history is given, not the temporal graph).
     """
     msg_np = msg.numpy()
     nf_np = node_features.numpy()
     src_feat = nf_np[src.numpy()]
     dst_feat = nf_np[dst.numpy()]
-    return np.concatenate([msg_np, src_feat, dst_feat], axis=1)  # [N, 38]
+    hist = causal_hist_features(src.numpy(), dst.numpy(), y.numpy())  # [N, 3]
+    return np.concatenate([msg_np, src_feat, dst_feat, hist], axis=1)  # [N, 41]
 
 
 def ocsvm_baseline(cfg: TGNConfig = TGNConfig()):
@@ -78,9 +81,14 @@ def ocsvm_baseline(cfg: TGNConfig = TGNConfig()):
         seed=cfg.seed,
     )
 
-    X = _build_features(msg, src, dst, node_features)
+    X = _build_features(msg, src, dst, node_features, y)
     y_np = y.numpy()
     types_np = types.numpy()
+
+    # Kill-chain precursor prior (same multiplicative factor + params as the TGN).
+    precursor_fac = causal_precursor_factor(
+        src.numpy(), t.numpy(), msg.numpy(), cfg.precursor_half_life, cfg.precursor_max_boost
+    )
 
     n = len(src)
     n_train = int(n * cfg.train_frac)
@@ -112,7 +120,7 @@ def ocsvm_baseline(cfg: TGNConfig = TGNConfig()):
 
     # --- THRESHOLD CALIBRATION (held-out benign slice) -----------------------
     print("\n--- CALIBRAZIONE SOGLIA (su flusso di validazione benigno) ---")
-    val_scores = anomaly_score(X_val)
+    val_scores = anomaly_score(X_val) * precursor_fac[train_end:val_end]
     benign_val_scores = val_scores[y_val == 0]
     if benign_val_scores.size == 0:
         raise RuntimeError("No benign events in the validation slice for calibration.")
@@ -125,7 +133,7 @@ def ocsvm_baseline(cfg: TGNConfig = TGNConfig()):
 
     # --- TEST EVALUATION -----------------------------------------------------
     print("\n--- INIZIO FASE DI INFERENZA / ANOMALY DETECTION ---")
-    test_scores = anomaly_score(X_test)
+    test_scores = anomaly_score(X_test) * precursor_fac[val_end:]
 
     auc = roc_auc_score(y_test, test_scores)
     ap = average_precision_score(y_test, test_scores)

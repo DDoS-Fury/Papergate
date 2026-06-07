@@ -40,6 +40,7 @@ from sklearn.metrics import average_precision_score, roc_auc_score
 
 from graphagate.config import TGNConfig
 from graphagate.data.stream_synthetic import generate_streaming_data
+from graphagate.eval_common import causal_hist_features, causal_precursor_factor
 
 
 def _binary_metrics(scores, labels, threshold):
@@ -57,13 +58,16 @@ def _binary_metrics(scores, labels, threshold):
     return precision, recall
 
 
-def _build_features(msg, src, dst, node_features):
-    """Per-event static feature matrix for the Isolation Forest.
+def _build_features(msg, src, dst, node_features, y):
+    """Per-event feature matrix for the Isolation Forest.
 
-    Each event is described *without any history*: the 6-dim edge feature
-    ``msg[i]`` concatenated with the 16-dim static attributes of its two
-    endpoints (source IP and destination resource), giving a 38-dim vector.
-    This is the most a non-relational detector can see about a single event.
+    The 6-dim edge feature ``msg[i]`` concatenated with the 16-dim static attributes of
+    both endpoints (source IP, destination resource) — 38 dims — PLUS the 3-dim causal
+    interaction-history features (per-pair / per-src benign access counts; see
+    ``graphagate.eval_common``), giving a 41-dim vector. The history columns are the same
+    tabular signal the TGN receives, so this non-relational baseline is compared fairly:
+    its remaining gap to the TGN measures the value of the temporal-graph machinery, not
+    of the counters.
 
     Tensors are torch tensors → converted to numpy here (sklearn input).
     """
@@ -71,7 +75,8 @@ def _build_features(msg, src, dst, node_features):
     nf_np = node_features.numpy()              # [total_nodes, 16]
     src_feat = nf_np[src.numpy()]              # [N, 16]  source (IP) attributes
     dst_feat = nf_np[dst.numpy()]              # [N, 16]  destination (resource) attributes
-    return np.concatenate([msg_np, src_feat, dst_feat], axis=1)  # [N, 38]
+    hist = causal_hist_features(src.numpy(), dst.numpy(), y.numpy())  # [N, 3] causal, benign-gated
+    return np.concatenate([msg_np, src_feat, dst_feat, hist], axis=1)  # [N, 41]
 
 
 def isolation_forest_baseline(cfg: TGNConfig = TGNConfig()):
@@ -90,10 +95,16 @@ def isolation_forest_baseline(cfg: TGNConfig = TGNConfig()):
         seed=cfg.seed,
     )
 
-    # Static per-event features (no graph structure, no temporal context).
-    X = _build_features(msg, src, dst, node_features)
+    # Per-event features incl. causal history counts (no graph structure / temporal context).
+    X = _build_features(msg, src, dst, node_features, y)
     y_np = y.numpy()
     types_np = types.numpy()
+
+    # Kill-chain precursor prior (same multiplicative factor + params as the TGN), applied
+    # to the val/test scores below so the baseline gets the SAME recon→lateral boost.
+    precursor_fac = causal_precursor_factor(
+        src.numpy(), t.numpy(), msg.numpy(), cfg.precursor_half_life, cfg.precursor_max_boost
+    )
 
     # Chronological split (the stream is already time-ordered → no shuffling).
     n = len(src)
@@ -123,7 +134,7 @@ def isolation_forest_baseline(cfg: TGNConfig = TGNConfig()):
 
     # --- THRESHOLD CALIBRATION (held-out benign slice) -----------------------
     print("\n--- CALIBRAZIONE SOGLIA (su flusso di validazione benigno) ---")
-    val_scores = anomaly_score(X_val)
+    val_scores = anomaly_score(X_val) * precursor_fac[train_end:val_end]
     benign_val_scores = val_scores[y_val == 0]
     if benign_val_scores.size == 0:
         raise RuntimeError("No benign events in the validation slice for calibration.")
@@ -136,7 +147,7 @@ def isolation_forest_baseline(cfg: TGNConfig = TGNConfig()):
 
     # --- TEST EVALUATION -----------------------------------------------------
     print("\n--- INIZIO FASE DI INFERENZA / ANOMALY DETECTION ---")
-    test_scores = anomaly_score(X_test)
+    test_scores = anomaly_score(X_test) * precursor_fac[val_end:]
 
     auc = roc_auc_score(y_test, test_scores)
     ap = average_precision_score(y_test, test_scores)

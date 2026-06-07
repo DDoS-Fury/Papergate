@@ -33,6 +33,7 @@ from sklearn.metrics import average_precision_score, roc_auc_score
 
 from graphagate.config import TGNConfig
 from graphagate.data.stream_synthetic import generate_streaming_data
+from graphagate.eval_common import causal_hist_features, causal_precursor_factor
 
 
 class StaticGNN(nn.Module):
@@ -44,17 +45,18 @@ class StaticGNN(nn.Module):
     feature statiche propagate sul grafo aggregato dal benigno di train.
     """
 
-    def __init__(self, node_feat_dim, msg_dim, hidden=64):
+    def __init__(self, node_feat_dim, msg_dim, hidden=64, hist_dim=3):
         super().__init__()
         self.conv1 = SAGEConv(node_feat_dim, hidden)
         self.conv2 = SAGEConv(hidden, hidden)
         self.dropout = nn.Dropout(0.1)
 
-        # Link predictor: MLP su [z_src ‖ z_dst ‖ msg] -> 1 logit.
+        # Link predictor: MLP su [z_src ‖ z_dst ‖ msg ‖ hist] -> 1 logit.
         # Analogo SEMPLICE del LinkPredictor del TGN, senza le feature statiche
-        # concatenate né la testa a coseno: lo scopo è proprio tenere il modello
-        # minimale per misurare l'apporto della parte temporale.
-        self.lin1 = nn.Linear(hidden * 2 + msg_dim, hidden)
+        # concatenate né la testa a coseno: lo scopo è tenere il modello minimale per
+        # misurare l'apporto della parte temporale — ma riceve le STESSE feature di
+        # storia (conteggi causali) del TGN, così il confronto è equo.
+        self.lin1 = nn.Linear(hidden * 2 + msg_dim + hist_dim, hidden)
         self.lin2 = nn.Linear(hidden, 1)
 
     def encode(self, x, edge_index):
@@ -64,9 +66,9 @@ class StaticGNN(nn.Module):
         h = self.conv2(h, edge_index)
         return h
 
-    def link_pred(self, z_src, z_dst, msg):
-        """Logit di benignità per l'arco src->dst che trasporta ``msg``."""
-        h = torch.cat([z_src, z_dst, msg], dim=-1)
+    def link_pred(self, z_src, z_dst, msg, hist):
+        """Logit di benignità per l'arco src->dst che trasporta ``msg`` (+ feature storia)."""
+        h = torch.cat([z_src, z_dst, msg, hist], dim=-1)
         h = self.lin1(h).relu()
         return self.lin2(h).squeeze(-1)
 
@@ -85,20 +87,24 @@ def _binary_metrics(scores, labels, threshold):
     return precision, recall
 
 
-def _score_events(model, z, src, dst, msg, device):
-    """Score di anomalia per ogni evento (s, d, msg).
+def _score_events(model, z, src, dst, msg, hist, device, precursor_fac=None):
+    """Score di anomalia per ogni evento (s, d, msg, hist).
 
     Orientamento "più alto = più anomalo", coerente con ``serve_tgn.infer_score``
     (= ``1 - P(benign)``): usiamo gli embedding ``z`` FISSI post-training
-    (transduttivo sul grafo di train) e calcoliamo ``1 - sigmoid(link_pred)``.
+    (transduttivo sul grafo di train) e calcoliamo ``1 - sigmoid(link_pred)``, poi
+    applichiamo lo stesso prior moltiplicativo del precursor kill-chain del TGN.
     """
     model.eval()
     with torch.no_grad():
         z_src = z[src.to(device)]
         z_dst = z[dst.to(device)]
-        logits = model.link_pred(z_src, z_dst, msg.to(device))
+        logits = model.link_pred(z_src, z_dst, msg.to(device), hist.to(device))
         scores = 1.0 - torch.sigmoid(logits)
-    return scores.cpu().numpy().astype(np.float64)
+    out = scores.cpu().numpy().astype(np.float64)
+    if precursor_fac is not None:
+        out = out * precursor_fac
+    return out
 
 
 def run(cfg: TGNConfig = TGNConfig()):
@@ -120,6 +126,15 @@ def run(cfg: TGNConfig = TGNConfig()):
 
     total_nodes = cfg.total_nodes
 
+    # Causal interaction-history features (stessa info tabellare del TGN) + prior del
+    # precursor kill-chain: dati alla baseline così il confronto isola la sola dinamica.
+    hist_all = torch.tensor(
+        causal_hist_features(src.numpy(), dst.numpy(), y.numpy()), dtype=torch.float
+    )
+    precursor_fac = causal_precursor_factor(
+        src.numpy(), t.numpy(), msg.numpy(), cfg.precursor_half_life, cfg.precursor_max_boost
+    )
+
     # Split cronologico identico al TGN (lo stream è già ordinato nel tempo).
     n = len(src)
     n_train = int(n * cfg.train_frac)
@@ -140,6 +155,7 @@ def run(cfg: TGNConfig = TGNConfig()):
     b_src = tr_src[benign]
     b_dst = tr_dst[benign]
     b_msg = tr_msg[benign]
+    b_hist = hist_all[:train_end][benign]  # causal history features dei positivi benigni
 
     # edge_index non orientato [2, 2*E]: entrambe le direzioni.
     edge_index = torch.stack(
@@ -160,6 +176,7 @@ def run(cfg: TGNConfig = TGNConfig()):
     p_src = b_src.to(device)
     p_dst = b_dst.to(device)
     p_msg = b_msg.to(device)
+    p_hist = b_hist.to(device)
     num_pos = p_src.shape[0]
     bs = cfg.batch_size
 
@@ -185,13 +202,14 @@ def run(cfg: TGNConfig = TGNConfig()):
             bp_src = p_src[idx]
             bp_dst = p_dst[idx]
             bp_msg = p_msg[idx]
+            bp_hist = p_hist[idx]
 
             # Ricalcola gli embedding sul grafo statico fisso: il grafo non cambia,
             # ma z evolve man mano che i pesi del GNN si aggiornano.
             z = model.encode(x, edge_index)
 
-            # POSITIVO: l'arco reale (src, dst, msg) -> 1.
-            pos_logit = model.link_pred(z[bp_src], z[bp_dst], bp_msg)
+            # POSITIVO: l'arco reale (src, dst, msg, hist) -> 1.
+            pos_logit = model.link_pred(z[bp_src], z[bp_dst], bp_msg, bp_hist)
 
             # NEGATIVO strutturale: (src, risorsa casuale, msg) -> 0. Identico al TGN
             # de-circolarizzato: destinazione pescata UNIFORMEMENTE sulle risorse, SENZA
@@ -203,12 +221,15 @@ def run(cfg: TGNConfig = TGNConfig()):
                 neg_dst[collide] = (
                     torch.randint(0, num_res, (int(collide.sum()),), device=device) + res_lo
                 )
-            neg_logit = model.link_pred(z[bp_src], z[neg_dst], bp_msg)
+            # Per una destinazione casuale la coppia (src, dst) non è quasi mai stata
+            # vista → le feature di storia del negativo sono ~zero (come per il TGN).
+            neg_hist = torch.zeros_like(bp_hist)
+            neg_logit = model.link_pred(z[bp_src], z[neg_dst], bp_msg, neg_hist)
 
             # NEGATIVO contestuale: rumore gaussiano additivo sul msg (meccanismo
             # DIVERSO dalla randomizzazione 0/1 delle anomalie contestuali di test).
             neg_msg = bp_msg + torch.randn_like(bp_msg) * 0.5
-            ctx_logit = model.link_pred(z[bp_src], z[bp_dst], neg_msg)
+            ctx_logit = model.link_pred(z[bp_src], z[bp_dst], neg_msg, bp_hist)
 
             # Stessa loss del TGN de-circolarizzato: pos vs strutturale + contestuale,
             # pesi uguali (niente più ×10 sull'hard-negative).
@@ -232,7 +253,8 @@ def run(cfg: TGNConfig = TGNConfig()):
     # --- CALIBRAZIONE SOGLIA (su flusso di validazione benigno) --------------
     print("\n--- CALIBRAZIONE SOGLIA (su flusso di validazione benigno) ---")
     val_scores = _score_events(
-        model, z, src[train_end:val_end], dst[train_end:val_end], msg[train_end:val_end], device
+        model, z, src[train_end:val_end], dst[train_end:val_end], msg[train_end:val_end],
+        hist_all[train_end:val_end], device, precursor_fac[train_end:val_end],
     )
     val_labels = y[train_end:val_end].numpy()
     benign_val_scores = val_scores[val_labels == 0]
@@ -248,7 +270,8 @@ def run(cfg: TGNConfig = TGNConfig()):
     # --- INFERENZA / ANOMALY DETECTION sul test ------------------------------
     print("\n--- INIZIO FASE DI INFERENZA / ANOMALY DETECTION ---")
     test_scores = _score_events(
-        model, z, src[val_end:], dst[val_end:], msg[val_end:], device
+        model, z, src[val_end:], dst[val_end:], msg[val_end:],
+        hist_all[val_end:], device, precursor_fac[val_end:],
     )
     test_labels = y[val_end:].numpy()
     test_types = types[val_end:].numpy()

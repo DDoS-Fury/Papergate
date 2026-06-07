@@ -21,6 +21,7 @@ from sklearn.metrics import average_precision_score, roc_auc_score
 
 from graphagate.config import TGNConfig, TGN_CHECKPOINT_PATH, TGN_STATS_PATH
 from graphagate.data.stream_synthetic import generate_streaming_data
+from graphagate.eval_common import causal_src_seen
 from graphagate.model.registry import NodeRegistry
 from graphagate.model.tgn import ZTATemporalGraphNetwork, stable_hash
 from graphagate.serve_tgn import (
@@ -432,6 +433,30 @@ def train_tgn(cfg: TGNConfig = TGNConfig(), *, use_struct_head=True,
         print(f"  {name:10s} | {vs_rule[type_id]} | n={int(l_sel.sum()):4d} | AUC: {t_auc:.4f} | "
               f"AP: {t_ap:.4f} | Recall@thr: {t_recall:.4f}")
 
+    # --- COLD-START CONDITIONING (lateral) -----------------------------------
+    # Lateral movement can only be flagged for an entity the model has *some* history on;
+    # many laterals hit IPs that are still cold (the stream admits IPs progressively, and
+    # a freshly-compromised IP may have no benign history yet). Report lateral recall split
+    # by whether the src had >=1 benign event before the event (warmed) vs not (cold), so
+    # the honest "where detection is even possible" number is visible next to the overall one.
+    src_seen_test = causal_src_seen(src.numpy(), y.numpy())[val_end:]
+    lat_mask = test_types == 3
+    lat_pred = (test_scores >= threshold).astype(int)
+    warmed = lat_mask & src_seen_test
+    cold = lat_mask & ~src_seen_test
+    cold_start = {"n_warmed": int(warmed.sum()), "n_cold": int(cold.sum())}
+    cold_start["recall_warmed"] = float(lat_pred[warmed].mean()) if warmed.any() else float("nan")
+    cold_start["recall_cold"] = float(lat_pred[cold].mean()) if cold.any() else float("nan")
+    if warmed.any() and lat_mask.any():
+        from sklearn.metrics import roc_auc_score as _auc
+        warmed_sel = (test_types == 0) | warmed
+        cold_start["auc_warmed"] = float(_auc((test_types[warmed_sel] == 3).astype(int), test_scores[warmed_sel]))
+    print("\n--- LATERAL: COLD-START CONDITIONING ---")
+    print(f"  warmed src (has benign history): n={cold_start['n_warmed']:4d} | "
+          f"recall@thr={cold_start['recall_warmed']:.4f} | AUC={cold_start.get('auc_warmed', float('nan')):.4f}")
+    print(f"  cold   src (no history yet)     : n={cold_start['n_cold']:4d} | "
+          f"recall@thr={cold_start['recall_cold']:.4f}  (detection not yet possible)")
+
     # --- RULE-BASED BASELINE (value-add reference) ---------------------------
     base_pred = _rule_baseline(test_msg)
     b_tp = int(((base_pred == 1) & (test_labels == 1)).sum())
@@ -484,6 +509,7 @@ def train_tgn(cfg: TGNConfig = TGNConfig(), *, use_struct_head=True,
         "agg_precision": precision,
         "agg_recall": recall,
         "per_type": per_type,
+        "cold_start": cold_start,
         "use_struct_head": use_struct_head,
         "use_hash_identity": use_hash_identity,
         "use_hist_feats": use_hist_feats,
