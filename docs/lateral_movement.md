@@ -97,8 +97,9 @@ La valutazione mirata su LANL ha dimostrato l'efficacia schiacciante della calib
 ## Leve ancora aperte (lavoro futuro)
 
 - **Dataset esterni aggiuntivi**: DARPA OpTC, CIC-IDS, oltre a LANL.
-- **Tuning del `cost_ratio`** per-deployment e cap esplicito sull'FPR del flusso clean se
-  l'orchestrator non assorbe i ri-challenge.
+- **Tuning per-deployment** di `cost_ratio` e di `clean_fpr_cap` (il cap esplicito sull'FPR del
+  flusso clean è già implementato, default 0.05; va calibrato su quanto l'orchestrator assorbe i
+  ri-challenge).
 
 ## Nota sulla loss "alta" con buone prestazioni
 
