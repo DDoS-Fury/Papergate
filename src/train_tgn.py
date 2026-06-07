@@ -12,6 +12,7 @@ Pipeline:
 """
 
 import random
+from dataclasses import dataclass
 
 import numpy as np
 import torch
@@ -19,6 +20,12 @@ import torch.nn.functional as F
 from torch.optim import AdamW
 from sklearn.metrics import average_precision_score, roc_auc_score
 
+from graphagate.calibration import (
+    cost_sensitive_threshold,
+    operating_point,
+    recall_fpr_curve,
+    routed_predict,
+)
 from graphagate.config import TGNConfig, TGN_CHECKPOINT_PATH, TGN_STATS_PATH
 from graphagate.data.stream_synthetic import generate_streaming_data
 from graphagate.eval_common import causal_src_seen
@@ -29,11 +36,13 @@ from graphagate.serve_tgn import (
     precursor_boost,
     record_alert,
     save_model,
+    signal_dirty,
     update_memory,
 )
 
 
-def _replay(model, src, dst, t, msg, y, device, *, threshold=None, gate_by_label=False):
+def _replay(model, src, dst, t, msg, y, device, *, threshold=None,
+            threshold_dirty=None, gate_by_label=False):
     """Per-event streaming replay matching the serving path.
 
     Memory update gating:
@@ -41,7 +50,11 @@ def _replay(model, src, dst, t, msg, y, device, *, threshold=None, gate_by_label
       - ``gate_by_label=False`` -> update on predicted benign (``score < threshold``),
         i.e. the realistic, label-free serving behaviour.
 
-    Returns ``(scores, labels)`` as numpy arrays.
+    Decision threshold mirrors :func:`serve_tgn.score_event`: when ``threshold_dirty`` is
+    given, the decision is *signal-routed* — events whose edge signal fires (broken JA3 /
+    Snort / sensor) use ``threshold_dirty`` and the rest use the recall-oriented
+    ``threshold`` (the signal-clean threshold). With ``threshold_dirty=None`` a single
+    ``threshold`` is used everywhere (legacy behaviour). Returns ``(scores, labels)``.
     """
     model.eval()
     scores = np.empty(src.shape[0], dtype=np.float64)
@@ -58,12 +71,16 @@ def _replay(model, src, dst, t, msg, y, device, *, threshold=None, gate_by_label
         scores[i] = score
         labels[i] = lab
 
-        do_update = (lab == 0) if gate_by_label else (score < threshold)
+        eff_thr = threshold
+        if threshold_dirty is not None and signal_dirty(msg_vec):
+            eff_thr = threshold_dirty
+
+        do_update = (lab == 0) if gate_by_label else (score < eff_thr)
         if do_update:
             update_memory(model, s, d, tv, msg_vec, device)
 
         snort_alert = msg_vec[1] > 0.5
-        is_anomaly = (score >= threshold) if not gate_by_label else (lab == 1)
+        is_anomaly = (score >= eff_thr) if not gate_by_label else (lab == 1)
         if is_anomaly or snort_alert:
             record_alert(model, s, tv)  # arm the precursor (recon → lateral)
             model.node_feat[s, 14] = max(0.0, model.node_feat[s, 14].item() - 0.5)
@@ -76,6 +93,18 @@ def _replay(model, src, dst, t, msg, y, device, *, threshold=None, gate_by_label
 def _binary_metrics(scores, labels, threshold):
     """Precision / recall (+ raw counts) of ``score >= threshold`` against ``labels``."""
     preds = (scores >= threshold).astype(int)
+    tp = int(((preds == 1) & (labels == 1)).sum())
+    fp = int(((preds == 1) & (labels == 0)).sum())
+    fn = int(((preds == 0) & (labels == 1)).sum())
+    precision = tp / (tp + fp) if (tp + fp) else 0.0
+    recall = tp / (tp + fn) if (tp + fn) else 0.0
+    return precision, recall
+
+
+def _pr_from_preds(preds, labels):
+    """Precision / recall of pre-computed 0/1 ``preds`` (e.g. signal-routed) vs ``labels``."""
+    preds = np.asarray(preds).astype(int)
+    labels = np.asarray(labels).astype(int)
     tp = int(((preds == 1) & (labels == 1)).sum())
     fp = int(((preds == 1) & (labels == 0)).sum())
     fn = int(((preds == 0) & (labels == 1)).sum())
@@ -131,21 +160,39 @@ def _sample_structural_negatives(num_events, num_res, res_lo, device, *, avoid=N
     return neg
 
 
-def train_tgn(cfg: TGNConfig = TGNConfig(), *, use_struct_head=True,
-              use_hash_identity=True, use_hist_feats=True, use_precursor=True, save=True):
-    """Train + evaluate the streaming TGN.
+@dataclass
+class StreamData:
+    """A ZTA access stream ready for :func:`train_tgn`, decoupled from the generator.
 
-    The keyword flags drive the ablation study (``tests/ablations``): they toggle the
-    structural-compatibility head and the hashed-identity embedding. ``save=False``
-    skips persisting the deployable artifact (ablation runs must not clobber the
-    full-model checkpoint in ``public/``). Returns a metrics dict.
+    This lets the training/calibration/evaluation pipeline run unchanged on an externally
+    mapped dataset (e.g. LANL auth — see ``tests/eval_lanl.py``) for external validity.
+    Node indices are ``0..num_nodes-1`` and ``keys[i]`` is the external registry key for
+    slot ``i`` (used for the deterministic hashed-identity embedding). Structural negatives
+    are drawn uniformly from the destination id-range ``[neg_lo, neg_lo + neg_num)`` — the
+    resource range for the synthetic stream, the whole computer range for host-to-host auth.
     """
-    torch.manual_seed(cfg.seed)
-    np.random.seed(cfg.seed)
-    random.seed(cfg.seed)
 
-    print("Generating streaming data...")
-    src, dst, t, msg, y, types, node_features, resource_uris, auth_mask = generate_streaming_data(
+    src: torch.Tensor
+    dst: torch.Tensor
+    t: torch.Tensor
+    msg: torch.Tensor
+    y: torch.Tensor
+    types: torch.Tensor
+    node_features: torch.Tensor
+    keys: list
+    num_nodes: int
+    neg_lo: int
+    neg_num: int
+
+
+def _synthetic_stream_data(cfg: TGNConfig) -> StreamData:
+    """Build :class:`StreamData` from the synthetic generator (the default path).
+
+    Reproduces the previous in-line setup exactly: users + IPs are keyed by their integer
+    ids, resources by their URI strings (so the orchestrator can send strings natively), and
+    structural negatives are sampled over the resource id-range.
+    """
+    src, dst, t, msg, y, types, node_features, resource_uris, _auth_mask = generate_streaming_data(
         num_users=cfg.num_users,
         num_ips=cfg.num_ips,
         num_resources=cfg.num_resources,
@@ -153,6 +200,43 @@ def train_tgn(cfg: TGNConfig = TGNConfig(), *, use_struct_head=True,
         benign_explore_prob=cfg.benign_explore_prob,
         seed=cfg.seed,
     )
+    # auth_mask is intentionally dropped — see _sample_structural_negatives (de-circularisation).
+    keys = list(range(cfg.num_users + cfg.num_ips)) + list(resource_uris)
+    return StreamData(
+        src=src, dst=dst, t=t, msg=msg, y=y, types=types, node_features=node_features,
+        keys=keys, num_nodes=cfg.total_nodes,
+        neg_lo=cfg.total_nodes - cfg.num_resources, neg_num=cfg.num_resources,
+    )
+
+
+def train_tgn(cfg: TGNConfig = TGNConfig(), *, dataset: "StreamData | None" = None,
+              use_struct_head=True, use_hash_identity=True, use_hist_feats=True,
+              use_precursor=True, save=True):
+    """Train + evaluate the streaming TGN.
+
+    The keyword flags drive the ablation study (``tests/ablations``): they toggle the
+    structural-compatibility head and the hashed-identity embedding. ``save=False``
+    skips persisting the deployable artifact (ablation runs must not clobber the
+    full-model checkpoint in ``public/``). ``dataset`` injects an externally-mapped
+    :class:`StreamData` (e.g. LANL auth) instead of the synthetic generator, reusing the
+    whole pipeline for external validity; ``None`` is the default synthetic path. Returns
+    a metrics dict.
+    """
+    torch.manual_seed(cfg.seed)
+    np.random.seed(cfg.seed)
+    random.seed(cfg.seed)
+
+    if dataset is None:
+        print("Generating streaming data...")
+        data = _synthetic_stream_data(cfg)
+    else:
+        print("Using injected dataset stream...")
+        data = dataset
+    src, dst, t, msg, y, types = data.src, data.dst, data.t, data.msg, data.y, data.types
+    node_features = data.node_features
+    total_nodes = data.num_nodes
+    capacity = total_nodes + cfg.capacity_headroom
+    neg_lo, neg_num = data.neg_lo, data.neg_num
 
     n = len(src)
     n_train = int(n * cfg.train_frac)
@@ -162,26 +246,20 @@ def train_tgn(cfg: TGNConfig = TGNConfig(), *, use_struct_head=True,
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
-    # NOTE: ``auth_mask`` (the generator's per-IP authorised-resource matrix) is
-    # intentionally NOT used during training — see _sample_structural_negatives.
-    # Using it would re-introduce the circular "authorised-but-non-habitual" negative
-    # that mirrors the lateral-movement test anomaly. It stays unused on purpose.
+    # NOTE: the data generator's per-IP authorised-resource matrix is intentionally NOT
+    # used during training — see _sample_structural_negatives. Using it would re-introduce
+    # the circular "authorised-but-non-habitual" negative that mirrors the lateral-movement
+    # test anomaly. It stays unused on purpose (dropped in _synthetic_stream_data).
 
     print("--- INIZIO ADDESTRAMENTO UNSUPERVISED ---")
 
-    # Entity registry: users and IPs are still mapped by their int ids, but resources
-    # are registered using their actual string URIs so the Orchestrator can send strings natively.
-    registry = NodeRegistry(capacity=cfg.capacity)
-    registry.preregister(range(cfg.num_users + cfg.num_ips))
-    res_start = cfg.num_users + cfg.num_ips
-    for i, uri in enumerate(resource_uris):
-        slot = res_start + i
-        registry._key_to_idx[uri] = slot
-        registry._idx_to_key[slot] = uri
-        registry._next_idx = max(registry._next_idx, slot + 1)
+    # Entity registry: ``data.keys[i]`` is the external key for slot ``i`` (int ids for
+    # users/IPs, URI strings for resources in the synthetic stream; computer names for LANL).
+    registry = NodeRegistry(capacity=capacity)
+    registry.preregister(data.keys)
 
     model = ZTATemporalGraphNetwork(
-        num_nodes=cfg.capacity,
+        num_nodes=capacity,
         node_feat_dim=cfg.node_feat_dim,
         msg_dim=cfg.msg_dim,
         memory_dim=cfg.memory_dim,
@@ -196,10 +274,10 @@ def train_tgn(cfg: TGNConfig = TGNConfig(), *, use_struct_head=True,
     # buffer for the preregistered training entities. Slots reserved for entities
     # first seen at serving time stay zero until those entities supply their features.
     with torch.no_grad():
-        model.node_feat[: cfg.total_nodes] = node_features.to(device)
+        model.node_feat[:total_nodes] = node_features.to(device)
         # Hashed Identity Trick (deterministic across processes/runs — see stable_hash).
-        hashes = [stable_hash(registry._idx_to_key[i], cfg.hash_buckets) for i in range(cfg.total_nodes)]
-        model.node_hash[: cfg.total_nodes] = torch.tensor(hashes, dtype=torch.long, device=device)
+        hashes = [stable_hash(registry._idx_to_key[i], cfg.hash_buckets) for i in range(total_nodes)]
+        model.node_hash[:total_nodes] = torch.tensor(hashes, dtype=torch.long, device=device)
 
     # Bounded temporal neighbour loader (built on the model device after .to).
     model.init_neighbor_loader(cfg.neighbor_size, device)
@@ -270,8 +348,8 @@ def train_tgn(cfg: TGNConfig = TGNConfig(), *, use_struct_head=True,
             # the src's history — the likelihood signal that exposes lateral movement.
             P = len(p_src)
             K = cfg.infonce_k
-            res_lo = cfg.total_nodes - cfg.num_resources
-            num_res = cfg.num_resources
+            res_lo = neg_lo
+            num_res = neg_num
             neg_flat = _sample_structural_negatives(
                 P * K, num_res, res_lo, device, avoid=p_dst.repeat_interleave(K)
             )  # (P*K,)
@@ -373,12 +451,44 @@ def train_tgn(cfg: TGNConfig = TGNConfig(), *, use_struct_head=True,
     benign_val_scores = val_scores[val_labels == 0]
     if benign_val_scores.size == 0:
         raise RuntimeError("No benign events in the validation slice for calibration.")
-    threshold = float(np.quantile(benign_val_scores, 1.0 - cfg.target_fpr))
+    val_types = types[train_end:val_end].numpy()
+    val_msg = msg[train_end:val_end].numpy()
+
+    # Signal-DIRTY threshold (events whose edge signal already fires): keep the conservative
+    # benign-FPR quantile — the cheap rule baseline already catches these, no need to drop it.
+    threshold_dirty = float(np.quantile(benign_val_scores, 1.0 - cfg.target_fpr))
+
+    # Signal-CLEAN threshold: among signal-clean events the realistic discrimination the model
+    # owns is benign vs lateral (contextual is signal-dirty; policy is OPA-blocked upstream).
+    # Calibrate the cost-sensitive threshold on exactly that population so the ~0.76 lateral
+    # AUC becomes recall. ``threshold`` is the primary (clean-stream) decision threshold.
+    val_clean = ~_rule_baseline(val_msg).astype(bool)
+    cal_mask = val_clean & ((val_labels == 0) | (val_types == 3))
+    cal_scores = val_scores[cal_mask]
+    cal_labels = (val_types[cal_mask] == 3).astype(int)
+    if cal_labels.sum() == 0:
+        # No lateral examples to calibrate against (e.g. a window without red-team activity):
+        # fall back to the conservative FPR threshold so behaviour degrades gracefully.
+        threshold = threshold_dirty
+    else:
+        threshold = cost_sensitive_threshold(
+            cal_scores, cal_labels, cost_ratio=cfg.cost_ratio,
+            target_fpr_cap=cfg.clean_fpr_cap,
+        )
     print(
         f"Benign val score: mean={benign_val_scores.mean():.4f} "
-        f"p95={np.quantile(benign_val_scores, 0.95):.4f} | "
-        f"threshold@FPR={cfg.target_fpr}: {threshold:.4f}"
+        f"p95={np.quantile(benign_val_scores, 0.95):.4f}"
     )
+    print(
+        f"threshold_dirty@FPR={cfg.target_fpr}: {threshold_dirty:.4f} | "
+        f"threshold_clean@cost_ratio={cfg.cost_ratio}: {threshold:.4f} "
+        f"(clean cal: n_benign={int((cal_labels == 0).sum())} n_lateral={int(cal_labels.sum())})"
+    )
+    # Lateral recall/FPR trade-off the clean threshold was picked from (operator/OPA reference).
+    if cal_labels.sum() > 0:
+        print("  clean-stream lateral recall vs benign FPR (reference curve):")
+        for thr, rec, fpr in recall_fpr_curve(cal_scores, cal_labels, n_points=6):
+            print(f"    thr={thr:.4f} | lateral_recall={rec:.3f} | benign_fpr={fpr:.4f}")
 
     # --- STREAMING EVALUATION (event-by-event, predicted-benign gating) ------
     print("\n--- INIZIO FASE DI INFERENZA / ANOMALY DETECTION (per-evento) ---")
@@ -389,17 +499,36 @@ def train_tgn(cfg: TGNConfig = TGNConfig(), *, use_struct_head=True,
     model.recent_alert.clear()  # don't let calibration-slice alerts pre-condition the test stream
     test_scores, test_labels = _replay(
         model, src[val_end:], dst[val_end:], t[val_end:], msg[val_end:], y[val_end:],
-        device, threshold=threshold, gate_by_label=False,
+        device, threshold=threshold, threshold_dirty=threshold_dirty, gate_by_label=False,
     )
 
     test_types = types[val_end:].numpy()
     test_msg = msg[val_end:].numpy()
 
+    # Signal-routed decision (matches serving): clean events -> cost-sensitive threshold,
+    # dirty events -> conservative FPR threshold.
+    dirty_test = _rule_baseline(test_msg).astype(bool)
+    test_preds = routed_predict(test_scores, dirty_test, threshold, threshold_dirty)
+
     auc = roc_auc_score(test_labels, test_scores)
     ap = average_precision_score(test_labels, test_scores)
-    precision, recall = _binary_metrics(test_scores, test_labels, threshold)
+    precision, recall = _pr_from_preds(test_preds, test_labels)
     print(f"Test Stream | AUC: {auc:.4f} | AP: {ap:.4f}")
-    print(f"At threshold {threshold:.4f} | Precision: {precision:.4f} | Recall: {recall:.4f}")
+    print(f"Routed decision | Precision: {precision:.4f} | Recall: {recall:.4f}")
+
+    # --- HEADLINE: AUC -> operational recall ---------------------------------
+    # Before = the previous single global threshold (the benign-FPR quantile applied to
+    # everything). After = signal-routed cost-sensitive decision. This is the value-add.
+    lat = test_types == 3
+    benign_test = test_labels == 0
+    old_preds = (test_scores >= threshold_dirty).astype(int)
+    old_lat_recall = float(old_preds[lat].mean()) if lat.any() else float("nan")
+    new_lat_recall = float(test_preds[lat].mean()) if lat.any() else float("nan")
+    old_fpr = float(old_preds[benign_test].mean()) if benign_test.any() else float("nan")
+    new_fpr = float(test_preds[benign_test].mean()) if benign_test.any() else float("nan")
+    print("\n--- LATERAL RECALL: GLOBAL-FPR THRESHOLD  vs  COST-SENSITIVE ROUTING ---")
+    print(f"  before (global @FPR={cfg.target_fpr}): lateral_recall={old_lat_recall:.4f} | benign_fpr={old_fpr:.4f}")
+    print(f"  after  (routed cost-sensitive)       : lateral_recall={new_lat_recall:.4f} | benign_fpr={new_fpr:.4f}")
 
     # --- PER-ANOMALY-TYPE BREAKDOWN ------------------------------------------
     # Per-type AUC/AP are benign (type 0) vs that type, so an aggregate cannot mask a
@@ -428,7 +557,9 @@ def train_tgn(cfg: TGNConfig = TGNConfig(), *, use_struct_head=True,
             continue
         t_auc = roc_auc_score(l_sel, s_sel)
         t_ap = average_precision_score(l_sel, s_sel)
-        _, t_recall = _binary_metrics(s_sel, l_sel, threshold)
+        # Recall at the routed operational decision (not a single global threshold).
+        preds_sel = test_preds[sel]
+        t_recall = float(preds_sel[l_sel == 1].mean()) if (l_sel == 1).any() else 0.0
         per_type[name] = {"auc": t_auc, "ap": t_ap, "recall": t_recall, "n": int(l_sel.sum())}
         print(f"  {name:10s} | {vs_rule[type_id]} | n={int(l_sel.sum()):4d} | AUC: {t_auc:.4f} | "
               f"AP: {t_ap:.4f} | Recall@thr: {t_recall:.4f}")
@@ -441,7 +572,7 @@ def train_tgn(cfg: TGNConfig = TGNConfig(), *, use_struct_head=True,
     # the honest "where detection is even possible" number is visible next to the overall one.
     src_seen_test = causal_src_seen(src.numpy(), y.numpy())[val_end:]
     lat_mask = test_types == 3
-    lat_pred = (test_scores >= threshold).astype(int)
+    lat_pred = test_preds  # routed operational decision
     warmed = lat_mask & src_seen_test
     cold = lat_mask & ~src_seen_test
     cold_start = {"n_warmed": int(warmed.sum()), "n_cold": int(cold.sum())}
@@ -484,7 +615,7 @@ def train_tgn(cfg: TGNConfig = TGNConfig(), *, use_struct_head=True,
     # Ablation runs (save=False) must not overwrite the full-model artifact in public/.
     if save:
         hp = {
-            "capacity": cfg.capacity,
+            "capacity": capacity,
             "node_feat_dim": cfg.node_feat_dim,
             "msg_dim": cfg.msg_dim,
             "memory_dim": cfg.memory_dim,
@@ -495,19 +626,33 @@ def train_tgn(cfg: TGNConfig = TGNConfig(), *, use_struct_head=True,
             "hist_feat_dim": cfg.hist_feat_dim,
             "neighbor_size": cfg.neighbor_size,
             "target_fpr": cfg.target_fpr,
+            "cost_ratio": cfg.cost_ratio,
+            "clean_fpr_cap": cfg.clean_fpr_cap,
             "precursor_half_life": cfg.precursor_half_life,
             "precursor_max_boost": cfg.precursor_max_boost,
         }
-        save_model(model, registry, threshold, hp, TGN_CHECKPOINT_PATH, TGN_STATS_PATH)
+        op_new = operating_point(test_scores, test_labels, test_types, threshold)
+        save_model(
+            model, registry, threshold, hp, TGN_CHECKPOINT_PATH, TGN_STATS_PATH,
+            threshold_dirty=threshold_dirty,
+            calibration={"mode": "cost", "cost_ratio": cfg.cost_ratio,
+                         "clean_fpr_cap": cfg.clean_fpr_cap, "target_fpr": cfg.target_fpr},
+            operating_point=op_new,
+        )
         print(f"\nSaved checkpoint -> {TGN_CHECKPOINT_PATH}")
         print(f"Saved stats      -> {TGN_STATS_PATH}")
 
     return {
         "threshold": threshold,
+        "threshold_dirty": threshold_dirty,
         "agg_auc": auc,
         "agg_ap": ap,
         "agg_precision": precision,
         "agg_recall": recall,
+        "lateral_recall_before": old_lat_recall,
+        "lateral_recall_after": new_lat_recall,
+        "fpr_before": old_fpr,
+        "fpr_after": new_fpr,
         "per_type": per_type,
         "cold_start": cold_start,
         "use_struct_head": use_struct_head,

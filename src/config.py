@@ -80,8 +80,20 @@ class TGNConfig:
 
     # Spare memory slots reserved for entities first seen at inference time.
     capacity_headroom: int = 50000
-    # Decision-threshold calibration target (benign false-positive rate).
+    # Decision-threshold calibration target (benign false-positive rate). Used for the
+    # conservative *signal-dirty* threshold (events whose edge signal already fires).
     target_fpr: float = 0.01
+    # Cost-sensitive calibration for the *signal-clean* stream, where lateral movement is
+    # indistinguishable from benign except by temporal pattern. The clean threshold minimises
+    # ``cost_ratio * FN + FP`` (FN = missed detection ≫ FP = false alarm the orchestrator can
+    # re-challenge), turning the ~0.76 lateral AUC ranking into operational recall. See
+    # graphagate.calibration.cost_sensitive_threshold.
+    cost_ratio: float = 20.0
+    # Guardrail on the cost-sensitive search: cap the *clean-stream* benign false-positive rate.
+    # Lateral AUC ~0.70 is a steep recall/FPR trade-off, so an uncapped cost ratio would chase
+    # recall to an absurd FPR; the cap fixes the operating point at the max recall achievable
+    # while no more than this fraction of benign clean events are re-challenged by the orchestrator.
+    clean_fpr_cap: float = 0.05
 
     seed: int = 42
 

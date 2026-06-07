@@ -93,6 +93,27 @@ services:
     entrypoint: ["python"]
     command: ["/app/tests/baselines/ocsvm/ocsvm_baseline.py"]
 
+  # Validità esterna: valuta il detector di movimenti laterali sul dataset PUBBLICO
+  # LANL auth (etichette red-team), rimappato come stream ZTA. Scarica auth.txt.gz e
+  # redteam.txt da https://csr.lanl.gov/data/cyber1/ e mettili in ./data (NON versionati);
+  # riusa l'intera pipeline via train_tgn(dataset=...). Vedi tests/eval_lanl.py.
+  eval-lanl:
+    <<: *base
+    profiles: ["eval-lanl"]
+    container_name: graphagate-eval-lanl
+    volumes:
+      - ./public:/app/public
+      - ./src:/app/src
+      - ./tests:/app/tests
+      - ./data:/data
+    entrypoint: ["python"]
+    command: ["/app/tests/eval_lanl.py",
+              "--auth-path", "/data/auth.txt.gz",
+              "--redteam-path", "/data/redteam.txt",
+              "--window-start", "720000",
+              "--window-end", "780000",
+              "--epochs", "2"]
+
   # Ablation study: full vs no-struct-head vs no-hashed-identity (save=False, non
   # tocca gli artifact in public/). Il contributo della parte temporale è invece
   # isolato dalla baseline Static GNN.

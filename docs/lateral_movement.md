@@ -60,12 +60,40 @@ Nella versione senza feature di storia, rimuoverla faceva crollare il lateral AU
 la novità per-entità è iniettata **esplicitamente** dai contatori, rimuoverla non peggiora
 (0.773 vs 0.770): le due cose portano lo stesso segnale, e quello esplicito lo rende leggibile.
 
+## Da ranking a recall operativa: soglia cost-sensitive + routing sul segnale
+
+L'AUC 0.76 è reale ma una soglia **globale** all'1% FPR (fissata dalle classi facili) lascia il
+recall laterale ~5%. Ora la calibrazione è **cost-sensitive** e **instradata sul segnale**
+(`src/calibration.py`, applicata in `train_tgn` e `serve_tgn.score_event`):
+
+- A serving la classe vera è ignota, ma il **segnale di edge è osservabile** (JA3/Snort/sensori →
+  `_rule_baseline`). Si separano quindi due flussi: *signal-dirty* (contestuale — già preso dalla
+  regola, resta sulla soglia conservativa `threshold_dirty@FPR`) e *signal-clean* (dove il laterale
+  è indistinguibile dal benigno se non per il pattern temporale).
+- Sul flusso **clean** la soglia minimizza `cost_ratio·FN + FP` (`TGNConfig.cost_ratio`, default 20):
+  un movimento laterale mancato costa molto più di un falso allarme che l'orchestrator può
+  ri-sfidare. Questo abbassa la soglia fin dove stanno i laterali, convertendo il ranking in recall.
+- `train_tgn` stampa il confronto **prima/dopo** (recall laterale e FPR benigno alla vecchia soglia
+  globale vs nuova decisione instradata) e la curva recall/FPR di riferimento; `serve_tgn` /
+  `serve_api` espongono `threshold` (clean) e `threshold_dirty` (anche in `/health`). OPA resta il
+  decisore finale allow/deny.
+
+## Validità esterna: LANL auth (implementata)
+
+`tests/eval_lanl.py` rimappa il dataset **pubblico** LANL 'Comprehensive Multi-Source' (log di
+autenticazione host→host con etichette **red-team** = movimento laterale) sullo schema dello stream
+ZTA via `tests/datasets/lanl_auth.py`, e riusa l'intera pipeline tramite `train_tgn(dataset=...)`
+(stessa calibrazione cost-sensitive, breakdown per-tipo, cold-start). I file (`auth.txt.gz`,
+`redteam.txt`, da <https://csr.lanl.gov/data/cyber1/>) non sono versionati: vanno in `./data` e si
+lancia col profilo Compose `eval-lanl`. Il mapping tiene le colonne di allarme *pulite* (LANL non ha
+TLS/IDS e il laterale red-team è signal-clean), così la regola resta cieca al laterale e il segnale
+discriminante è solo quello temporale/relazionale — il test onesto.
+
 ## Leve ancora aperte (lavoro futuro)
 
-- **Soglia per-classe / cost-sensitive**: l'AUC 0.76 è reale ma la soglia globale all'1% FPR (fissata
-  dalle classi facili) lascia il recall laterale ~5%. Una soglia dedicata o un report a recall
-  fissato convertirebbe il ranking in detection operativa.
-- **Validità esterna**: dataset reale (LANL/OpTC/CIC-IDS) rimappato come stream ZTA.
+- **Dataset esterni aggiuntivi**: DARPA OpTC, CIC-IDS, oltre a LANL.
+- **Tuning del `cost_ratio`** per-deployment e cap esplicito sull'FPR del flusso clean se
+  l'orchestrator non assorbe i ri-challenge.
 
 ## Nota sulla loss "alta" con buone prestazioni
 

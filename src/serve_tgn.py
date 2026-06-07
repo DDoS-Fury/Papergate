@@ -157,6 +157,21 @@ def record_alert(model, src_idx: int, t_val: int) -> None:
     model.recent_alert[src_idx] = t_val
 
 
+def signal_dirty(features) -> bool:
+    """Whether an event's edge signal already fires (the observable, class-free split).
+
+    ``features`` is the message vector ``[ja3, snort, s1, s2, s3, method]``: the signal is
+    "dirty" when TLS trust is broken (``ja3==0``), Snort alerts, or any sensor fires — the
+    same condition as the rule baseline. The true anomaly class is unknown at serving time,
+    but this *is* observable, so the decision threshold is routed on it: dirty events keep
+    the conservative FPR threshold (the cheap rule already catches them), while signal-clean
+    events — where lateral movement is indistinguishable from benign except by temporal
+    pattern — get the recall-oriented cost-sensitive threshold. See ``score_event``.
+    """
+    ja3, snort, s1, s2, s3 = (float(features[i]) for i in range(5))
+    return ja3 <= 0.5 or snort > 0.5 or s1 > 0.5 or s2 > 0.5 or s3 > 0.5
+
+
 def _reset_slot(model, idx: int) -> None:
     """Cold-start a reused memory slot after eviction."""
     with torch.no_grad():
@@ -205,6 +220,7 @@ def score_event(
     features,
     device,
     *,
+    threshold_dirty=None,
     src_feat=None,
     dst_feat=None,
     update: bool = True,
@@ -248,7 +264,13 @@ def score_event(
     # → lateral). Computed before record_alert so the current event is not boosted by
     # itself; multiplicative so benign near-zero scores stay benign.
     score = min(1.0, raw_score * precursor_boost(model, src_idx, timestamp))
-    is_anomaly = score >= threshold
+    # Signal-routed decision: dirty-signal events use the conservative threshold; signal-clean
+    # events (where lateral movement hides) use the recall-oriented ``threshold``. When no
+    # dirty threshold is supplied, a single global ``threshold`` is used (legacy behaviour).
+    eff_threshold = threshold
+    if threshold_dirty is not None and signal_dirty(features):
+        eff_threshold = threshold_dirty
+    is_anomaly = score >= eff_threshold
 
     snort_alert = features[1] > 0.5
     if is_anomaly or snort_alert:
@@ -308,8 +330,15 @@ def commit_event(
 
 
 def save_model(model, registry: NodeRegistry, threshold: float, hp: dict,
-               checkpoint_path, stats_path) -> None:
-    """Persist the deployable artifact (weights + memory + registry + threshold)."""
+               checkpoint_path, stats_path, *, threshold_dirty=None,
+               calibration=None, operating_point=None) -> None:
+    """Persist the deployable artifact (weights + memory + registry + threshold).
+
+    ``threshold`` is the primary (signal-clean / cost-sensitive) decision threshold;
+    ``threshold_dirty`` is the conservative threshold for events whose edge signal already
+    fires (defaults to ``threshold`` when omitted, so old single-threshold artifacts stay
+    valid). ``calibration`` / ``operating_point`` are optional provenance for observability.
+    """
     checkpoint_path = Path(checkpoint_path)
     stats_path = Path(stats_path)
     checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
@@ -333,20 +362,27 @@ def save_model(model, registry: NodeRegistry, threshold: float, hp: dict,
 
     stats = {
         "threshold": float(threshold),
+        "threshold_dirty": float(threshold_dirty if threshold_dirty is not None else threshold),
         "target_fpr": hp.get("target_fpr"),
         "capacity": int(hp["capacity"]),
         "registry": registry.to_dict(),
     }
+    if calibration is not None:
+        stats["calibration"] = calibration
+    if operating_point is not None:
+        stats["operating_point"] = operating_point
     with open(stats_path, "w", encoding="utf-8") as f:
         json.dump(stats, f, indent=2)
 
 
 def load_model(checkpoint_path, stats_path, device):
-    """Reconstruct ``(model, registry, threshold, hp)`` for serving.
+    """Reconstruct ``(model, registry, threshold, threshold_dirty, hp)`` for serving.
 
-    ``hp`` (the saved hyper-parameter dict) is returned so a long-running server can
-    later re-persist the evolved state via :func:`save_model` without re-reading the
-    checkpoint.
+    ``threshold`` is the signal-clean (cost-sensitive) decision threshold and
+    ``threshold_dirty`` the conservative one for signal-dirty events; old artifacts without
+    a dirty threshold fall back to ``threshold`` (single-threshold behaviour). ``hp`` (the
+    saved hyper-parameter dict) is returned so a long-running server can later re-persist the
+    evolved state via :func:`save_model` without re-reading the checkpoint.
     """
     ckpt = torch.load(checkpoint_path, map_location=device, weights_only=False)
     hp = ckpt["hyperparams"]
@@ -369,4 +405,5 @@ def load_model(checkpoint_path, stats_path, device):
         stats = json.load(f)
     registry = NodeRegistry.from_dict(stats["registry"])
     threshold = float(stats["threshold"])
-    return model, registry, threshold, hp
+    threshold_dirty = float(stats.get("threshold_dirty", threshold))
+    return model, registry, threshold, threshold_dirty, hp

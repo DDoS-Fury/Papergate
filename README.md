@@ -171,17 +171,19 @@ temporale-relazionale**, non dei contatori.
 Dettagli su de-circolarizzazione, de-degenerazione, ablation multi-seed, cold-start e
 anti-poisoning in 👉 [`docs/inductive_testing.md`](docs/inductive_testing.md) e
 [`docs/lateral_movement.md`](docs/lateral_movement.md). Riproduzione: profili Compose
-`training-tgn`, `baseline-iforest`, `baseline-ocsvm`, `baseline-gnn`, `ablations`, `verify-tgn`.
+`training-tgn`, `baseline-iforest`, `baseline-ocsvm`, `baseline-gnn`, `ablations`, `verify-tgn`,
+`eval-lanl` (validità esterna su LANL auth — vedi sotto).
 
 ## Limitazioni e Threat Model
 
 Da leggere prima di trattare le metriche come garanzie di produzione:
 
-- **Validità esterna (il limite principale).** La valutazione è **interamente sintetica**:
-  il generatore definisce esso stesso cosa sia un'anomalia. La de-circolarizzazione rende
-  il confronto onesto *dentro* questo mondo, ma non sostituisce dati reali. Passo successivo
-  per solidità da paper: un dataset reale/pubblico (es. LANL auth, DARPA OpTC, CIC-IDS)
-  rimappato come stream di accessi ZTA.
+- **Validità esterna.** La valutazione principale è sintetica (il generatore definisce esso
+  stesso cosa sia un'anomalia); la de-circolarizzazione la rende onesta *dentro* quel mondo.
+  Per validità esterna è ora disponibile una valutazione su dataset **pubblico**: LANL auth
+  (etichette red-team = movimento laterale) rimappato come stream ZTA, profilo Compose
+  `eval-lanl` (vedi `tests/eval_lanl.py` e `docs/lateral_movement.md`). Estensioni future:
+  DARPA OpTC, CIC-IDS.
 - **Anti-poisoning gate auto-deciso.** Memoria/vicinato si aggiornano solo per eventi
   *scorati* benigni. Conseguenze intrinseche: un attaccante stealthy scorato benigno
   **avvelena** la baseline; un benigno scorato anomalo non viene mai appreso (**starvation**).

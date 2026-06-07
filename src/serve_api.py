@@ -76,6 +76,7 @@ class _State:
         self.model = None
         self.registry = None
         self.threshold: float = 0.0
+        self.threshold_dirty: float = 0.0
         self.hp: dict = {}
         self.device: Optional[torch.device] = None
         self.checkpoint_path = os.environ.get("GRAPHAGATE_CHECKPOINT", str(TGN_CHECKPOINT_PATH))
@@ -108,13 +109,15 @@ async def _broadcast_task(event_data: dict):
 async def lifespan(app: FastAPI):
     """Load the checkpoint once on startup; save the evolved state on shutdown."""
     STATE.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model, registry, threshold, hp = load_model(
+    model, registry, threshold, threshold_dirty, hp = load_model(
         STATE.checkpoint_path, STATE.stats_path, STATE.device
     )
     STATE.model, STATE.registry, STATE.threshold, STATE.hp = model, registry, threshold, hp
+    STATE.threshold_dirty = threshold_dirty
     print(
         f"[serve_api] model_loaded device={STATE.device} "
-        f"registry={len(registry)}/{int(hp['capacity'])} threshold={threshold:.6f}",
+        f"registry={len(registry)}/{int(hp['capacity'])} "
+        f"threshold={threshold:.6f} threshold_dirty={threshold_dirty:.6f}",
         flush=True,
     )
     yield
@@ -123,6 +126,7 @@ async def lifespan(app: FastAPI):
         save_model(
             STATE.model, STATE.registry, STATE.threshold, STATE.hp,
             STATE.checkpoint_path, STATE.stats_path,
+            threshold_dirty=STATE.threshold_dirty,
         )
     print("[serve_api] state persisted on shutdown", flush=True)
 
@@ -232,6 +236,7 @@ def health() -> dict:
         "registry_size": len(STATE.registry) if STATE.loaded else 0,
         "capacity": int(STATE.hp.get("capacity", 0)),
         "threshold": STATE.threshold,
+        "threshold_dirty": STATE.threshold_dirty,
         "msg_dim": int(STATE.hp.get("msg_dim", 0)),
         "node_feat_dim": int(STATE.hp.get("node_feat_dim", 0)),
     }
@@ -246,6 +251,7 @@ def infer(ev: EventIn, background_tasks: BackgroundTasks) -> ScoreOut:
         score, is_anomaly = score_event(
             STATE.model, STATE.registry, STATE.threshold,
             ev.key_src, ev.key_dst, ev.timestamp, ev.features, STATE.device,
+            threshold_dirty=STATE.threshold_dirty,
             src_feat=ev.src_feat, dst_feat=ev.dst_feat, update=False,
         )
     t1 = time.perf_counter()
@@ -286,6 +292,7 @@ def score(ev: EventIn, background_tasks: BackgroundTasks) -> ScoreOut:
         s, is_anomaly = score_event(
             STATE.model, STATE.registry, STATE.threshold,
             ev.key_src, ev.key_dst, ev.timestamp, ev.features, STATE.device,
+            threshold_dirty=STATE.threshold_dirty,
             src_feat=ev.src_feat, dst_feat=ev.dst_feat, update=True,
         )
     t1 = time.perf_counter()
@@ -311,6 +318,7 @@ def persist() -> PersistOut:
         save_model(
             STATE.model, STATE.registry, STATE.threshold, STATE.hp,
             STATE.checkpoint_path, STATE.stats_path,
+            threshold_dirty=STATE.threshold_dirty,
         )
     return PersistOut(checkpoint=STATE.checkpoint_path, stats=STATE.stats_path)
 
