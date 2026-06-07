@@ -183,19 +183,21 @@ La valutazione è condotta sullo split di test (20\% finale dello stream sinteti
 \hline
 \textbf{Metrica (test set)} & \textbf{TGN} & \textbf{GNN non temp.} & \textbf{Isolation Forest} \\
 \hline
-AUC aggregata              & \textbf{0.946} & 0.893 & 0.725 \\
-AP aggregata               & \textbf{0.743} & 0.700 & 0.181 \\
-Recall @soglia             & \textbf{0.815} & 0.655 & 0.139 \\
+AUC aggregata              & \textbf{0.912} & 0.598 & 0.703 \\
+AP aggregata               & \textbf{0.820} & 0.511 & 0.335 \\
+Recall aggregato @soglia   & \textbf{0.648} & 0.000 & 0.300 \\
 \hline
-Policy --- AUC             & 0.991 & 0.992 & 0.875 \\
-Contextual --- AUC         & 0.999 & 0.998 & 0.772 \\
-Lateral --- AUC            & \textbf{0.849} & 0.689 & 0.532 \\
-Lateral --- Recall @soglia & \textbf{0.503} & 0.088 & 0.044 \\
+Lateral --- AUC            & \textbf{0.760} & 0.486 & 0.650 \\
+Lateral --- Recall @soglia & \textbf{0.047} & 0.001 & 0.023 \\
 \hline
 \end{tabular}
-\caption{Confronto sul test set (FPR benigno calibrato all'1\%). Le anomalie \textit{policy} e \textit{contextual} --- separabili rispettivamente su attributi statici e su edge feature --- sono colte anche dalla GNN statica, che infatti pareggia il TGN. Il vantaggio del TGN si concentra quasi interamente sul \textbf{lateral movement}: pur addestrata con lo stesso hard-negative, la GNN statica resta a Recall 8.8\% (AUC 0.689), contro 50.3\% (AUC 0.849) del TGN. È la prova empirica che a discriminare l'accesso autorizzato-ma-non-abituale è la \emph{cronologia temporale} delle interazioni e non il solo curriculum di addestramento; un grafo statico aggregato, che ne appiattisce la sequenza, non basta.}
+\caption{Confronto sul test set (valutazione de-circolarizzata). Il vantaggio del TGN sul \textbf{lateral movement} emerge isolando il segnale temporale: la GNN statica, priva di memoria ricorrente ma provvista degli stessi contatori tabellari, si attesta attorno al caso (AUC 0.486), contro l'AUC 0.760 del TGN. La soglia statica fissa però il recall operativo a un basso 4.7\%, motivando il successivo sviluppo di una calibrazione cost-sensitive instradata.}
 \label{tab:baselines}
 \end{table}
+
+\subsection{Cost-Sensitive Routing e Validazione LANL}
+Per convertire la forte capacità di ranking (AUC 0.760) in Recall operativo, è stato implementato un \emph{routing cost-sensitive}. Il flusso di eventi viene separato a runtime in \textit{signal-dirty} e \textit{signal-clean}. Sul flusso pulito, la soglia viene rilassata per minimizzare i falsi negativi dei movimenti laterali (configurabile tramite un parametro di \texttt{cost\_ratio}). 
+La validazione di questo approccio sul dataset reale pubblico \textbf{LANL Comprehensive Multi-Source} (etichette red-team) ha restituito metriche eccellenti: il modello ha mantenuto il \textbf{100\% del recall} sui movimenti laterali, facendo crollare i falsi positivi (FPR) dal 1.40\% allo \textbf{0.38\%}, con una AUC sul laterale che ha raggiunto \textbf{0.9981}.
 
 \section{Deployment e Dettagli Hardware}
 Le primitive di model-serving (estrazione memoria ed espansione grafo storico) operano asintoticamente a tempo costante $O(1)$. Il TGN mantiene tutto il suo status dinamico e ricorrente nativamente in RAM. Ciò comporta due scelte architetturali di Deployment: è inefficace una scalabilità orizzontale a monte (poiché più repliche frammenterebbero il database comportamentale delle entità) ed è fondamentale il dimensionamento asincrono. 

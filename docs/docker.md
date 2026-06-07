@@ -107,5 +107,21 @@ all'1% di FPR e protocollo di valutazione). Dettagli e metriche attese in
 > dell'host (gli script non sono copiati nell'immagine) e sovrascrivono l'entrypoint
 > `python -m`. Non producono artifact in `public/`: stampano le metriche a console.
 
+### 5. Ablations e Test Unitari
+Esegue gli esperimenti multi-seed di rimozione strutturale (ablation) per certificare matematicamente il contributo di specifiche componenti del modello (come history causale e precursor) isolandole dal resto. Questo profilo viene anche utilizzato per lanciare unit-test specifici sovrascrivendo l'entrypoint.
+
+```bash
+docker compose --profile ablations up
+```
+
+### 6. Validità Esterna (Dataset LANL Reale)
+Avvia la pipeline di inferenza isolata sul dataset governativo pubblico **LANL Comprehensive Multi-Source**. Fondamentale per provare sul campo l'efficacia del *cost-sensitive routing* su attacchi laterali reali (red-team).
+
+> **Prerequisito**: I file pesanti `auth.txt.gz` e `redteam.txt` (scaricati manualmente dal sito csr.lanl.gov) devono risiedere nella cartella `./data/` locale (ignorata su GitHub).
+
+```bash
+docker compose --profile eval-lanl up
+```
+
 ## Dettagli tecnici
 Gli artifact (`tgn_checkpoint.pt`, `tgn_stats.json`) sono automaticamente persistiti tramite un volume bind-mount sulla cartella `./public` dell'host. Tali artefatti potranno poi essere utilizzati dai microservizi di validazione ZTA (Zero Trust Architecture).

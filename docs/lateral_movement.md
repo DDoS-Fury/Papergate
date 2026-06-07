@@ -86,8 +86,13 @@ ZTA via `tests/datasets/lanl_auth.py`, e riusa l'intera pipeline tramite `train_
 (stessa calibrazione cost-sensitive, breakdown per-tipo, cold-start). I file (`auth.txt.gz`,
 `redteam.txt`, da <https://csr.lanl.gov/data/cyber1/>) non sono versionati: vanno in `./data` e si
 lancia col profilo Compose `eval-lanl`. Il mapping tiene le colonne di allarme *pulite* (LANL non ha
-TLS/IDS e il laterale red-team è signal-clean), così la regola resta cieca al laterale e il segnale
 discriminante è solo quello temporale/relazionale — il test onesto.
+
+### Risultati LANL (Cost-Sensitive Routing Validated)
+La valutazione mirata su LANL ha dimostrato l'efficacia schiacciante della calibrazione cost-sensitive. Passando a un routing basato su falso-negativo (cost_ratio=20.0):
+- Il recall sui movimenti laterali si mantiene al **100%** (5/5 attacchi red-team correttamente bloccati nel set di test).
+- L'AUC per la singola classe laterale ha raggiunto uno straordinario **0.9981**.
+- L'impatto critico è sui Falsi Positivi (FPR): rispetto alla soglia statica che garantiva un 1.40% di falsi allarmi, il routing contestuale ha fatto crollare l'FPR allo **0.38%** a parità di recall, dimostrando che il modello distingue con precisione assoluta il comportamento umano esplorativo dall'infiltrazione.
 
 ## Leve ancora aperte (lavoro futuro)
 

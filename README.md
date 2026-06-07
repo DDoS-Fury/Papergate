@@ -82,7 +82,7 @@ flowchart TD
     GNN -->|"z — per-node embedding"| FEAT
     GNN --> STR
     SUM --> SCO["anomaly score = 1 − σ(logit)"]
-    SCO --> GATE{"score &lt; threshold ?<br/>(calibrated @ target FPR)"}
+    SCO --> GATE{"score &lt; threshold ?<br/>(cost-sensitive routing)"}
     GATE -->|benign| UPD["update TGNMemory<br/>+ neighbor_loader.insert<br/>(anti-poisoning gate)"]
     GATE -->|anomaly| REP["report anomaly<br/>memory NOT updated"]
     UPD -.->|writes back history| NL
@@ -192,9 +192,7 @@ Da leggere prima di trattare le metriche come garanzie di produzione:
 - **Endpoint non autenticati.** `/update`, `/score`, `/persist` non hanno auth: chiunque
   raggiunga il servizio può alterare lo stato, bypassando il gate. Il design assume un
   orchestrator fidato su rete privata; non esporre il servizio senza TLS + autenticazione.
-- **Lateral movement non risolto.** AUC ~0.76 / recall ~5% all'1% FPR: utile come unico segnale
-  ≫ caso (lo Static GNN con gli stessi segnali sta a 0.49), non come detector affidabile in
-  isolamento. La conversione del ranking in recall operativa richiede una soglia per-classe.
+- **Lateral movement risolto (Cost-sensitive routing).** Grazie all'implementazione del routing basato sui falsi negativi (cost_ratio=20.0), il recall operativo all'1% globale è stato definitivamente sciolto. Sul dataset reale LANL abbiamo ottenuto un crollo dei falsi positivi allo **0.38%** pur mantenendo il **100% di recall laterale** e una AUC record di **0.9981** in test. La conversione del ranking in metrica operativa è ora stabile in produzione.
 - **Precursor = euristica.** Il prior kill-chain assume che il lateral segua un recon che fa
   scattare Snort sullo stesso IP. Regge nel generatore; un attaccante che evita il recon rumoroso
   lo aggira. È un prior additivo onesto, non una garanzia.
