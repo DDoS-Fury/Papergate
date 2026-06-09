@@ -190,7 +190,6 @@ def generate_streaming_data(num_users=50, num_ips=100, num_resources=20, num_eve
             dst_val = num_users + num_ips + res_idx
 
             ja3 = 1.0
-            snort = 0.0
             s1, s2, s3 = 0.0, 0.0, 0.0
             label = 0
             etype = 0
@@ -215,8 +214,11 @@ def generate_streaming_data(num_users=50, num_ips=100, num_resources=20, num_eve
                     res_idx, method = random.choice(non_habit)
                     dst_val = num_users + num_ips + res_idx
                     ja3 = 1.0
-                    snort = 0.0
-                    s1, s2, s3 = 0.0, 0.0, 0.0
+                    # Movimento laterale: è estremamente furtivo (stealth). Usa credenziali e protocolli legittimi.
+                    # Rade volte fa scattare l'IDS, forzando la rete neurale a studiare il grafo.
+                    s1 = 0.0
+                    s2 = 1.0 if np.random.rand() > 0.98 else 0.0  # 2%
+                    s3 = 1.0 if np.random.rand() > 0.90 else 0.0  # 10%
                     etype = 3
                 else:
                     # No non-habitual authorised action exists -> fall back to a policy
@@ -238,7 +240,6 @@ def generate_streaming_data(num_users=50, num_ips=100, num_resources=20, num_eve
                     
                 dst_val = num_users + num_ips + res_idx
                 ja3 = 1.0
-                snort = 0.0
                 s1, s2, s3 = 0.0, 0.0, 0.0
                 etype = 1
 
@@ -248,14 +249,16 @@ def generate_streaming_data(num_users=50, num_ips=100, num_resources=20, num_eve
                 dst_val = num_users + num_ips + res_idx
 
                 ja3 = 0.0 if np.random.rand() > 0.5 else 1.0
-                snort = 1.0 if np.random.rand() > 0.5 else 0.0
-                s1, s2, s3 = np.random.rand(3) > 0.5
+                # Recon/Context: attacco esterno, alta probabilità su Edge (80%), media su Mid (50%), bassa su Internal (20%)
+                s1 = 1.0 if np.random.rand() > 0.2 else 0.0
+                s2 = 1.0 if np.random.rand() > 0.5 else 0.0
+                s3 = 1.0 if np.random.rand() > 0.8 else 0.0
                 etype = 2
 
             label = 1
             
         action = float(method)
-        edge_feat = [ja3, snort, float(s1), float(s2), float(s3), action]
+        edge_feat = [ja3, float(s1), float(s2), float(s3), action]
         
         src_nodes.append(src_val)
         dst_nodes.append(dst_val)
