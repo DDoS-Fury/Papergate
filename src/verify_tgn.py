@@ -24,7 +24,7 @@ from graphagate.config import TGN_CHECKPOINT_PATH, TGN_STATS_PATH
 from graphagate.serve_tgn import load_model, score_event
 
 KEY_SRC = 60          # a preregistered IP entity
-KEY_DST = "/api/v1/reactor-parameters/0"         # a preregistered resource entity URI
+KEY_DST = "/api/v1/reactor-parameters"         # a preregistered resource entity URI
 TS = 10**9            # a timestamp far beyond any training time
 BENIGN_FEAT = [1.0, 0.0, 0.0, 0.0, 0.0, 2.0]
 

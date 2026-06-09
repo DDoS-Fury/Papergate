@@ -32,7 +32,9 @@ class TGNConfig:
     # Synthetic stream shape (entity counts + number of events).
     num_users: int = 50
     num_ips: int = 100
-    num_resources: int = 20
+    # MUST equal len(RESOURCE_URIS) in stream_synthetic.py: resource node keys are
+    # the exact route URIs the security-orchestrator sends as key_dst.
+    num_resources: int = 19
     num_events: int = 50000
 
     # De-degeneration knob: probability that a *benign* event performs an
@@ -66,8 +68,13 @@ class TGNConfig:
     # recon alert on the same entity; we multiply an entity's anomaly score by up to
     # (1 + precursor_max_boost) right after it alerts, decaying with half-life
     # ``precursor_half_life`` (seconds). See serve_tgn.precursor_boost.
-    precursor_half_life: float = 100000.0
-    precursor_max_boost: float = 3.0
+    # Production timing note: the synthetic clock draws ~300 s exponential gaps, so the
+    # swept optimum (100000 s) maps to ~a day of real traffic — one alert would keep
+    # multiplying a real user's scores toward 1.0 for hours (observed as score==1.0 on
+    # every request after a single cold-start alert). 600 s keeps the kill-chain prior
+    # for recon→lateral bursts without long-lived score poisoning.
+    precursor_half_life: float = 600.0
+    precursor_max_boost: float = 2.0
 
     # Optimisation.
     batch_size: int = 200
