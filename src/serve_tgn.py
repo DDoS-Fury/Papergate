@@ -345,6 +345,7 @@ def save_model(model, registry: NodeRegistry, threshold: float, hp: dict,
 
     # state_dict carries the `memory` / `last_update` / `_assoc` buffers; the raw
     # message store is a plain dict (not a buffer) so it is saved alongside.
+    tmp_checkpoint = checkpoint_path.with_suffix('.pt.tmp')
     torch.save(
         {
             "model": model.state_dict(),
@@ -357,8 +358,9 @@ def save_model(model, registry: NodeRegistry, threshold: float, hp: dict,
             "neighbor_loader": model.neighbor_loader.state(),
             "hyperparams": hp,
         },
-        checkpoint_path,
+        tmp_checkpoint,
     )
+    tmp_checkpoint.replace(checkpoint_path)
 
     stats = {
         "threshold": float(threshold),
@@ -371,8 +373,10 @@ def save_model(model, registry: NodeRegistry, threshold: float, hp: dict,
         stats["calibration"] = calibration
     if operating_point is not None:
         stats["operating_point"] = operating_point
-    with open(stats_path, "w", encoding="utf-8") as f:
+    tmp_stats = stats_path.with_suffix('.json.tmp')
+    with open(tmp_stats, "w", encoding="utf-8") as f:
         json.dump(stats, f, indent=2)
+    tmp_stats.replace(stats_path)
 
 
 def load_model(checkpoint_path, stats_path, device):
