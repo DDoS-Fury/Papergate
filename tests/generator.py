@@ -134,7 +134,6 @@ async def event_generator(num_users=50, num_ips=100, num_resources=19, seed=None
                 
             dst_val = num_users + num_ips + res_idx
             ja3 = 1.0
-            snort = 0.0
             s1, s2, s3 = 0.0, 0.0, 0.0
             label = 0
             etype = 0
@@ -155,8 +154,11 @@ async def event_generator(num_users=50, num_ips=100, num_resources=19, seed=None
                     res_idx, method = random.choice(non_habit)
                     dst_val = num_users + num_ips + res_idx
                     ja3 = 1.0
-                    snort = 0.0
-                    s1, s2, s3 = 0.0, 0.0, 0.0
+                    # Movimento laterale: è estremamente furtivo (stealth). Usa credenziali e protocolli legittimi.
+                    # Rade volte fa scattare l'IDS, forzando la rete neurale a studiare il grafo.
+                    s1 = 0.0
+                    s2 = 1.0 if np.random.rand() > 0.98 else 0.0  # 2%
+                    s3 = 1.0 if np.random.rand() > 0.90 else 0.0  # 10%
                     etype = 3
                 else:
                     anomaly_type = "policy"
@@ -174,7 +176,6 @@ async def event_generator(num_users=50, num_ips=100, num_resources=19, seed=None
                     method = np.random.randint(0, 4)
                 dst_val = num_users + num_ips + res_idx
                 ja3 = 1.0
-                snort = 0.0
                 s1, s2, s3 = 0.0, 0.0, 0.0
                 etype = 1
                 
@@ -183,16 +184,16 @@ async def event_generator(num_users=50, num_ips=100, num_resources=19, seed=None
                 method = np.random.randint(0, 4)
                 dst_val = num_users + num_ips + res_idx
                 ja3 = 0.0 if np.random.rand() > 0.5 else 1.0
-                snort = 1.0 if np.random.rand() > 0.5 else 0.0
-                s1 = 1.0 if np.random.rand() > 0.5 else 0.0
+                # Recon/Context: attacco esterno, alta probabilità su Edge (80%), media su Mid (50%), bassa su Internal (20%)
+                s1 = 1.0 if np.random.rand() > 0.2 else 0.0
                 s2 = 1.0 if np.random.rand() > 0.5 else 0.0
-                s3 = 1.0 if np.random.rand() > 0.5 else 0.0
+                s3 = 1.0 if np.random.rand() > 0.8 else 0.0
                 etype = 2
                 
             label = 1
             
         action = float(method)
-        edge_feat = [float(ja3), float(snort), float(s1), float(s2), float(s3), float(action)]
+        edge_feat = [float(ja3), float(s1), float(s2), float(s3), float(action)]
         
         src_feat = node_features[src_val].tolist()
         dst_feat = node_features[dst_val].tolist()
