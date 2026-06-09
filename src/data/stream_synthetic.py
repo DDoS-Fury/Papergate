@@ -20,95 +20,86 @@ def generate_streaming_data(num_users=50, num_ips=100, num_resources=20, num_eve
         random.seed(seed)
 
     total_nodes = num_users + num_ips + num_resources
-    
-    # ZTA Policies definition
-    ROLES = ["plant_manager", "operator", "maintenance_technician", "radiation_protection_officer", "security_officer", "inspector"]
+
+    # ZTA Policies definition — MUST mirror infra/opa/policy.rego and the role
+    # feature encoding in security-orchestrator buildAIEvent (idx / (len-1)).
+    ROLES = ["guest", "operator", "manager", "admin"]
     CLEARANCES = ["PUBLIC", "INTERNAL", "CONFIDENTIAL", "SECRET", "TOP_SECRET"]
-    
+
     # Assign attributes to users
     user_roles = [np.random.choice(ROLES) for _ in range(num_users)]
     user_clearances = [np.random.randint(0, 5) for _ in range(num_users)] # 0 to 4
-    
+
     # Assign attributes to IPs (Tier: 0=no cert/tpm, 1=cert, 2=cert+tpm)
     ip_tiers = [np.random.choice([0, 1, 2], p=[0.2, 0.5, 0.3]) for _ in range(num_ips)]
-    
+
     # Assign an IP to a default User (Device association)
     ip_to_user = [i % num_users for i in range(num_ips)]
-    
-    # Define route templates based on ZTA policies (method: allowed_roles, min_tier, min_clearance)
+
+    # Route templates keyed by URI: {method: (allowed_roles, min_tier, min_clearance)}.
     # methods: 0=GET, 1=POST, 2=PUT, 3=DELETE, 4=PATCH
-    route_templates = [
-        # public (like /health, /login, /materials)
-        {0: (set(ROLES), 0, 0), 1: (set(ROLES), 0, 0), 2: (set(ROLES), 0, 0), 3: (set(ROLES), 0, 0)},
-        # /api/v1/auth/register/begin
-        {1: ({"plant_manager", "operator", "maintenance_technician", "radiation_protection_officer", "security_officer", "inspector"}, 1, 0)},
-        # /api/v1/auth/register/finish
-        {1: ({"plant_manager", "operator", "maintenance_technician", "radiation_protection_officer", "security_officer", "inspector"}, 1, 0)},
-        # /api/v1/personnel
-        {0: ({"security_officer", "plant_manager", "inspector"}, 1, 1),
-         1: ({"plant_manager"}, 2, 3), 2: ({"plant_manager"}, 2, 3), 3: ({"plant_manager"}, 2, 3)},
-        # /api/v1/zones
-        {0: ({"operator", "plant_manager", "inspector", "maintenance_technician", "radiation_protection_officer", "security_officer"}, 0, 0),
-         1: ({"plant_manager"}, 2, 3), 2: ({"plant_manager"}, 2, 3), 3: ({"plant_manager"}, 2, 3)},
-        # /api/v1/badges
-        {0: ({"security_officer", "plant_manager", "inspector"}, 1, 1),
-         1: ({"plant_manager"}, 2, 2), 2: ({"plant_manager"}, 2, 2), 3: ({"plant_manager"}, 2, 2)},
-        # /api/v1/reactor-parameters
-        {0: ({"operator", "plant_manager", "inspector"}, 1, 2),
-         1: ({"plant_manager"}, 2, 3), 2: ({"plant_manager"}, 2, 3), 3: ({"plant_manager"}, 2, 3)},
-        # /api/v1/maintenance-orders
-        {0: ({"maintenance_technician", "plant_manager"}, 1, 1),
-         1: ({"maintenance_technician", "plant_manager"}, 1, 1), 2: ({"maintenance_technician", "plant_manager"}, 1, 1),
-         3: ({"maintenance_technician", "plant_manager"}, 2, 2)},
-        # /api/v1/documents
-        {0: ({"operator", "plant_manager", "inspector", "maintenance_technician", "radiation_protection_officer", "security_officer"}, 0, 0),
-         1: ({"plant_manager"}, 2, 2), 2: ({"plant_manager"}, 2, 2), 3: ({"plant_manager"}, 2, 2)},
-        # /api/v1/nuclear-materials
-        {0: ({"plant_manager", "inspector", "radiation_protection_officer"}, 2, 3),
-         1: ({"plant_manager"}, 2, 4), 2: ({"plant_manager"}, 2, 4), 3: ({"plant_manager"}, 2, 4)},
-        # /api/v1/trusted-guard/sanitized-delete-personnel
-        {1: ({"plant_manager"}, 2, 3)}
-    ]
-    
-    RESOURCE_URIS = [
-        "/public",
-        "/api/v1/auth/register/begin",
-        "/api/v1/auth/register/finish",
-        "/api/v1/personnel",
-        "/api/v1/zones",
-        "/api/v1/badges",
-        "/api/v1/reactor-parameters",
-        "/api/v1/maintenance-orders",
-        "/api/v1/documents",
-        "/api/v1/nuclear-materials",
-        "/api/v1/trusted-guard/sanitized-delete-personnel"
-    ]
-    
-    resource_rules = []
-    resource_uris = []
-    for i in range(num_resources):
-        base_uri = RESOURCE_URIS[i % len(RESOURCE_URIS)]
-        suffix = "" if num_resources <= len(RESOURCE_URIS) else f"/{i // len(RESOURCE_URIS)}"
-        resource_rules.append(route_templates[i % len(route_templates)])
-        resource_uris.append(base_uri + suffix)
-        
+    # Role sets mirror policy.rego (public_paths + matrice_sicurezza); tier/clearance
+    # are behavioural attributes shaping benign habits, not OPA-enforced.
+    ALL_ROLES = set(ROLES)                      # public: guest included
+    AUTH = {"operator", "manager", "admin"}     # any authenticated role
+    MGR = {"manager", "admin"}
+    ADM = {"admin"}
+    PUBLIC_GET = {0: (ALL_ROLES, 0, 0)}
+    PUBLIC_POST = {1: (ALL_ROLES, 0, 0)}
+
+    route_templates = {
+        "/": PUBLIC_GET,
+        "/materials": PUBLIC_GET,
+        "/reserved": PUBLIC_GET,
+        "/login": PUBLIC_GET,
+        "/register": PUBLIC_GET,
+        "/static": PUBLIC_GET,
+        "/favicon.ico": PUBLIC_GET,
+        "/api/v1/auth/register": PUBLIC_POST,
+        "/api/v1/auth/login": PUBLIC_POST,
+        "/api/v1/auth/verify-otp": PUBLIC_POST,
+        "/api/v1/auth/register/begin": {1: (AUTH, 1, 0)},
+        "/api/v1/auth/register/finish": {1: (AUTH, 1, 0)},
+        "/api/v1/auth/login/begin": PUBLIC_POST,
+        "/api/v1/auth/login/finish": PUBLIC_POST,
+        "/api/v1/personnel": {0: (AUTH, 1, 1), 1: (AUTH, 1, 1)},
+        "/api/v1/documents": {0: (MGR, 1, 2), 1: (MGR, 1, 2), 3: (MGR, 1, 2)},
+        # NB: tier/clearance minimi tenuti bassi di proposito — vincoli troppo
+        # stretti lasciano la rotta quasi senza traffico benigno di training e
+        # il modello impara "qualsiasi accesso = anomalia" (score saturo a 1.0).
+        "/api/v1/nuclear-materials": {0: (MGR, 1, 2), 1: (MGR, 1, 2), 3: (MGR, 1, 2)},
+        "/api/v1/reactor-parameters": {0: (ADM, 1, 2), 1: (ADM, 1, 2), 3: (ADM, 1, 2)},
+        "/api/v1/trusted-guard/sanitized-delete-personnel": {1: (ADM, 1, 2)},
+    }
+    RESOURCE_URIS = list(route_templates)
+
+    # Resource node keys MUST be the exact URIs the orchestrator sends as key_dst
+    # (after its normalizeAIPath): no synthetic suffixes, one node per real route.
+    assert num_resources == len(RESOURCE_URIS), (
+        f"num_resources ({num_resources}) must equal len(RESOURCE_URIS) "
+        f"({len(RESOURCE_URIS)}): set TGNConfig.num_resources accordingly"
+    )
+    resource_uris = list(RESOURCE_URIS)
+    resource_rules = [route_templates[uri] for uri in RESOURCE_URIS]
+
     # Node features (static): 16-dim
     # Encode roles, clearance, tier into the features.
     node_features = torch.zeros(total_nodes, 16)
     node_features[:, 14] = 1.0  # Trust Score
     for i in range(num_users):
-        node_features[i, 0] = ROLES.index(user_roles[i]) / float(len(ROLES))
+        node_features[i, 0] = ROLES.index(user_roles[i]) / float(len(ROLES) - 1)
         node_features[i, 1] = user_clearances[i] / 4.0
     for i in range(num_ips):
         node_features[num_users + i, 2] = ip_tiers[i] / 2.0
         # encode the user this IP belongs to
         u_idx = ip_to_user[i]
-        node_features[num_users + i, 0] = ROLES.index(user_roles[u_idx]) / float(len(ROLES))
+        node_features[num_users + i, 0] = ROLES.index(user_roles[u_idx]) / float(len(ROLES) - 1)
         node_features[num_users + i, 1] = user_clearances[u_idx] / 4.0
-        
+
     for i in range(num_resources):
-        uri_idx = i % len(RESOURCE_URIS)
-        node_features[num_users + num_ips + i, 3 + uri_idx] = 1.0
+        # Scalar resource id (19 URIs no longer fit one-hot in 16 dims); node
+        # identity is anyway preserved by the hashed-id embedding.
+        node_features[num_users + num_ips + i, 3] = i / float(num_resources - 1)
     
     # Per-IP behaviour model. For each IP we precompute the (resource, method) actions
     # its associated user is *authorised* to perform, then carve out a "habitual" subset

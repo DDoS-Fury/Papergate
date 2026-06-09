@@ -2,96 +2,78 @@ import asyncio
 import random
 import numpy as np
 
-async def event_generator(num_users=50, num_ips=100, num_resources=20, seed=None):
+async def event_generator(num_users=50, num_ips=100, num_resources=19, seed=None):
     if seed is not None:
         np.random.seed(seed)
         random.seed(seed)
-        
+
     total_nodes = num_users + num_ips + num_resources
-    
-    # ZTA Policies definition
-    ROLES = ["plant_manager", "operator", "maintenance_technician", "radiation_protection_officer", "security_officer", "inspector"]
+
+    # ZTA Policies definition — mirrors src/data/stream_synthetic.py (policy.rego roles)
+    ROLES = ["guest", "operator", "manager", "admin"]
     CLEARANCES = ["PUBLIC", "INTERNAL", "CONFIDENTIAL", "SECRET", "TOP_SECRET"]
-    
+
     # Assign attributes to users
     user_roles = [np.random.choice(ROLES) for _ in range(num_users)]
     user_clearances = [np.random.randint(0, 5) for _ in range(num_users)] # 0 to 4
-    
+
     # Assign attributes to IPs (Tier: 0=no cert/tpm, 1=cert, 2=cert+tpm)
     ip_tiers = [np.random.choice([0, 1, 2], p=[0.2, 0.5, 0.3]) for _ in range(num_ips)]
-    
+
     # Assign an IP to a default User (Device association)
     ip_to_user = [i % num_users for i in range(num_ips)]
-    
-    route_templates = [
-        # public (like /health, /login, /materials)
-        {0: (set(ROLES), 0, 0), 1: (set(ROLES), 0, 0), 2: (set(ROLES), 0, 0), 3: (set(ROLES), 0, 0)},
-        # /api/v1/auth/register/begin
-        {1: ({"plant_manager", "operator", "maintenance_technician", "radiation_protection_officer", "security_officer", "inspector"}, 1, 0)},
-        # /api/v1/auth/register/finish
-        {1: ({"plant_manager", "operator", "maintenance_technician", "radiation_protection_officer", "security_officer", "inspector"}, 1, 0)},
-        # /api/v1/personnel
-        {0: ({"security_officer", "plant_manager", "inspector"}, 1, 1),
-         1: ({"plant_manager"}, 2, 3), 2: ({"plant_manager"}, 2, 3), 3: ({"plant_manager"}, 2, 3)},
-        # /api/v1/zones
-        {0: ({"operator", "plant_manager", "inspector", "maintenance_technician", "radiation_protection_officer", "security_officer"}, 0, 0),
-         1: ({"plant_manager"}, 2, 3), 2: ({"plant_manager"}, 2, 3), 3: ({"plant_manager"}, 2, 3)},
-        # /api/v1/badges
-        {0: ({"security_officer", "plant_manager", "inspector"}, 1, 1),
-         1: ({"plant_manager"}, 2, 2), 2: ({"plant_manager"}, 2, 2), 3: ({"plant_manager"}, 2, 2)},
-        # /api/v1/reactor-parameters
-        {0: ({"operator", "plant_manager", "inspector"}, 1, 2),
-         1: ({"plant_manager"}, 2, 3), 2: ({"plant_manager"}, 2, 3), 3: ({"plant_manager"}, 2, 3)},
-        # /api/v1/maintenance-orders
-        {0: ({"maintenance_technician", "plant_manager"}, 1, 1),
-         1: ({"maintenance_technician", "plant_manager"}, 1, 1), 2: ({"maintenance_technician", "plant_manager"}, 1, 1),
-         3: ({"maintenance_technician", "plant_manager"}, 2, 2)},
-        # /api/v1/documents
-        {0: ({"operator", "plant_manager", "inspector", "maintenance_technician", "radiation_protection_officer", "security_officer"}, 0, 0),
-         1: ({"plant_manager"}, 2, 2), 2: ({"plant_manager"}, 2, 2), 3: ({"plant_manager"}, 2, 2)},
-        # /api/v1/nuclear-materials
-        {0: ({"plant_manager", "inspector", "radiation_protection_officer"}, 2, 3),
-         1: ({"plant_manager"}, 2, 4), 2: ({"plant_manager"}, 2, 4), 3: ({"plant_manager"}, 2, 4)},
-        # /api/v1/trusted-guard/sanitized-delete-personnel
-        {1: ({"plant_manager"}, 2, 3)}
-    ]
-    
-    RESOURCE_URIS = [
-        "/public",
-        "/api/v1/auth/register/begin",
-        "/api/v1/auth/register/finish",
-        "/api/v1/personnel",
-        "/api/v1/zones",
-        "/api/v1/badges",
-        "/api/v1/reactor-parameters",
-        "/api/v1/maintenance-orders",
-        "/api/v1/documents",
-        "/api/v1/nuclear-materials",
-        "/api/v1/trusted-guard/sanitized-delete-personnel"
-    ]
-    
-    resource_rules = []
-    resource_uris = []
-    for i in range(num_resources):
-        base_uri = RESOURCE_URIS[i % len(RESOURCE_URIS)]
-        suffix = "" if num_resources <= len(RESOURCE_URIS) else f"/{i // len(RESOURCE_URIS)}"
-        resource_rules.append(route_templates[i % len(route_templates)])
-        resource_uris.append(base_uri + suffix)
-        
+
+    # Route templates keyed by URI: {method: (allowed_roles, min_tier, min_clearance)}.
+    # methods: 0=GET, 1=POST, 2=PUT, 3=DELETE, 4=PATCH
+    ALL_ROLES = set(ROLES)
+    AUTH = {"operator", "manager", "admin"}
+    MGR = {"manager", "admin"}
+    ADM = {"admin"}
+    PUBLIC_GET = {0: (ALL_ROLES, 0, 0)}
+    PUBLIC_POST = {1: (ALL_ROLES, 0, 0)}
+
+    route_templates = {
+        "/": PUBLIC_GET,
+        "/materials": PUBLIC_GET,
+        "/reserved": PUBLIC_GET,
+        "/login": PUBLIC_GET,
+        "/register": PUBLIC_GET,
+        "/static": PUBLIC_GET,
+        "/favicon.ico": PUBLIC_GET,
+        "/api/v1/auth/register": PUBLIC_POST,
+        "/api/v1/auth/login": PUBLIC_POST,
+        "/api/v1/auth/verify-otp": PUBLIC_POST,
+        "/api/v1/auth/register/begin": {1: (AUTH, 1, 0)},
+        "/api/v1/auth/register/finish": {1: (AUTH, 1, 0)},
+        "/api/v1/auth/login/begin": PUBLIC_POST,
+        "/api/v1/auth/login/finish": PUBLIC_POST,
+        "/api/v1/personnel": {0: (AUTH, 1, 1), 1: (AUTH, 1, 1)},
+        "/api/v1/documents": {0: (MGR, 1, 2), 1: (MGR, 1, 2), 3: (MGR, 1, 2)},
+        "/api/v1/nuclear-materials": {0: (MGR, 1, 2), 1: (MGR, 1, 2), 3: (MGR, 1, 2)},
+        "/api/v1/reactor-parameters": {0: (ADM, 1, 2), 1: (ADM, 1, 2), 3: (ADM, 1, 2)},
+        "/api/v1/trusted-guard/sanitized-delete-personnel": {1: (ADM, 1, 2)},
+    }
+    RESOURCE_URIS = list(route_templates)
+
+    assert num_resources == len(RESOURCE_URIS), (
+        f"num_resources ({num_resources}) must equal len(RESOURCE_URIS) ({len(RESOURCE_URIS)})"
+    )
+    resource_uris = list(RESOURCE_URIS)
+    resource_rules = [route_templates[uri] for uri in RESOURCE_URIS]
+
     # Node features (static): 16-dim
     node_features = np.zeros((total_nodes, 16))
     for i in range(num_users):
-        node_features[i, 0] = ROLES.index(user_roles[i]) / float(len(ROLES))
+        node_features[i, 0] = ROLES.index(user_roles[i]) / float(len(ROLES) - 1)
         node_features[i, 1] = user_clearances[i] / 4.0
     for i in range(num_ips):
         node_features[num_users + i, 2] = ip_tiers[i] / 2.0
         u_idx = ip_to_user[i]
-        node_features[num_users + i, 0] = ROLES.index(user_roles[u_idx]) / float(len(ROLES))
+        node_features[num_users + i, 0] = ROLES.index(user_roles[u_idx]) / float(len(ROLES) - 1)
         node_features[num_users + i, 1] = user_clearances[u_idx] / 4.0
 
     for i in range(num_resources):
-        uri_idx = i % len(RESOURCE_URIS)
-        node_features[num_users + num_ips + i, 3 + uri_idx] = 1.0
+        node_features[num_users + num_ips + i, 3] = i / float(num_resources - 1)
         
     ip_valid_actions = []
     ip_habitual = []
