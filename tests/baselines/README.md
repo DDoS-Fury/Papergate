@@ -35,10 +35,10 @@ Lo score di anomalia deve essere "più alto = più anomalo", coerente con
 | `src` | `[N]` | indice nodo sorgente (IP) |
 | `dst` | `[N]` | indice nodo destinazione (risorsa) |
 | `t`   | `[N]` | timestamp (interi crescenti) |
-| `msg` | `[N,6]` | edge feature `[ja3, snort, s1, s2, s3, method]` |
+| `msg` | `[N,7]` | edge feature dinamica `[ja3, alertEdge, alertMid, alertInt, method, roleVal, clrVal]` |
 | `y`   | `[N]` | label binaria (0=benigno, 1=anomalo) |
 | `types` | `[N]` | 0=benigno, 1=policy, 2=contextual, 3=lateral |
-| `node_features` | `[total_nodes,16]` | attributi statici (ruolo/clearance/tier) |
+| `node_features` | `[total_nodes,16]` | attributi statici (device tier, trust_score) |
 | `resource_uris` | `list[str]` | URI delle risorse |
 
 Spazio indici nodi: `[0,num_users)` utenti, `[num_users,num_users+num_ips)` IP,

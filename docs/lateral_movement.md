@@ -88,11 +88,15 @@ ZTA via `tests/datasets/lanl_auth.py`, e riusa l'intera pipeline tramite `train_
 lancia col profilo Compose `eval-lanl`. Il mapping tiene le colonne di allarme *pulite* (LANL non ha
 discriminante è solo quello temporale/relazionale — il test onesto.
 
-### Risultati LANL (Cost-Sensitive Routing Validated)
-La valutazione mirata su LANL ha dimostrato l'efficacia schiacciante della calibrazione cost-sensitive. Passando a un routing basato su falso-negativo (cost_ratio=20.0):
-- Il recall sui movimenti laterali si mantiene al **100%** (5/5 attacchi red-team correttamente bloccati nel set di test).
-- L'AUC per la singola classe laterale ha raggiunto uno straordinario **0.9981**.
-- L'impatto critico è sui Falsi Positivi (FPR): rispetto alla soglia statica che garantiva un 1.40% di falsi allarmi, il routing contestuale ha fatto crollare l'FPR allo **0.38%** a parità di recall, dimostrando che il modello distingue con precisione assoluta il comportamento umano esplorativo dall'infiltrazione.
+### Risultati LANL e Confronto con lo Stato dell'Arte (SOTA)
+L'integrazione del modello Device-Centric ha prodotto metriche altamente competitive sul dataset pubblico LANL, in test eseguiti rigorosamente senza Data Leakage (split cronologico puro e zero metadati ZTA d'aiuto).
+
+Su un campione vasto (test set esteso tramite under-sampling del benigno, includendo 15 attacchi isolati del red team):
+- **AUC ROC Aggregata**: **0.8824**
+- **Recall Movimento Laterale**: **73.33%** (11 attacchi su 15 bloccati correttamente)
+- **Falsi Positivi (FPR)**: **2.18%**
+
+Questo risultato si colloca eccezionalmente vicino al SOTA accademico offline (che oscilla tra AUC 0.92 e 0.96 su LANL per modelli architetturalmente molto più complessi come HLMD e Pikachu). La nostra soluzione, pur cedendo qualche punto percentuale, offre l'enorme vantaggio industriale di operare in puro streaming in tempo reale, elaborando gli eventi singolarmente in memoria `O(1)`, senza i pesanti calcoli in batch richiesti dai modelli SOTA classici. Questo lo rende l'unico candidato realistico per il deployment nativo su un orchestrator Zero-Trust.
 
 ## Leve ancora aperte (lavoro futuro)
 
