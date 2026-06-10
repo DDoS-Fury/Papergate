@@ -213,8 +213,16 @@ def _reset_slot(model, idx: int) -> None:
         model.node_feat[idx].zero_()
         model.node_feat[idx, 14] = 1.0  # Reset Trust Score to max
         model.node_hash[idx].zero_()
-    for store in (model.memory.msg_s_store, model.memory.msg_d_store):
-        store.pop(idx, None)
+    # Reset (do NOT delete) the slot's PyG message store. TGNMemory seeds *every*
+    # node id with an empty-message tuple and `_compute_msg` does `msg_store[i]` for
+    # every node it touches — so popping the entry makes a reused (post-eviction)
+    # slot raise `KeyError: idx` on its first event. Re-seed the empty tuple in the
+    # exact format of TGNMemory._reset_message_store: (src, dst, t, msg).
+    mem = model.memory
+    empty_i = mem.memory.new_empty((0,), dtype=torch.long)
+    empty_msg = mem.memory.new_empty((0, mem.raw_msg_dim))
+    mem.msg_s_store[idx] = (empty_i, empty_i, empty_i, empty_msg)
+    mem.msg_d_store[idx] = (empty_i, empty_i, empty_i, empty_msg)
     if hasattr(model, "last_contact"):
         keys_to_delete = [k for k in model.last_contact.keys() if k[0] == idx or k[1] == idx]
         for k in keys_to_delete:
