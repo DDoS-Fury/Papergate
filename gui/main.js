@@ -197,14 +197,14 @@ scene.add(scoringGroup);
 const featureMat = new THREE.MeshPhongMaterial({ color: 0xffaa00, transparent: true, opacity: 0.8, wireframe: true });
 const featureHead = new THREE.Mesh(new THREE.TorusGeometry(5, 1, 16, 32), featureMat);
 featureHead.position.set(-15, 0, 0);
-featureHead.userData = { title: 'Feature Head', type: 'LinkPredictor (MLP)', desc: 'Detects contextual and policy violations.' };
+featureHead.userData = { title: 'Feature Head', type: 'LinkPredictor (MLP)', desc: 'Detects contextual, policy violations and lateral movement novelty.' };
 scoringGroup.add(featureHead);
 
 // Structural Head
 const structuralMat = new THREE.MeshPhongMaterial({ color: 0xaa00ff, transparent: true, opacity: 0.8, wireframe: true });
 const structuralHead = new THREE.Mesh(new THREE.TorusKnotGeometry(4, 0.8, 64, 16), structuralMat);
 structuralHead.position.set(15, 0, 0);
-structuralHead.userData = { title: 'Structural Head', type: 'Cosine Similarity', desc: 'Detects lateral movement via history compatibility.' };
+structuralHead.userData = { title: 'Structural Head', type: 'Cosine Similarity', desc: 'Provides structural auxiliary signals (marginal).' };
 scoringGroup.add(structuralHead);
 
 // Lines converging to Gate
