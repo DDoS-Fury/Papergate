@@ -16,7 +16,7 @@ Schema mapping → :class:`graphagate.train_tgn.StreamData` (the synthetic strea
   auth.txt: time, srcUser@dom, dstUser@dom, srcComp, dstComp, authType, logonType, authOrient, success
   - src node  = source computer, dst node = destination computer (host-to-host = the lateral graph)
   - t         = integer second
-  - msg[6]    = [ja3=1, snort=0, s1=0, s2=0, s3=0, method] — the alarm columns are held CLEAN
+  - msg[7]    = [ja3=1, snort=0, s1=0, s2=0, method, roleVal=0, clrVal=0] — the alarm columns are held CLEAN
                 because LANL auth carries no TLS/IDS signal and red-team lateral movement is
                 signal-clean by construction; only ``method`` carries auth metadata (the auth
                 orientation code). This keeps the rule baseline correctly blind to lateral and
@@ -129,7 +129,7 @@ def load_lanl_stream(
 
             # Alarm columns held clean (signal-clean premise); auth orientation in ``method``.
             method = float(_ORIENT_CODE.get(orient, 4))
-            msg_l.append([1.0, 0.0, 0.0, 0.0, 0.0, method])
+            msg_l.append([1.0, 0.0, 0.0, 0.0, method, 0.0, 0.0])
             src_l.append(_idx(src_comp))
             dst_l.append(_idx(dst_comp))
             t_l.append(t)
