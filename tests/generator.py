@@ -31,6 +31,8 @@ async def event_generator(seed=None, warmup_steps=None, cfg: TGNConfig = TGNConf
         p_cred_theft=cfg.p_cred_theft,
         admission_horizon=warmup_steps if warmup_steps else None,
         seed=seed,
+        use_resource_risk=cfg.use_resource_risk,
+        use_source_internal=cfg.use_source_internal,
     )
     if warmup_steps is None:
         warmup_steps = cfg.num_events if seed == cfg.seed else 0

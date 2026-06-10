@@ -12,11 +12,11 @@ Il modello TGN è stato progettato appositamente per essere **stateful** e gesti
 
 ### Flusso di Esecuzione (Serving)
 
-1. **Inoltro della Richiesta (Tupla, schema v2 a 4 nodi)**
-   L'orchestrator ZTA non deve pre-processare vettori né interrogare database storici. Deve semplicemente inoltrare la singola transazione (o evento) grezza all'API di serving del modello (`src/serve_tgn.py -> score_event`). Ogni richiesta è modellata come catena causale a 3 archi `sorgente(IP) → dispositivo → utente → risorsa`. La tupla richiesta include:
-   - `key_user`: identità (es. user id dal JWT).
-   - `key_device`: contesto hardware — `tpm:<id>` se il TPM è attestato, altrimenti `ck:<cookie>` (cookie/UUID persistente rilasciato dal sistema; un cookie nuovo = macchina mai vista). **Non** usare l'IP come device.
-   - `key_source` (opzionale): contesto di rete — l'IP del client. Se assente, l'arco sorgente→dispositivo viene semplicemente saltato.
+1. **Inoltro della Richiesta (Tupla, schema v3 a 4 nodi)**
+   L'orchestrator ZTA non deve pre-processare vettori né interrogare database storici. Deve semplicemente inoltrare la singola transazione (o evento) grezza all'API di serving del modello (`src/serve_tgn.py -> score_event`). Ogni richiesta è modellata come catena causale a 3 archi `sorgente(IP) → dispositivo → utente → risorsa`. **Le chiavi sono namespaced per TIPO** così un IP non può mai aliasare uno slot dispositivo nel `NodeRegistry` condiviso (che è un unico keyspace per tutti i tipi di nodo). La tupla richiesta include:
+   - `key_user`: identità (es. user id dal JWT; `anonymous` per i guest).
+   - `key_device`: contesto hardware — `tpm:<id>` se il TPM è attestato, altrimenti `ck:<cookie>` (cookie/UUID persistente firmato; un cookie nuovo = macchina mai vista). In assenza totale di id hardware, fallback `ipdev:<ip>` (IP come device debole) **senza** `key_source`. **Non** usare mai l'IP nudo come device.
+   - `key_source` (opzionale): contesto di rete — `src:<ip>` (IP del client, namespaced). Se assente, l'arco sorgente→dispositivo viene semplicemente saltato. Il modello deriva da questo IP il bit **internal/external** (RFC1918) scritto in `node_feat[*,5]` del nodo sorgente — è una *feature*, non un gate di autorizzazione (la rete non concede privilegi: ZTA).
    - `key_dst`: URI della risorsa.
    - Timestamp (es. Unix epoch).
    - Array di feature contestuali dell'arco (es. trust di JA3, sonde Snort, metodo HTTP, ruolo/clearance).
@@ -108,9 +108,9 @@ Configurazione via variabili d'ambiente (tutte opzionali):
 
 ```json
 {
-  "key_user": "alice",             // chiave utente (string o int)
-  "key_device": "tpm:a1b2c3",      // chiave dispositivo: "tpm:<id>" o "ck:<cookie>"
-  "key_source": "10.0.0.7",        // opz.: IP del client (se assente, niente arco IP→device)
+  "key_user": "alice",             // chiave utente (string o int); "anonymous" per guest
+  "key_device": "tpm:a1b2c3",      // chiave dispositivo: "tpm:<id>" | "ck:<cookie>" | "ipdev:<ip>"
+  "key_source": "src:10.0.0.7",    // opz.: "src:<ip>" del client (se assente, niente arco IP→device)
   "key_dst": "/api/v1/documents",  // chiave risorsa (URI normalizzato)
   "timestamp": 1717000000,         // intero (es. Unix epoch)
   "features": [1.0, 0.0, 0.0, 0.0, 0.0, 0.67, 0.5], // messaggio d'arco (7 float):
@@ -120,7 +120,9 @@ Configurazione via variabili d'ambiente (tutte opzionali):
                                               // [5] Ruolo normalizzato (idx/(len-1))
                                               // [6] Clearance normalizzata (idx/4)
   "src_feat": [/* ... */],         // opz., attributi statici, len == node_feat_dim (16)
-  "dst_feat": [/* ... */]          // opz.
+  "dst_feat": [/* ... */]          // opz.; per le risorse preregistrate il RISCHIO
+                                   // (node_feat[*,4]) è già baked nel checkpoint, quindi
+                                   // dst_feat NON è necessario in produzione.
 }
 ```
 
@@ -151,7 +153,7 @@ Essendo stato addestrato su dati sintetici, in produzione il modello vedrà solo
 Per questo motivo, l'Orchestrator deve iniettare i privilegi a runtime tramite `src_feat`:
 
 - **Utenti Autenticati (Nuovi nodi)**: L'Orchestrator deve calcolare ruolo e clearance (es. estratti dal JWT) in valori float e passarli in `src_feat`. Il modello li scriverà nello slot appena allocato, e da quel momento saprà applicare le policy corrette per quell'utente.
-- **Utenti Guest (Non autenticati)**: Quando la richiesta (es. a `/login` o endpoint pubblici) arriva da un IP senza sessione, la chiave sorgente sarà l'indirizzo IP, e `src_feat` dovrà essere un array di zeri (`[0.0, 0.0, ...]`). Questo corrisponde al livello minimo di privilegi (Clearance=0, Tier=0). Il modello permetterà le chiamate alle rotte pubbliche, ma bloccherà come anomalo qualsiasi tentativo verso endpoint protetti. Appena l'utente farà login, l'Orchestrator comincerà a passare le sue feature reali, "promuovendone" di fatto i privilegi.
+- **Utenti Guest (Non autenticati)**: Quando la richiesta (es. a `/login` o endpoint pubblici) arriva da un IP senza sessione, `key_user` sarà `anonymous`, la chiave sorgente `src:<ip>`, e `src_feat` dovrà essere un array di zeri (`[0.0, 0.0, ...]`). Questo corrisponde al livello minimo di privilegi (Clearance=0, Tier=0). Il modello permetterà le chiamate alle rotte pubbliche, ma bloccherà come anomalo qualsiasi tentativo verso endpoint protetti. Appena l'utente farà login, l'Orchestrator comincerà a passare le sue feature reali, "promuovendone" di fatto i privilegi.
 
 ### Vincoli operativi
 
@@ -168,7 +170,7 @@ Per questo motivo, l'Orchestrator deve iniettare i privilegi a runtime tramite `
 # Score read-only di un evento
 curl -s -X POST http://localhost:8088/infer \
   -H 'Content-Type: application/json' \
-  -d '{"key_user":"alice","key_device":"tpm:a1b2c3","key_source":"10.0.0.7","key_dst":"/api/v1/documents","timestamp":1717000000,"features":[1.0,0.0,0.0,0.0,0.0,0.67,0.5]}'
+  -d '{"key_user":"alice","key_device":"tpm:a1b2c3","key_source":"src:10.0.0.7","key_dst":"/api/v1/documents","timestamp":1717000000,"features":[1.0,0.0,0.0,0.0,0.0,0.67,0.5]}'
 # -> {"anomaly_score":0.83,"is_anomaly":true,"threshold":0.6264}
 ```
 
@@ -180,8 +182,8 @@ standard library:
 ```go
 type Event struct {
     KeyUser   string    `json:"key_user"`
-    KeyDevice string    `json:"key_device"`           // "tpm:<id>" o "ck:<cookie>"
-    KeySource string    `json:"key_source,omitempty"` // IP del client (opzionale)
+    KeyDevice string    `json:"key_device"`           // "tpm:<id>" | "ck:<cookie>" | "ipdev:<ip>"
+    KeySource string    `json:"key_source,omitempty"` // "src:<ip>" del client (opzionale)
     KeyDst    string    `json:"key_dst"`
     Timestamp int64     `json:"timestamp"`
     Features  []float64 `json:"features"`

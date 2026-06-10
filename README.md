@@ -54,7 +54,7 @@ compatibilità strutturale — che insieme coprono le tre classi di anomalia.
 
 ```mermaid
 flowchart TD
-    EV["Access event — schema v2, catena a 3 archi<br/>key_source(IP) → key_device(tpm:/ck:) → key_user → key_dst<br/>(t, edge_msg sull'arco di accesso) + static attrs: role / clearance / tier"]
+    EV["Access event — schema v3, catena a 3 archi (chiavi namespaced per tipo)<br/>key_source(src:ip) → key_device(tpm:/ck:/ipdev:) → key_user → key_dst<br/>(t, edge_msg sull'arco di accesso) + static attrs: role / clearance / tier / resource-risk / source-internal"]
     REG["NodeRegistry<br/>entity key → memory slot<br/>dynamic admission · LRU eviction"]
     NL["MessageNeighborLoader<br/>bounded ring-buffer [num_nodes, K]<br/>last K temporal neighbours (+ t, + msg)"]
     EV --> REG --> NL
@@ -96,7 +96,7 @@ flowchart TD
 | **Hashed Identity** (`hash_emb`) | Embedding apprendibile via hashing deterministico della chiave (`stable_hash`, BLAKE2b). Mantiene induttività al 100% per i nodi nuovi e dà a ogni entità — incluse le **risorse** — un'identità distinguibile. *Nota onesta:* l'ablation multi-seed mostra che per il lateral è ormai **ridondante** (sussunta dalle feature di storia esplicite: rimuoverla non peggiora il lateral AUC). |
 | **History features** (`compute_hist_feats`) | Per ogni evento `[log1p(pair_count), log1p(src_count), pair/(src+1)]`: contatori d'interazione causali e *benign-gated* (derivabili a runtime, non circolari). Iniettano il segnale di **novità** della coppia src→dst. Ablation: **+0.066 AUC** sul lateral. |
 | **Kill-chain precursor** (`recent_alert`, `precursor_boost`) | Prior moltiplicativo *serving-time* che alza lo score di un'entità subito dopo un suo alert (recon→lateral), con decadimento `0.5^(Δt/half_life)`. Stato fuori dalla memoria TGN (il gate scarterebbe il precursore); **non** è un input addestrato. Ablation: **+0.073 AUC** sul lateral, senza costo di precisione. |
-| **Static node features** (`node_feat`) | Attributi statici ZTA per-nodo (device tier, trust_score), buffer `[num_nodes, 16]`. |
+| **Static node features** (`node_feat`) | Attributi statici ZTA per-nodo, buffer `[num_nodes, 16]`. Indici usati: `[2]` device tier, `[3]` resource priority, `[4]` resource **risk** (mirror di `getResourceSensitivity`/`matrice_sicurezza`), `[5]` source network **internal/external** (RFC1918, derivato dall'IP — feature, non gate), `[14]` trust_score. |
 | **MessageNeighborLoader** (`neighbor_loader`) | Ring-buffer **bounded in RAM** con gli ultimi `neighbor_size=30` vicini temporali per nodo. Abilita il message-passing sul vicinato storico — il segnale **strutturale** per il lateral movement — con memoria `O(num_nodes·K·msg_dim)` costante. **Nessun database a grafo.** |
 | **GraphAttentionEmbedding** (`gnn`) | Reti multi-hop (`num_hops=3`) di `TransformerConv` (4 teste, con connessioni residuali) che calcolano l'embedding di nodo `z` attendendo sui vicini temporali estesi; `edge_attr` = encoding del tempo relativo `Δt` concatenato al messaggio storico dell'arco. |
 | **Feature head** (`link_pred`, `LinkPredictor`) | MLP su `[z_src, z_dst, cur_msg, feat_src, feat_dst, Δt_enc, history_feats]`. Allenata con un obiettivo **InfoNCE** (ranking della dst vera sopra K casuali) + ancora BCE positiva + BCE contestuale. È la testa che — con memoria + history feats — porta il segnale **lateral**. |
@@ -166,11 +166,18 @@ temporale-relazionale**, non dei contatori.
 | Isolation Forest | 0.703 | 0.335 | 0.650 | 2.3% |
 | **TGN (full)** | **0.912** | **0.820** | **0.760** | **4.7%** |
 
-> **Risultati schema v2 (4 nodi / 3 archi, run pieno 50k/15ep, seed 42).** Lateral AUC
-> **0.818** (v1: 0.760), AUC aggregata 0.919, cred-theft AUC **0.969** con recall **1.00**
-> alla soglia instradata; FPR roaming ≈ FPR benigna normale (0.180 vs 0.172 — il cambio di
-> rete non è più un falso positivo); recall lateral su device condivisi (0.381) in linea col
-> lateral complessivo (0.376). Nota di confronto onesto: nel v2 è stato corretto il bug di
+> **Risultati schema v3 (4 nodi / 3 archi, chiavi namespaced + feature resource-risk,
+> run pieno 50k/15ep, seed 42).** Lateral AUC **0.837** (v2: 0.818; v1: 0.760), AUC aggregata
+> 0.930, cred-theft AUC **0.922** con recall **0.863** alla soglia instradata; FPR roaming ≈
+> FPR benigna (0.094 vs 0.094 — il cambio di rete non è un falso positivo). La feature
+> *source-internal* (`node_feat[*,5]`, bit RFC1918 della rete sorgente) è **disabilitata di
+> default** (`use_source_internal=False`): se attivata alza la lateral AUC a ~0.90 ma
+> **maschera il credential theft** (AUC 0.92→0.66, recall 0.86→0.49), perché il roaming
+> benigno esterno normalizza i binding esterno→device su cui vive il segnale del furto di
+> credenziali — un trade-off lateral↔cred-theft ablabile, non un free lunch.
+>
+> **[storico] Risultati schema v2.** Lateral AUC 0.818, AUC aggregata 0.919, cred-theft AUC
+> 0.969 / recall 1.00. Nota di confronto onesto: nel v2 è stato corretto il bug di
 > `signal_dirty`/rule-baseline che trattava il metodo HTTP come un sensore (ogni POST finiva
 > sulla soglia conservativa), quindi precision/recall alla soglia NON sono confrontabili 1:1
 > con la riga v1; il punto operativo si regola con `cost_ratio` / `clean_fpr_cap`. I numeri

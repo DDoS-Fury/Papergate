@@ -253,6 +253,8 @@ def _synthetic_stream_data(cfg: TGNConfig) -> StreamData:
         p_cookie_wipe=cfg.p_cookie_wipe,
         p_cred_theft=cfg.p_cred_theft,
         seed=cfg.seed,
+        use_resource_risk=cfg.use_resource_risk,
+        use_source_internal=cfg.use_source_internal,
     )
     return StreamData(
         user=s.user, dst=s.dst, t=s.t, msg=s.msg, y=s.y, types=s.types,
@@ -802,6 +804,8 @@ def train_tgn(cfg: TGNConfig = TGNConfig(), *, dataset: "StreamData | None" = No
             "clean_fpr_cap": cfg.clean_fpr_cap,
             "precursor_half_life": cfg.precursor_half_life,
             "precursor_max_boost": cfg.precursor_max_boost,
+            "use_resource_risk": cfg.use_resource_risk,
+            "use_source_internal": cfg.use_source_internal,
         }
         op_new = operating_point(test_scores, test_labels, test_types, threshold)
         save_model(

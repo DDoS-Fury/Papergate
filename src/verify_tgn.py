@@ -27,7 +27,7 @@ from graphagate.serve_tgn import load_model, score_event
 
 KEY_USER = 0          # a preregistered user entity
 KEY_DEVICE = "ck:verify-device"                # admitted dynamically on first use
-KEY_SOURCE = "10.99.99.1"                      # admitted dynamically on first use
+KEY_SOURCE = "src:10.99.99.1"                  # namespaced source key, admitted on first use
 KEY_DST = "/api/v1/reactor-parameters"         # a preregistered resource entity URI
 TS = 10**9            # a timestamp far beyond any training time
 BENIGN_FEAT = [1.0, 0.0, 0.0, 0.0, 0.0, 0.5, 0.5]

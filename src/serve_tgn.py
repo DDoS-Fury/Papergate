@@ -30,9 +30,10 @@ import torch
 
 from graphagate.model.registry import NodeRegistry
 from graphagate.model.tgn import ZTATemporalGraphNetwork, stable_hash
+from graphagate.netclass import ip_is_internal
 
 
-SCHEMA_VERSION = 2  # 4-node / 3-edge event schema (source IP -> device -> user -> resource)
+SCHEMA_VERSION = 3  # 4-node / 3-edge schema, namespaced keys + resource-risk / source-internal feats
 
 
 def build_model(hp: dict, device: torch.device) -> ZTATemporalGraphNetwork:
@@ -41,7 +42,8 @@ def build_model(hp: dict, device: torch.device) -> ZTATemporalGraphNetwork:
     if found != SCHEMA_VERSION:
         raise RuntimeError(
             f"checkpoint schema_version={found} is incompatible with this code "
-            f"(expected {SCHEMA_VERSION}: the 4-node source/device/user/resource schema). "
+            f"(expected {SCHEMA_VERSION}: 4-node schema with namespaced keys + "
+            "resource-risk / source-internal node features). "
             "Retrain with `graphagate.train_tgn` to regenerate the artifact."
         )
     model = ZTATemporalGraphNetwork(
@@ -58,6 +60,9 @@ def build_model(hp: dict, device: torch.device) -> ZTATemporalGraphNetwork:
     # Kill-chain precursor prior knobs (serving-time; not in the state_dict).
     model.precursor_half_life = float(hp.get("precursor_half_life", 100000.0))
     model.precursor_max_boost = float(hp.get("precursor_max_boost", 3.0))
+    # v3 static-feature toggles: must match the values the checkpoint was trained with,
+    # else the source node would carry a feature the model never learned from.
+    model.use_source_internal = bool(hp.get("use_source_internal", False))
     # The bounded neighbour loader lives outside the state_dict; build it on the
     # serving device so its buffers match the model's. Its contents are restored
     # from the checkpoint in load_model.
@@ -238,6 +243,20 @@ def _set_node_features(model, idx: int, feat, device) -> None:
         model.node_feat[idx, 14] = trust
 
 
+def _set_source_network_feature(model, idx: int, key_source) -> None:
+    """Write the source network's internal/external bit into node_feat index 5.
+
+    Derived from the (``src:``-namespaced) client IP — a model feature, never an authz
+    gate. Source nodes are admitted at runtime, so unlike the preregistered resources
+    their static features must be set here on each event rather than baked at train time.
+    No-op when the checkpoint was trained without the source-internal feature.
+    """
+    if not getattr(model, "use_source_internal", False):
+        return
+    with torch.no_grad():
+        model.node_feat[idx, 5] = 1.0 if ip_is_internal(key_source) else 0.0
+
+
 def _admit(model, registry: NodeRegistry, key: Hashable) -> int:
     """Map an external key to its memory slot, admitting (and hashing) it if unseen."""
     idx, is_new = registry.get_or_add(
@@ -296,6 +315,8 @@ def score_event(
         _set_node_features(model, device_idx, src_feat, device)
     if dst_feat is not None:
         _set_node_features(model, dst_idx, dst_feat, device)
+    if source_idx is not None:
+        _set_source_network_feature(model, source_idx, key_source)
 
     features_bind = [0.0] * len(features)
     edge_scores = [
@@ -370,6 +391,8 @@ def commit_event(
         _set_node_features(model, device_idx, src_feat, device)
     if dst_feat is not None:
         _set_node_features(model, dst_idx, dst_feat, device)
+    if source_idx is not None:
+        _set_source_network_feature(model, source_idx, key_source)
 
     features_bind = [0.0] * len(features)
     if source_idx is not None:

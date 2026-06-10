@@ -44,6 +44,8 @@ from dataclasses import dataclass, field
 import numpy as np
 import torch
 
+from graphagate.netclass import ip_is_internal
+
 ROLES = ["guest", "operator", "manager", "admin"]
 CLEARANCES = ["PUBLIC", "INTERNAL", "CONFIDENTIAL", "SECRET", "TOP_SECRET"]
 
@@ -86,6 +88,21 @@ ROUTE_TEMPLATES = {
 # (after its normalizeAIPath): no synthetic suffixes, one node per real route.
 RESOURCE_URIS = list(ROUTE_TEMPLATES)
 
+# Per-resource inherent RISK (node_feat index 4), in [0, 1]. Single source of truth:
+# this MIRRORS getResourceSensitivity() in
+# services/security-orchestrator/internal/handler/handler.go (and the impact encoded
+# in policy.rego matrice_sicurezza), collapsed to a per-resource scalar (the max over
+# methods, since the resource node is method-agnostic). Routes the orchestrator never
+# scores as sensitive (public/auth/static) are 0.0. Keep aligned if the Go map changes.
+RESOURCE_RISK = {uri: 0.0 for uri in RESOURCE_URIS}
+RESOURCE_RISK.update({
+    "/api/v1/personnel": 0.6,                                  # max(GET/POST 0.4, DELETE 0.6)
+    "/api/v1/documents": 0.7,                                  # max(GET/POST 0.5, DELETE 0.7)
+    "/api/v1/nuclear-materials": 0.7,                          # max(0.5, DELETE 0.7)
+    "/api/v1/reactor-parameters": 1.0,                         # max(GET/POST 0.8, DELETE 1.0)
+    "/api/v1/trusted-guard/sanitized-delete-personnel": 1.0,  # sanitized delete = highest
+})
+
 # ``scenario`` bitmask flags (benign-context annotations for scenario-level eval).
 SCEN_ROAMING = 1   # benign event issued from a non-home IP (smart working / 5G)
 SCEN_WIPED = 2     # device cookie recently wiped: the device node is still cold
@@ -120,6 +137,8 @@ class ZTAStreamSimulator:
         admission_horizon: int | None = None,
         seed: int | None = None,
         start_time: int = 0,
+        use_resource_risk: bool = True,
+        use_source_internal: bool = False,
     ):
         if seed is not None:
             np.random.seed(seed)
@@ -193,22 +212,33 @@ class ZTAStreamSimulator:
             )
         for k in range(num_wipe_slots + num_theft_slots):
             self.keys[self.dev_lo + num_devices + k] = f"_spare_dev_{k}"
+        # Source keys are namespaced ``src:<ip>`` so a client IP can never alias onto a
+        # device slot in the shared NodeRegistry (the orchestrator sends the same prefix;
+        # the legacy IP-fallback device uses a distinct ``ipdev:`` prefix). Office IPs are
+        # RFC1918 (internal); CGNAT 100.64/10 (roaming) and TEST-NET 203.0.113 are external.
         for s in range(num_sources):
             self.keys[self.src_lo + s] = (
-                f"10.0.0.{s}" if s < num_office else f"100.64.{s // 256}.{s % 256}"
+                f"src:10.0.0.{s}" if s < num_office else f"src:100.64.{s // 256}.{s % 256}"
             )
         for k in range(num_theft_slots):
-            self.keys[self.src_lo + num_sources + k] = f"203.0.113.{k}"
+            self.keys[self.src_lo + num_sources + k] = f"src:203.0.113.{k}"
         for r in range(num_resources):
             self.keys[self.res_lo + r] = RESOURCE_URIS[r]
 
         # --- static node features (16-dim) -------------------------------------------
+        # Index map: [2]=device tier, [3]=resource priority, [4]=resource RISK,
+        # [5]=source network internal(1)/external(0), [14]=trust score.
         nf = torch.zeros(self.num_nodes, 16)
         nf[:, 14] = 1.0  # trust score default
         for m in range(num_devices):
             nf[self.dev_lo + m, 2] = self.machine_tiers[m] / 2.0
         for r in range(num_resources):
             nf[self.res_lo + r, 3] = r / float(num_resources - 1)
+            if use_resource_risk:
+                nf[self.res_lo + r, 4] = RESOURCE_RISK[RESOURCE_URIS[r]]
+        if use_source_internal:
+            for s in range(self.src_slots):
+                nf[self.src_lo + s, 5] = 1.0 if ip_is_internal(self.keys[self.src_lo + s]) else 0.0
         self.node_features = nf
 
         # --- behaviour model -----------------------------------------------------------
@@ -486,6 +516,8 @@ def generate_streaming_data(
     p_cookie_wipe=0.0003,
     p_cred_theft=0.0012,
     seed=None,
+    use_resource_risk=True,
+    use_source_internal=False,
 ) -> SyntheticStream:
     """Generate the offline v2 training stream (see the module docstring).
 
@@ -498,6 +530,7 @@ def generate_streaming_data(
         num_theft_slots=num_theft_slots, benign_explore_prob=benign_explore_prob,
         p_roam=p_roam, p_shared_device=p_shared_device, p_cookie_wipe=p_cookie_wipe,
         p_cred_theft=p_cred_theft, admission_horizon=num_events, seed=seed,
+        use_resource_risk=use_resource_risk, use_source_internal=use_source_internal,
     )
     events = [sim.step() for _ in range(num_events)]
 
