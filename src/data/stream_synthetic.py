@@ -87,14 +87,10 @@ def generate_streaming_data(num_users=50, num_ips=100, num_resources=20, num_eve
     node_features = torch.zeros(total_nodes, 16)
     node_features[:, 14] = 1.0  # Trust Score
     for i in range(num_users):
-        node_features[i, 0] = ROLES.index(user_roles[i]) / float(len(ROLES) - 1)
-        node_features[i, 1] = user_clearances[i] / 4.0
+        pass # User fallback nodes remain zeros
     for i in range(num_ips):
         node_features[num_users + i, 2] = ip_tiers[i] / 2.0
-        # encode the user this IP belongs to
-        u_idx = ip_to_user[i]
-        node_features[num_users + i, 0] = ROLES.index(user_roles[u_idx]) / float(len(ROLES) - 1)
-        node_features[num_users + i, 1] = user_clearances[u_idx] / 4.0
+        # Role and clearance are now passed via edge features.
 
     for i in range(num_resources):
         # Scalar resource id (19 URIs no longer fit one-hot in 16 dims); node
@@ -220,6 +216,13 @@ def generate_streaming_data(num_users=50, num_ips=100, num_resources=20, num_eve
                     s2 = 1.0 if np.random.rand() > 0.98 else 0.0  # 2%
                     s3 = 1.0 if np.random.rand() > 0.90 else 0.0  # 10%
                     etype = 3
+                    
+                    # Credential Theft Simulation (Device-centric lateral movement)
+                    if random.random() < 0.5:
+                        stolen_role = random.choice([r for r in ROLES if r != u_role])
+                        stolen_clearance = np.random.randint(0, 5)
+                        u_role = stolen_role
+                        u_clearance = stolen_clearance
                 else:
                     # No non-habitual authorised action exists -> fall back to a policy
                     # violation so the event is still a genuine anomaly.
@@ -258,7 +261,9 @@ def generate_streaming_data(num_users=50, num_ips=100, num_resources=20, num_eve
             label = 1
             
         action = float(method)
-        edge_feat = [ja3, float(s1), float(s2), float(s3), action]
+        u_role_val = ROLES.index(u_role) / float(len(ROLES) - 1)
+        u_clearance_val = u_clearance / 4.0
+        edge_feat = [ja3, float(s1), float(s2), float(s3), action, u_role_val, u_clearance_val]
         
         src_nodes.append(src_val)
         dst_nodes.append(dst_val)

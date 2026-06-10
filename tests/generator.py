@@ -64,13 +64,9 @@ async def event_generator(num_users=50, num_ips=100, num_resources=19, seed=None
     # Node features (static): 16-dim
     node_features = np.zeros((total_nodes, 16))
     for i in range(num_users):
-        node_features[i, 0] = ROLES.index(user_roles[i]) / float(len(ROLES) - 1)
-        node_features[i, 1] = user_clearances[i] / 4.0
+        pass
     for i in range(num_ips):
         node_features[num_users + i, 2] = ip_tiers[i] / 2.0
-        u_idx = ip_to_user[i]
-        node_features[num_users + i, 0] = ROLES.index(user_roles[u_idx]) / float(len(ROLES) - 1)
-        node_features[num_users + i, 1] = user_clearances[u_idx] / 4.0
 
     for i in range(num_resources):
         node_features[num_users + num_ips + i, 3] = i / float(num_resources - 1)
@@ -160,6 +156,12 @@ async def event_generator(num_users=50, num_ips=100, num_resources=19, seed=None
                     s2 = 1.0 if np.random.rand() > 0.98 else 0.0  # 2%
                     s3 = 1.0 if np.random.rand() > 0.90 else 0.0  # 10%
                     etype = 3
+                    
+                    if random.random() < 0.5:
+                        stolen_role = random.choice([r for r in ROLES if r != u_role])
+                        stolen_clearance = np.random.randint(0, 5)
+                        u_role = stolen_role
+                        u_clearance = stolen_clearance
                 else:
                     anomaly_type = "policy"
                     
@@ -193,7 +195,9 @@ async def event_generator(num_users=50, num_ips=100, num_resources=19, seed=None
             label = 1
             
         action = float(method)
-        edge_feat = [float(ja3), float(s1), float(s2), float(s3), float(action)]
+        u_role_val = ROLES.index(u_role) / float(len(ROLES) - 1)
+        u_clearance_val = u_clearance / 4.0
+        edge_feat = [float(ja3), float(s1), float(s2), float(s3), float(action), u_role_val, u_clearance_val]
         
         src_feat = node_features[src_val].tolist()
         dst_feat = node_features[dst_val].tolist()

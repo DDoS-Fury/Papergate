@@ -46,7 +46,7 @@ class TGNConfig:
 
     # TGN Architecture
     node_feat_dim: int = 16
-    msg_dim: int = 5
+    msg_dim: int = 7
     time_dim: int = 32
     memory_dim: int = 256
     num_hops: int = 3
