@@ -152,40 +152,65 @@ realEdgesGeometry.setAttribute('position', new THREE.Float32BufferAttribute([], 
 const realEdgesLines = new THREE.LineSegments(realEdgesGeometry, lineMat);
 realGnnGroup.add(realEdgesLines);
 
-function getOrCreateRealNode(key, isSource) {
-    if (realNodesMap.has(key)) return realNodesMap.get(key);
-    
+// Schema v2: catena causale source(IP) → device(TPM/cookie) → user → resource.
+// Un ruolo per colonna, colore per ruolo; gli archi sono i 3 hop della catena.
+const NODE_ROLES = {
+    source:   { x: -27, color: 0x00aaff, label: 'Source (IP / network context)' },
+    device:   { x: -9,  color: 0xff3366, label: 'Device (tpm:<id> / ck:<cookie>)' },
+    user:     { x: 9,   color: 0x00ffcc, label: 'User identity' },
+    resource: { x: 27,  color: 0xffaa00, label: 'Resource (URI)' },
+};
+
+function getOrCreateRealNode(key, role) {
+    const mapKey = role + '|' + key;
+    if (realNodesMap.has(mapKey)) return realNodesMap.get(mapKey);
+
+    const cfg = NODE_ROLES[role];
     const mesh = new THREE.Mesh(nodeGeom, gnnMat.clone());
-    if (isSource) {
-        mesh.position.set(-15 + (Math.random() - 0.5) * 15, (Math.random() - 0.5) * 15, (Math.random() - 0.5) * 30);
-        mesh.userData = { rotX: Math.random() * 0.02, rotY: Math.random() * 0.02, title: 'Source: ' + key, type: 'Real Source Node', desc: 'Observed Source Entity' };
-    } else {
-        mesh.position.set(15 + (Math.random() - 0.5) * 15, (Math.random() - 0.5) * 15, (Math.random() - 0.5) * 30);
-        mesh.material.color.setHex(0xffaa00);
-        mesh.material.emissive.setHex(0xffaa00);
-        mesh.userData = { rotX: Math.random() * 0.02, rotY: Math.random() * 0.02, title: 'Dest: ' + key, type: 'Real Destination Node', desc: 'Observed Dest Entity' };
-    }
-    
+    mesh.material.color.setHex(cfg.color);
+    mesh.material.emissive.setHex(cfg.color);
+    mesh.position.set(cfg.x + (Math.random() - 0.5) * 10, (Math.random() - 0.5) * 15, (Math.random() - 0.5) * 30);
+    mesh.userData = {
+        rotX: Math.random() * 0.02,
+        rotY: Math.random() * 0.02,
+        title: role.charAt(0).toUpperCase() + role.slice(1) + ': ' + key,
+        type: cfg.label,
+        desc: 'Observed entity in the causal chain (v2 schema).'
+    };
+
     realGnnGroup.add(mesh);
     gnnNodes.push(mesh);
-    realNodesMap.set(key, mesh);
-    
+    realNodesMap.set(mapKey, mesh);
+
     const statNodes = document.getElementById('stat-nodes');
     if (statNodes) statNodes.textContent = abstractGnnGroup.visible ? 23 : realNodesMap.size;
     return mesh;
 }
 
-function processEventForRealNet(srcKey, dstKey) {
-    const srcNode = getOrCreateRealNode(srcKey, true);
-    const dstNode = getOrCreateRealNode(dstKey, false);
-    
-    const edgeKey = srcKey + '|' + dstKey;
-    if (!realEdgesSet.has(edgeKey)) {
-        realEdgesSet.add(edgeKey);
-        realEdgesPositions.push(srcNode.position.x, srcNode.position.y, srcNode.position.z, dstNode.position.x, dstNode.position.y, dstNode.position.z);
-        realEdgesGeometry.setAttribute('position', new THREE.Float32BufferAttribute(realEdgesPositions, 3));
-        realEdgesGeometry.attributes.position.needsUpdate = true;
+// Estrae la catena [role, key] dall'evento. key_source e' opzionale: quando
+// manca (fallback legacy senza id hardware) l'arco source→device non esiste.
+function chainFromEvent(data) {
+    const chain = [];
+    if (data.key_source !== undefined && data.key_source !== null) chain.push(['source', data.key_source]);
+    chain.push(['device', data.key_device], ['user', data.key_user], ['resource', data.key_dst]);
+    return chain;
+}
+
+function processEventForRealNet(chain) {
+    const nodes = chain.map(([role, key]) => getOrCreateRealNode(key, role));
+    for (let i = 0; i + 1 < nodes.length; i++) {
+        const edgeKey = chain[i][0] + '|' + chain[i][1] + '>' + chain[i + 1][0] + '|' + chain[i + 1][1];
+        if (!realEdgesSet.has(edgeKey)) {
+            realEdgesSet.add(edgeKey);
+            realEdgesPositions.push(
+                nodes[i].position.x, nodes[i].position.y, nodes[i].position.z,
+                nodes[i + 1].position.x, nodes[i + 1].position.y, nodes[i + 1].position.z
+            );
+            realEdgesGeometry.setAttribute('position', new THREE.Float32BufferAttribute(realEdgesPositions, 3));
+            realEdgesGeometry.attributes.position.needsUpdate = true;
+        }
     }
+    return nodes;
 }
 
 // --- 4. Scoring Heads (y = 20) ---
@@ -458,10 +483,8 @@ let simInterval = null;
 function handleStreamEvent(data) {
     eventCount++;
     if(statEvents) statEvents.textContent = eventCount.toLocaleString();
-    // Live events carry key_user/key_device/key_source/key_dst (v2 schema); the
-    // simulated path still feeds key_src. Normalise on the device (the actor).
-    if (data.key_src === undefined) data.key_src = data.key_device;
-    
+    const chain = chainFromEvent(data);
+
     // Update real system stats if provided by backend (Live Mode)
     if (liveToggle && liveToggle.checked) {
         if (data.cpu_percent !== undefined && statCpu) statCpu.textContent = data.cpu_percent.toFixed(1) + '%';
@@ -469,8 +492,8 @@ function handleStreamEvent(data) {
         if (data.inf_time_ms !== undefined && statInf) statInf.textContent = data.inf_time_ms.toFixed(1) + 'ms';
     }
     
-    processEventForRealNet(data.key_src, data.key_dst);
-    
+    const chainNodes = processEventForRealNet(chain);
+
     // Spawn rotating event particle to reflect real event
     const evParticleColor = data.is_anomaly ? 0xff3366 : 0x00ffcc;
     const evParticle = new THREE.Mesh(sphereGeom, new THREE.MeshBasicMaterial({ color: evParticleColor, transparent: true, opacity: 0.8 }));
@@ -491,30 +514,26 @@ function handleStreamEvent(data) {
         if (old.material) old.material.dispose();
     }
 
-    // Determine path through the network
-    let srcPos, dstPos;
+    // Determine path through the network: the particle walks the whole causal
+    // chain (up to 4 hops) before reaching the scoring heads and the gate.
+    let chainPositions;
     const isLiveMode = document.getElementById('live-mode-toggle')?.checked;
     const isExact = isLiveMode || isExactTopology;
-    
+
     if (isExact) {
-        const srcNode = getOrCreateRealNode(data.key_src, true);
-        const dstNode = getOrCreateRealNode(data.key_dst, false);
-        srcPos = srcNode.position;
-        dstPos = dstNode.position;
+        chainPositions = chainNodes.map(n => n.position);
     } else {
         const abstractSources = gnnNodes.filter(n => n.userData.type === 'Abstract Source');
         const abstractDests = gnnNodes.filter(n => n.userData.type === 'Abstract Destination');
         const srcNode = abstractSources.length > 0 ? abstractSources[Math.floor(Math.random() * abstractSources.length)] : { position: new THREE.Vector3(-10, 0, 0) };
         const dstNode = abstractDests.length > 0 ? abstractDests[Math.floor(Math.random() * abstractDests.length)] : { position: new THREE.Vector3(10, 0, 0) };
-        srcPos = srcNode.position;
-        dstPos = dstNode.position;
+        chainPositions = [srcNode.position, dstNode.position];
     }
 
     const memCube = memoryCubes[Math.floor(Math.random() * memoryCubes.length)];
     const path = [
         new THREE.Vector3(memCube.position.x, memCube.position.y + layerYs.memory, memCube.position.z),
-        new THREE.Vector3(srcPos.x, srcPos.y + layerYs.gnn, srcPos.z),
-        new THREE.Vector3(dstPos.x, dstPos.y + layerYs.gnn, dstPos.z),
+        ...chainPositions.map(p => new THREE.Vector3(p.x, p.y + layerYs.gnn, p.z)),
         new THREE.Vector3(Math.random() > 0.5 ? -15 : 15, layerYs.scoring, 0),
         new THREE.Vector3(0, layerYs.gate, 0)
     ];
@@ -531,7 +550,7 @@ function handleStreamEvent(data) {
     flowingParticles.push(mesh);
     
     if (data.is_anomaly && alertBox) {
-        alertDesc.textContent = `Alert on ${data.key_src} -> ${data.key_dst} (Score: ${data.score.toFixed(3)})`;
+        alertDesc.textContent = `Alert on ${data.key_user}@${data.key_device} -> ${data.key_dst} (Score: ${data.score.toFixed(3)})`;
         alertBox.classList.remove('hidden');
         setTimeout(() => alertBox.classList.add('hidden'), 3000);
         
@@ -552,11 +571,25 @@ function startSimulation() {
 
     if (simInterval) clearInterval(simInterval);
     simInterval = setInterval(() => {
-        const fakeSrc = '192.168.1.' + Math.floor(Math.random() * 50);
+        // Mock v2 events: full source → device → user → resource chain, with
+        // the occasional legacy event without key_source (no hardware id).
+        const fakeUser = 'user_' + Math.floor(Math.random() * 12);
+        // v3: keys namespaced by type. ~5% are the legacy fallback (no hardware id):
+        // device keyed by the IP itself ("ipdev:<ip>") and NO key_source.
+        const legacy = Math.random() < 0.05;
+        const fakeIP = (Math.random() > 0.25 ? '10.0.0.' : '100.64.0.') + Math.floor(Math.random() * 50);
+        const fakeDevice = legacy
+            ? 'ipdev:' + fakeIP
+            : (Math.random() > 0.4 ? 'tpm:' : 'ck:') + String(Math.floor(Math.random() * 24)).padStart(4, '0');
+        const fakeSource = legacy ? null : 'src:' + fakeIP;
         const fakeDst = '/api/v1/resource_' + Math.floor(Math.random() * 8);
         const isAnomaly = Math.random() > 0.95;
         const score = isAnomaly ? 0.85 + Math.random() * 0.15 : Math.random() * 0.3;
-        handleStreamEvent({ is_anomaly: isAnomaly, key_src: fakeSrc, key_dst: fakeDst, score: score });
+        handleStreamEvent({
+            is_anomaly: isAnomaly,
+            key_user: fakeUser, key_device: fakeDevice, key_source: fakeSource, key_dst: fakeDst,
+            score: score
+        });
     }, 800);
 }
 

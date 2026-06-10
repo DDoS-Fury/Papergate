@@ -67,6 +67,16 @@ class TGNConfig:
     # not by novelty alone. See stream_synthetic.generate_streaming_data.
     benign_explore_prob: float = 0.15
 
+    # v3 static-feature ablation toggles (node_feat_dim is unchanged either way; the
+    # slot is simply left at 0 when off). resource_risk (node_feat[*,4]) = per-resource
+    # sensitivity baked from getResourceSensitivity. source_internal (node_feat[*,5]) =
+    # RFC1918 internal/external bit of the client network. NB: source_internal can
+    # *mask* credential theft (benign external roaming normalises external→device
+    # bindings, the very edge that exposes a stolen-credential attacker), so it is
+    # ablatable and validated against the cred-theft gate before being enabled.
+    use_resource_risk: bool = True
+    use_source_internal: bool = False
+
     # TGN Architecture
     node_feat_dim: int = 16
     msg_dim: int = 7
@@ -130,10 +140,13 @@ class TGNConfig:
 
     seed: int = 42
 
-    # Event schema version persisted in the checkpoint hyper-parameters. v2 = the
-    # 4-node / 3-edge schema (source IP → device → user → resource); v1 checkpoints
-    # (2-edge, IP-keyed device) are incompatible and are rejected at load time.
-    schema_version: int = 2
+    # Event schema version persisted in the checkpoint hyper-parameters. v3 = the
+    # 4-node / 3-edge schema with type-namespaced keys (src:/ipdev:/tpm:/ck:) plus two
+    # new static node features — node_feat[*,4]=resource RISK, node_feat[*,5]=source
+    # network internal/external. node_feat index map: [2]=device tier, [3]=resource
+    # priority, [4]=resource risk, [5]=source internal, [14]=trust. Earlier checkpoints
+    # (v1 2-edge, v2 bare-IP keys / no risk-internal feats) are rejected at load time.
+    schema_version: int = 3
 
     @property
     def total_nodes(self) -> int:
