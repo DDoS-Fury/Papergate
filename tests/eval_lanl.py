@@ -47,6 +47,8 @@ def main() -> int:
     p.add_argument("--window-end", type=int, default=None)
     p.add_argument("--epochs", type=int, default=8)
     p.add_argument("--cost-ratio", type=float, default=TGNConfig().cost_ratio)
+    p.add_argument("--train-frac", type=float, default=0.7)
+    p.add_argument("--val-frac", type=float, default=0.1)
     args = p.parse_args()
 
     window = None
@@ -62,7 +64,7 @@ def main() -> int:
 
     # Override only the knobs that matter for an injected stream; entity-count / num_events
     # fields are unused when ``dataset`` is supplied.
-    cfg = dataclasses.replace(TGNConfig(), epochs=args.epochs, cost_ratio=args.cost_ratio)
+    cfg = dataclasses.replace(TGNConfig(), epochs=args.epochs, cost_ratio=args.cost_ratio, train_frac=args.train_frac, val_frac=args.val_frac)
 
     print("\n--- TRAIN + EVALUATE (LANL external validity) ---")
     metrics = train_tgn(cfg, dataset=data, save=False)
