@@ -26,7 +26,7 @@ from graphagate.serve_tgn import load_model, score_event
 KEY_SRC = 60          # a preregistered IP entity
 KEY_DST = "/api/v1/reactor-parameters"         # a preregistered resource entity URI
 TS = 10**9            # a timestamp far beyond any training time
-BENIGN_FEAT = [1.0, 0.0, 0.0, 0.0, 0.0, 2.0]
+BENIGN_FEAT = [1.0, 0.0, 0.0, 0.0, 0.0, 0.5, 0.5]
 
 
 def _check(name: str, ok: bool, detail: str = "") -> bool:
