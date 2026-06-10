@@ -54,7 +54,7 @@ compatibilità strutturale — che insieme coprono le tre classi di anomalia.
 
 ```mermaid
 flowchart TD
-    EV["Access event<br/>(key_src, key_dst, t, edge_msg)<br/>+ static attrs: role / clearance / tier"]
+    EV["Access event — schema v2, catena a 3 archi<br/>key_source(IP) → key_device(tpm:/ck:) → key_user → key_dst<br/>(t, edge_msg sull'arco di accesso) + static attrs: role / clearance / tier"]
     REG["NodeRegistry<br/>entity key → memory slot<br/>dynamic admission · LRU eviction"]
     NL["MessageNeighborLoader<br/>bounded ring-buffer [num_nodes, K]<br/>last K temporal neighbours (+ t, + msg)"]
     EV --> REG --> NL
@@ -110,8 +110,11 @@ Il "buffer" della memoria storica e del vicinato (`MessageNeighborLoader`) non c
 
 ### Flusso per evento (serving)
 
-1. `NodeRegistry` mappa `key_src`/`key_dst` → slot di memoria (ammette entità nuove).
-2. Il neighbour loader espande i due nodi al loro **vicinato temporale storico**
+1. `NodeRegistry` mappa `key_user`/`key_device`/`key_source`/`key_dst` → slot di memoria
+   (ammette entità nuove). La richiesta è la catena a 3 archi `IP → device → utente →
+   risorsa`; se `key_source` manca, l'arco IP→device viene saltato. Lo score finale è il
+   **max sugli archi presenti**.
+2. Il neighbour loader espande i nodi al loro **vicinato temporale storico**
    (`n_id, edge_index, hist_t, hist_msg`).
 3. `embed()`: legge la memoria, vi concatena l'identità di nodo e fa girare la GNN sui
    vicini reali → embedding `z` *consapevole di identità e storia*.
@@ -129,15 +132,18 @@ Il "buffer" della memoria storica e del vicinato (`MessageNeighborLoader`) non c
 
 ## Tipi di anomalia (dati sintetici)
 
-Il generatore (`src/data/stream_synthetic.py`) simula accessi *IP/device → risorsa* e produce,
-oltre alle etichette binarie `y`, un vettore `types` per la valutazione per-classe:
+Il generatore (`src/data/stream_synthetic.py`) simula la catena *IP → device → utente →
+risorsa* (smart working/roaming, NAT, device condivisi, cookie-wipe) e produce, oltre alle
+etichette binarie `y`, un vettore `types` per la valutazione per-classe e un bitmask
+`scenario` (roaming / wiped / shared) per la valutazione per-scenario:
 
 | `type` | Classe | Caratteristica | Note |
 |---|---|---|---|
 | 0 | benign | abituale **o** esplorazione autorizzata-non-abituale (`benign_explore_prob`) | — |
 | 1 | policy | ruolo/clearance/tier insufficienti | **di OPA** (bloccato a monte); non valore aggiunto del modello |
 | 2 | contextual | JA3 rotto / alert Snort / sensori | **banale**: presa al ~97% dalla rule baseline |
-| 3 | lateral | autorizzato ma **non-abituale** | **unico target ML genuino**: storia + memoria temporale + precursor kill-chain |
+| 3 | lateral | autorizzato ma **non-abituale** | **target ML genuino**: storia + memoria temporale + precursor kill-chain |
+| 4 | credential theft | IP **e** device mai visti che si agganciano a un utente noto | **target ML genuino del v2**: visibile solo sugli archi di binding (policy-clean, signal-clean) |
 
 > **De-degenerazione.** Il benigno ora compie a volte accessi autorizzati-non-abituali
 > *legittimi*, quindi il lateral è feature-identico a un benigno non-abituale: l'unico
@@ -159,6 +165,16 @@ temporale-relazionale**, non dei contatori.
 | Static GNN (grafo, **no temporale**) | 0.598 | 0.511 | 0.486 ≈ caso | 0.1% |
 | Isolation Forest | 0.703 | 0.335 | 0.650 | 2.3% |
 | **TGN (full)** | **0.912** | **0.820** | **0.760** | **4.7%** |
+
+> **Risultati schema v2 (4 nodi / 3 archi, run pieno 50k/15ep, seed 42).** Lateral AUC
+> **0.818** (v1: 0.760), AUC aggregata 0.919, cred-theft AUC **0.969** con recall **1.00**
+> alla soglia instradata; FPR roaming ≈ FPR benigna normale (0.180 vs 0.172 — il cambio di
+> rete non è più un falso positivo); recall lateral su device condivisi (0.381) in linea col
+> lateral complessivo (0.376). Nota di confronto onesto: nel v2 è stato corretto il bug di
+> `signal_dirty`/rule-baseline che trattava il metodo HTTP come un sensore (ogni POST finiva
+> sulla soglia conservativa), quindi precision/recall alla soglia NON sono confrontabili 1:1
+> con la riga v1; il punto operativo si regola con `cost_ratio` / `clean_fpr_cap`. I numeri
+> baseline in tabella sono del run v1 (da rigenerare coi profili Compose `baseline-*`).
 
 - **Lo Static GNN — stessi contatori + precursor, stessa struttura di grafo, ma senza la
   macchina temporale — sta a caso sul lateral (0.49).** Il TGN arriva a **0.76**: il segnale

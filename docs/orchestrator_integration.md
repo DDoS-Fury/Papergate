@@ -12,12 +12,14 @@ Il modello TGN è stato progettato appositamente per essere **stateful** e gesti
 
 ### Flusso di Esecuzione (Serving)
 
-1. **Inoltro della Richiesta (Tupla)**
-   L'orchestrator ZTA non deve pre-processare vettori né interrogare database storici. Deve semplicemente inoltrare la singola transazione (o evento) grezza all'API di serving del modello (`src/serve_tgn.py -> score_event`). La tupla minima richiesta include:
-   - Identificativo sorgente (es. IP, Username).
-   - Identificativo destinazione (es. URI della risorsa).
+1. **Inoltro della Richiesta (Tupla, schema v2 a 4 nodi)**
+   L'orchestrator ZTA non deve pre-processare vettori né interrogare database storici. Deve semplicemente inoltrare la singola transazione (o evento) grezza all'API di serving del modello (`src/serve_tgn.py -> score_event`). Ogni richiesta è modellata come catena causale a 3 archi `sorgente(IP) → dispositivo → utente → risorsa`. La tupla richiesta include:
+   - `key_user`: identità (es. user id dal JWT).
+   - `key_device`: contesto hardware — `tpm:<id>` se il TPM è attestato, altrimenti `ck:<cookie>` (cookie/UUID persistente rilasciato dal sistema; un cookie nuovo = macchina mai vista). **Non** usare l'IP come device.
+   - `key_source` (opzionale): contesto di rete — l'IP del client. Se assente, l'arco sorgente→dispositivo viene semplicemente saltato.
+   - `key_dst`: URI della risorsa.
    - Timestamp (es. Unix epoch).
-   - Array di feature contestuali dell'arco (es. trust di JA3, allarmi Snort, sonde, metodo HTTP).
+   - Array di feature contestuali dell'arco (es. trust di JA3, sonde Snort, metodo HTTP, ruolo/clearance).
    - **Attributi statici delle entità** (`src_feat` / `dst_feat`): ruolo, clearance,
      device tier. L'orchestrator/OPA li conosce già per ogni richiesta, quindi vengono
      passati per-evento (nessun datastore aggiuntivo). Sono il segnale che permette al
@@ -106,18 +108,26 @@ Configurazione via variabili d'ambiente (tutte opzionali):
 
 ```json
 {
-  "key_src": "10.0.0.7",          // chiave entità sorgente (string o int)
-  "key_dst": "https://crm/db",    // chiave entità destinazione
+  "key_user": "alice",             // chiave utente (string o int)
+  "key_device": "tpm:a1b2c3",      // chiave dispositivo: "tpm:<id>" o "ck:<cookie>"
+  "key_source": "10.0.0.7",        // opz.: IP del client (se assente, niente arco IP→device)
+  "key_dst": "/api/v1/documents",  // chiave risorsa (URI normalizzato)
   "timestamp": 1717000000,         // intero (es. Unix epoch)
-  "features": [1.0, 0.0, 0.0, 0.0, 0.0, 2.0], // messaggio d'arco (array di 6 float):
+  "features": [1.0, 0.0, 0.0, 0.0, 0.0, 0.67, 0.5], // messaggio d'arco (7 float):
                                               // [0] JA3: 1.0 (ok), 0.0 (anomalia)
-                                              // [1] Snort: 0.0 (ok), 1.0 (alert)
-                                              // [2-4] Sonde s1, s2, s3 (0.0 o 1.0)
-                                              // [5] Metodo HTTP (0=GET, 1=POST, 2=PUT, 3=DELETE, 4=PATCH)
+                                              // [1-3] Sonde Snort s1, s2, s3 (0.0 o 1.0)
+                                              // [4] Metodo HTTP (0=GET, 1=POST, 2=PUT, 3=DELETE, 4=PATCH)
+                                              // [5] Ruolo normalizzato (idx/(len-1))
+                                              // [6] Clearance normalizzata (idx/4)
   "src_feat": [/* ... */],         // opz., attributi statici, len == node_feat_dim (16)
   "dst_feat": [/* ... */]          // opz.
 }
 ```
+
+Il messaggio d'arco viaggia sull'arco di accesso `utente → risorsa`; i due archi di
+binding (`IP → device`, `device → utente`) portano messaggi nulli e catturano le
+rotture di pattern relazionale (es. furto di credenziali: IP e device mai visti che si
+agganciano a un utente noto). Lo score restituito è il massimo sugli archi presenti.
 
 Risposta di `/infer` e `/score`:
 
@@ -150,7 +160,7 @@ Per questo motivo, l'Orchestrator deve iniettare i privilegi a runtime tramite `
   `/persist`. Avviare con un singolo worker uvicorn (già impostato) e **non** scalare
   orizzontalmente questo servizio.
 - **Continuità delle chiavi e Risorse.** Il registry serializzato dal training pre-registra le stringhe esatte degli URI per gli endpoint (es. `/api/v1/personnel`, `/api/v1/reactor-parameters` — la lista canonica è `RESOURCE_URIS` in `src/data/stream_synthetic.py`). L'Orchestrator DEVE usare queste esatte stringhe come `key_dst`: le sottorotte con path-parameter (es. `/api/v1/personnel/123`) vanno normalizzate alla rotta base prima della chiamata (vedi `normalizeAIPath` in services/security-orchestrator). Se viene usata una stringa diversa, il modello la interpreterà come un backend mai visto prima (falsando i rilevamenti).
-- **Grace Period (Rodaggio Cold-Start per Utenti).** Poiché in produzione l'Orchestrator incontrerà chiavi utente/IP completamente nuove (`key_src`), il modello assegnerà a queste identità un alto anomaly score iniziale, per la mancanza di storico (cold-start). L'Orchestrator **deve** applicare un "Grace Period" su queste nuove entità: per i primissimi eventi (es. i primi 5-10), deve fidarsi solo della validazione statica di OPA e forzare la chiamata a `/update`, ignorando il punteggio AI. Questo permette al modello di costruire rapidamente una baseline "sicura" per il nuovo utente.
+- **Grace Period (Rodaggio Cold-Start per Utenti).** Poiché in produzione l'Orchestrator incontrerà chiavi utente/dispositivo completamente nuove (`key_user`/`key_device`), il modello assegnerà a queste identità un alto anomaly score iniziale, per la mancanza di storico (cold-start). L'Orchestrator **deve** applicare un "Grace Period" su queste nuove entità: per i primissimi eventi (es. i primi 5-10), deve fidarsi solo della validazione statica di OPA e forzare la chiamata a `/update`, ignorando il punteggio AI. Questo permette al modello di costruire rapidamente una baseline "sicura" per il nuovo utente.
 
 ### Esempio: chiamata diretta (curl)
 
@@ -158,7 +168,7 @@ Per questo motivo, l'Orchestrator deve iniettare i privilegi a runtime tramite `
 # Score read-only di un evento
 curl -s -X POST http://localhost:8088/infer \
   -H 'Content-Type: application/json' \
-  -d '{"key_src":"10.0.0.7","key_dst":"https://crm/db","timestamp":1717000000,"features":[1.0,0.0,0.0,0.0,0.0,2.0]}'
+  -d '{"key_user":"alice","key_device":"tpm:a1b2c3","key_source":"10.0.0.7","key_dst":"/api/v1/documents","timestamp":1717000000,"features":[1.0,0.0,0.0,0.0,0.0,0.67,0.5]}'
 # -> {"anomaly_score":0.83,"is_anomaly":true,"threshold":0.6264}
 ```
 
@@ -169,7 +179,9 @@ standard library:
 
 ```go
 type Event struct {
-    KeySrc    string    `json:"key_src"`
+    KeyUser   string    `json:"key_user"`
+    KeyDevice string    `json:"key_device"`           // "tpm:<id>" o "ck:<cookie>"
+    KeySource string    `json:"key_source,omitempty"` // IP del client (opzionale)
     KeyDst    string    `json:"key_dst"`
     Timestamp int64     `json:"timestamp"`
     Features  []float64 `json:"features"`
@@ -199,7 +211,8 @@ func post(base, path string, in, out any) error {
 }
 
 // Per ogni evento di accesso:
-ev := Event{KeySrc: srcIP, KeyDst: resURI, Timestamp: time.Now().Unix(),
+ev := Event{KeyUser: userID, KeyDevice: deviceID, KeySource: clientIP,
+    KeyDst: resURI, Timestamp: time.Now().Unix(),
     Features: edgeSignals, SrcFeat: srcAttrs, DstFeat: dstAttrs}
 
 var s ScoreResp

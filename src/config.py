@@ -29,13 +29,36 @@ class TGNConfig:
     inference time through the :class:`~graphagate.model.registry.NodeRegistry`.
     """
 
-    # Synthetic stream shape (entity counts + number of events).
+    # Synthetic stream shape (entity counts + number of events). v2 schema: the old
+    # single "IP/device" entity is split into SOURCE (network context: the client IP)
+    # and DEVICE (hardware context: TPM id or persistent device cookie), so an IP
+    # change (smart working) no longer looks like a brand-new machine, while a new
+    # device suddenly binding to a known user (credential theft) stands out.
     num_users: int = 50
-    num_ips: int = 100
+    num_devices: int = 80
+    num_sources: int = 150
     # MUST equal len(RESOURCE_URIS) in stream_synthetic.py: resource node keys are
     # the exact route URIs the security-orchestrator sends as key_dst.
     num_resources: int = 19
     num_events: int = 50000
+
+    # Spare device-node slots for the generator's dynamic scenarios: a cookie wipe
+    # re-keys a machine (new cold device node), a credential-theft incident brings a
+    # never-seen attacker device + attacker IP.
+    num_wipe_slots: int = 16
+    num_theft_slots: int = 64
+
+    # Behavioural dynamics of the 4-node stream (all benign except p_cred_theft):
+    #   p_roam          — benign event issued from a non-home IP (smart working / 5G);
+    #   p_shared_device — fraction of devices used by 2-3 users (control-room machine);
+    #   p_cookie_wipe   — per-event chance a cookie-identified device wipes its cookie
+    #                     (re-keyed as a cold node; benign, must not become a false positive);
+    #   p_cred_theft    — per-event chance a credential-theft incident starts: a new IP +
+    #                     new device issue requests as an existing victim user (etype 4).
+    p_roam: float = 0.10
+    p_shared_device: float = 0.20
+    p_cookie_wipe: float = 0.0003
+    p_cred_theft: float = 0.0012
 
     # De-degeneration knob: probability that a *benign* event performs an
     # authorised-but-non-habitual access (legitimate exploration). With this > 0 the
@@ -57,9 +80,12 @@ class TGNConfig:
     # structural signal for lateral-movement detection. No graph DB required.
     neighbor_size: int = 30
     # Explicit interaction-history features per scored event (runtime-derivable,
-    # non-circular): [log1p(pair_count), log1p(src_count), pair_count/(src_count+1)].
-    # See ZTATemporalGraphNetwork.compute_hist_feats.
-    hist_feat_dim: int = 3
+    # non-circular): [log1p(pair_count), log1p(src_count), pair_count/(src_count+1)]
+    # for the scored edge, plus the same triplet for an auxiliary (device, resource)
+    # pair on the access edge — the per-device habituality signal that previously
+    # lived on the direct device→resource edge (kept as counters, not as a 4th
+    # temporal edge). See ZTATemporalGraphNetwork.compute_hist_feats.
+    hist_feat_dim: int = 6
     # InfoNCE ranking objective: number of random-destination negatives per positive.
     # The lateral signal is "rank the true dst above K alternatives given src history".
     infonce_k: int = 5
@@ -104,9 +130,19 @@ class TGNConfig:
 
     seed: int = 42
 
+    # Event schema version persisted in the checkpoint hyper-parameters. v2 = the
+    # 4-node / 3-edge schema (source IP → device → user → resource); v1 checkpoints
+    # (2-edge, IP-keyed device) are incompatible and are rejected at load time.
+    schema_version: int = 2
+
     @property
     def total_nodes(self) -> int:
-        return self.num_users + self.num_ips + self.num_resources
+        return (
+            self.num_users
+            + self.num_devices + self.num_wipe_slots + self.num_theft_slots
+            + self.num_sources + self.num_theft_slots
+            + self.num_resources
+        )
 
     @property
     def capacity(self) -> int:

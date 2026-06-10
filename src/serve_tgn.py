@@ -32,8 +32,18 @@ from graphagate.model.registry import NodeRegistry
 from graphagate.model.tgn import ZTATemporalGraphNetwork, stable_hash
 
 
+SCHEMA_VERSION = 2  # 4-node / 3-edge event schema (source IP -> device -> user -> resource)
+
+
 def build_model(hp: dict, device: torch.device) -> ZTATemporalGraphNetwork:
     """Instantiate the model from a hyper-parameter dict (see :func:`save_model`)."""
+    found = int(hp.get("schema_version", 1))
+    if found != SCHEMA_VERSION:
+        raise RuntimeError(
+            f"checkpoint schema_version={found} is incompatible with this code "
+            f"(expected {SCHEMA_VERSION}: the 4-node source/device/user/resource schema). "
+            "Retrain with `graphagate.train_tgn` to regenerate the artifact."
+        )
     model = ZTATemporalGraphNetwork(
         num_nodes=int(hp["capacity"]),
         node_feat_dim=int(hp["node_feat_dim"]),
@@ -43,7 +53,7 @@ def build_model(hp: dict, device: torch.device) -> ZTATemporalGraphNetwork:
         num_hops=int(hp.get("num_hops", 2)),
         hash_buckets=int(hp.get("hash_buckets", 10000)),
         hash_dim=int(hp.get("hash_dim", 16)),
-        hist_feat_dim=int(hp.get("hist_feat_dim", 3)),
+        hist_feat_dim=int(hp.get("hist_feat_dim", 6)),
     ).to(device)
     # Kill-chain precursor prior knobs (serving-time; not in the state_dict).
     model.precursor_half_life = float(hp.get("precursor_half_life", 100000.0))
@@ -72,13 +82,18 @@ def _event_tensors(src_idx: int, dst_idx: int, t_val: int, msg_vec, device):
 
 
 @torch.no_grad()
-def infer_score(model, src_idx: int, dst_idx: int, t_val: int, msg_vec, device) -> float:
-    """Return the anomaly score (1 - P(benign)) for a single event.
+def infer_score(model, src_idx: int, dst_idx: int, t_val: int, msg_vec, device,
+                aux_src_idx: int | None = None) -> float:
+    """Return the anomaly score (1 - P(benign)) for a single edge.
 
     Does **not** mutate memory or the neighbour loader. The two endpoints are
     expanded to their stored temporal neighbourhood so the embedding reflects each
     entity's recent interaction history (the structural signal for lateral movement);
     a cold-start node with no neighbours falls back to its memory state alone.
+
+    ``aux_src_idx`` feeds the second interaction-history triplet (the per-device
+    habituality counters on the access edge — see ``compute_hist_feats``); ``None``
+    zero-pads it (binding edges / device-less datasets).
     """
     b_src, b_dst, b_t, b_msg = _event_tensors(src_idx, dst_idx, t_val, msg_vec, device)
     nodes = torch.unique(torch.cat([b_src, b_dst]))
@@ -94,7 +109,8 @@ def infer_score(model, src_idx: int, dst_idx: int, t_val: int, msg_vec, device) 
 
     # Explicit interaction-history features for this src→dst pair (read-only; counts are
     # advanced in update_memory, exactly mirroring the train-time predict-then-update order).
-    hist_feats = model.compute_hist_feats([src_idx], [dst_idx], device)
+    aux_ids = None if aux_src_idx is None else [aux_src_idx]
+    hist_feats = model.compute_hist_feats([src_idx], [dst_idx], device, aux_src_ids=aux_ids)
 
     out = model(
         n_id, edge_index, hist_t, hist_msg, assoc[b_src], assoc[b_dst], b_msg, delta_t, delta_t_src, hist_feats
@@ -104,12 +120,19 @@ def infer_score(model, src_idx: int, dst_idx: int, t_val: int, msg_vec, device) 
 
 
 @torch.no_grad()
-def update_memory(model, src_idx: int, dst_idx: int, t_val: int, msg_vec, device) -> None:
-    """Commit a single event into the TGN memory and the neighbour store.
+def update_memory(model, src_idx: int, dst_idx: int, t_val: int, msg_vec, device,
+                  aux_pair: tuple[int, int] | None = None) -> None:
+    """Commit a single edge into the TGN memory and the neighbour store.
 
     Inserting into the neighbour loader only here (and only for events the caller
     has judged benign) keeps the anti-poisoning gate intact: anomalous events never
     enter an entity's history.
+
+    ``aux_pair`` advances an extra ``pair_count`` entry without a temporal edge: on
+    the access-edge commit it is ``(device_idx, dst_idx)``, the per-device resource
+    habituality counter read back by ``compute_hist_feats``'s second triplet (the
+    device's own activity count is kept by its binding-edge commit, so only the pair
+    counter is bumped here).
     """
     b_src, b_dst, b_t, b_msg = _event_tensors(src_idx, dst_idx, t_val, msg_vec, device)
     model.memory.update_state(b_src, b_dst, b_t, b_msg)
@@ -124,6 +147,8 @@ def update_memory(model, src_idx: int, dst_idx: int, t_val: int, msg_vec, device
         model.pair_count, model.src_count = {}, {}
     model.pair_count[(src_idx, dst_idx)] = model.pair_count.get((src_idx, dst_idx), 0) + 1
     model.src_count[src_idx] = model.src_count.get(src_idx, 0) + 1
+    if aux_pair is not None:
+        model.pair_count[aux_pair] = model.pair_count.get(aux_pair, 0) + 1
 
 
 def precursor_boost(model, src_idx: int, t_val: int) -> float:
@@ -160,16 +185,19 @@ def record_alert(model, src_idx: int, t_val: int) -> None:
 def signal_dirty(features) -> bool:
     """Whether an event's edge signal already fires (the observable, class-free split).
 
-    ``features`` is the message vector ``[ja3, snort, s1, s2, s3, method]``: the signal is
-    "dirty" when TLS trust is broken (``ja3==0``), Snort alerts, or any sensor fires — the
-    same condition as the rule baseline. The true anomaly class is unknown at serving time,
-    but this *is* observable, so the decision threshold is routed on it: dirty events keep
-    the conservative FPR threshold (the cheap rule already catches them), while signal-clean
-    events — where lateral movement is indistinguishable from benign except by temporal
-    pattern — get the recall-oriented cost-sensitive threshold. See ``score_event``.
+    ``features`` is the message vector ``[ja3, s1, s2, s3, method, role, clearance]``:
+    the signal is "dirty" when TLS trust is broken (``ja3==0``) or any Snort/sensor probe
+    fires — the same condition as the rule baseline. (``features[4]`` is the HTTP method,
+    NOT a sensor: including it — as an earlier revision did — silently routed every
+    non-GET request to the conservative threshold.) The true anomaly class is unknown at
+    serving time, but this *is* observable, so the decision threshold is routed on it:
+    dirty events keep the conservative FPR threshold (the cheap rule already catches
+    them), while signal-clean events — where lateral movement is indistinguishable from
+    benign except by temporal pattern — get the recall-oriented cost-sensitive
+    threshold. See ``score_event``.
     """
-    ja3, snort, s1, s2, s3 = (float(features[i]) for i in range(5))
-    return ja3 <= 0.5 or snort > 0.5 or s1 > 0.5 or s2 > 0.5 or s3 > 0.5
+    ja3, s1, s2, s3 = (float(features[i]) for i in range(4))
+    return ja3 <= 0.5 or s1 > 0.5 or s2 > 0.5 or s3 > 0.5
 
 
 def _reset_slot(model, idx: int) -> None:
@@ -210,27 +238,44 @@ def _set_node_features(model, idx: int, feat, device) -> None:
         model.node_feat[idx, 14] = trust
 
 
+def _admit(model, registry: NodeRegistry, key: Hashable) -> int:
+    """Map an external key to its memory slot, admitting (and hashing) it if unseen."""
+    idx, is_new = registry.get_or_add(
+        key, recency=model.memory.last_update,
+        on_evict=lambda i: _reset_slot(model, i),
+    )
+    if is_new:
+        model.node_hash[idx] = stable_hash(key, model.hash_emb.num_embeddings)
+    return idx
+
+
 def score_event(
     model,
     registry: NodeRegistry,
     threshold: float,
-    key_src: Hashable,
+    key_user: Hashable,
+    key_device: Hashable,
     key_dst: Hashable,
     timestamp: int,
     features,
     device,
     *,
+    key_source: Hashable | None = None,
     threshold_dirty=None,
     src_feat=None,
     dst_feat=None,
     update: bool = True,
 ) -> tuple[float, bool]:
-    """Score one streaming access event.
+    """Score one streaming access event (v2 schema: up to 3 edges per request).
 
-    Maps the (possibly unseen) entity keys through ``registry``, computes the
-    anomaly score, and — when ``update`` is set — writes the event into memory
-    **only if it is classified benign** (``score < threshold``). This keeps the
-    memory baseline free of attacker-controlled events.
+    Maps the (possibly unseen) entity keys through ``registry`` and scores the causal
+    chain ``key_source -> key_device -> key_user -> key_dst``: the two binding edges
+    carry zero messages, the access edge carries ``features``; the anomaly score is the
+    max over the edges. ``key_source`` (the client IP) is optional — when the
+    orchestrator cannot supply it the source→device edge is skipped entirely (a key is
+    never aliased onto two roles). When ``update`` is set the event is written into
+    memory **only if it is classified benign** (``score < threshold``), keeping the
+    baseline free of attacker-controlled events.
 
     ``src_feat`` / ``dst_feat`` are the endpoints' static attributes (role /
     clearance / device tier). In a ZTA deployment the orchestrator/OPA already
@@ -241,32 +286,31 @@ def score_event(
     Returns ``(anomaly_score, is_anomaly)``.
     """
     model.eval()
-    recency = model.memory.last_update
-    src_idx, is_new_src = registry.get_or_add(
-        key_src, recency=recency, on_evict=lambda i: _reset_slot(model, i)
-    )
-    if is_new_src:
-        model.node_hash[src_idx] = stable_hash(key_src, model.hash_emb.num_embeddings)
-
-    dst_idx, is_new_dst = registry.get_or_add(
-        key_dst, recency=recency, on_evict=lambda i: _reset_slot(model, i)
-    )
-    if is_new_dst:
-        model.node_hash[dst_idx] = stable_hash(key_dst, model.hash_emb.num_embeddings)
+    user_idx = _admit(model, registry, key_user)
+    device_idx = _admit(model, registry, key_device)
+    dst_idx = _admit(model, registry, key_dst)
+    source_idx = None if key_source is None else _admit(model, registry, key_source)
 
     if src_feat is not None:
-        _set_node_features(model, src_idx, src_feat, device)
+        _set_node_features(model, user_idx, src_feat, device)
+        _set_node_features(model, device_idx, src_feat, device)
     if dst_feat is not None:
         _set_node_features(model, dst_idx, dst_feat, device)
 
-    raw_score = infer_score(model, src_idx, dst_idx, timestamp, features, device)
-    # Kill-chain precursor prior: boost the score if this entity recently alerted (recon
-    # → lateral). Computed before record_alert so the current event is not boosted by
-    # itself; multiplicative so benign near-zero scores stay benign.
-    score = min(1.0, raw_score * precursor_boost(model, src_idx, timestamp))
-    # Signal-routed decision: dirty-signal events use the conservative threshold; signal-clean
-    # events (where lateral movement hides) use the recall-oriented ``threshold``. When no
-    # dirty threshold is supplied, a single global ``threshold`` is used (legacy behaviour).
+    features_bind = [0.0] * len(features)
+    edge_scores = [
+        infer_score(model, device_idx, user_idx, timestamp, features_bind, device),
+        infer_score(model, user_idx, dst_idx, timestamp, features, device,
+                    aux_src_idx=device_idx),
+    ]
+    if source_idx is not None:
+        edge_scores.append(
+            infer_score(model, source_idx, device_idx, timestamp, features_bind, device)
+        )
+    raw_score = max(edge_scores)
+    # Kill-chain precursor prior — keyed on the DEVICE node, so on a shared machine the
+    # recon→lateral boost covers every user that touches it.
+    score = min(1.0, raw_score * precursor_boost(model, device_idx, timestamp))
     eff_threshold = threshold
     if threshold_dirty is not None and signal_dirty(features):
         eff_threshold = threshold_dirty
@@ -274,13 +318,19 @@ def score_event(
 
     snort_alert = features[1] > 0.5
     if is_anomaly or snort_alert:
-        record_alert(model, src_idx, timestamp)  # arm the precursor for this entity's next event
-        model.node_feat[src_idx, 14] = max(0.0, model.node_feat[src_idx, 14].item() - 0.5)
+        record_alert(model, device_idx, timestamp)
+        model.node_feat[device_idx, 14] = max(0.0, model.node_feat[device_idx, 14].item() - 0.5)
+        model.node_feat[user_idx, 14] = max(0.0, model.node_feat[user_idx, 14].item() - 0.5)
     else:
-        model.node_feat[src_idx, 14] = min(1.0, model.node_feat[src_idx, 14].item() + 0.01)
+        model.node_feat[device_idx, 14] = min(1.0, model.node_feat[device_idx, 14].item() + 0.01)
+        model.node_feat[user_idx, 14] = min(1.0, model.node_feat[user_idx, 14].item() + 0.01)
 
     if update and not is_anomaly:
-        update_memory(model, src_idx, dst_idx, timestamp, features, device)
+        if source_idx is not None:
+            update_memory(model, source_idx, device_idx, timestamp, features_bind, device)
+        update_memory(model, device_idx, user_idx, timestamp, features_bind, device)
+        update_memory(model, user_idx, dst_idx, timestamp, features, device,
+                      aux_pair=(device_idx, dst_idx))
 
     return score, is_anomaly
 
@@ -288,12 +338,14 @@ def score_event(
 def commit_event(
     model,
     registry: NodeRegistry,
-    key_src: Hashable,
+    key_user: Hashable,
+    key_device: Hashable,
     key_dst: Hashable,
     timestamp: int,
     features,
     device,
     *,
+    key_source: Hashable | None = None,
     src_feat=None,
     dst_feat=None,
 ) -> None:
@@ -302,31 +354,29 @@ def commit_event(
     This is the *unconditional* counterpart of :func:`score_event`: it maps the entity
     keys through ``registry`` (admitting unseen entities, evicting LRU on overflow),
     optionally refreshes their static attributes, and advances both the TGN memory and
-    the neighbour history. Use it for the two-step anti-poisoning flow where the
-    benign/anomalous decision is made *outside* the model (score with
-    :func:`infer_score` / :func:`score_event` ``update=False`` first, then commit here
-    only on approval).
+    the neighbour history along the same up-to-3-edge chain. Use it for the two-step
+    anti-poisoning flow where the benign/anomalous decision is made *outside* the model
+    (score with :func:`infer_score` / :func:`score_event` ``update=False`` first, then
+    commit here only on approval).
     """
     model.eval()
-    recency = model.memory.last_update
-    src_idx, is_new_src = registry.get_or_add(
-        key_src, recency=recency, on_evict=lambda i: _reset_slot(model, i)
-    )
-    if is_new_src:
-        model.node_hash[src_idx] = stable_hash(key_src, model.hash_emb.num_embeddings)
-
-    dst_idx, is_new_dst = registry.get_or_add(
-        key_dst, recency=recency, on_evict=lambda i: _reset_slot(model, i)
-    )
-    if is_new_dst:
-        model.node_hash[dst_idx] = stable_hash(key_dst, model.hash_emb.num_embeddings)
+    user_idx = _admit(model, registry, key_user)
+    device_idx = _admit(model, registry, key_device)
+    dst_idx = _admit(model, registry, key_dst)
+    source_idx = None if key_source is None else _admit(model, registry, key_source)
 
     if src_feat is not None:
-        _set_node_features(model, src_idx, src_feat, device)
+        _set_node_features(model, user_idx, src_feat, device)
+        _set_node_features(model, device_idx, src_feat, device)
     if dst_feat is not None:
         _set_node_features(model, dst_idx, dst_feat, device)
 
-    update_memory(model, src_idx, dst_idx, timestamp, features, device)
+    features_bind = [0.0] * len(features)
+    if source_idx is not None:
+        update_memory(model, source_idx, device_idx, timestamp, features_bind, device)
+    update_memory(model, device_idx, user_idx, timestamp, features_bind, device)
+    update_memory(model, user_idx, dst_idx, timestamp, features, device,
+                  aux_pair=(device_idx, dst_idx))
 
 
 def save_model(model, registry: NodeRegistry, threshold: float, hp: dict,

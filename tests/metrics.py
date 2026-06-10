@@ -70,10 +70,11 @@ class MetricsTracker:
         print(f"Anomalies - Precision: {precision:.4f} | Recall: {recall:.4f} | F1 Score: {f1:.4f}")
         
         # Breakdown by type
-        # types: 0=benign, 1=policy, 2=contextual, 3=lateral
-        type_names = {0: "Benign", 1: "Policy", 2: "Contextual", 3: "Lateral"}
+        # types: 0=benign, 1=policy, 2=contextual, 3=lateral, 4=credential theft
+        type_names = {0: "Benign", 1: "Policy", 2: "Contextual", 3: "Lateral",
+                      4: "CredTheft"}
         print("\nAccuracy by Event Type (Recall for anomalies, Specificity for benign):")
-        for t in [0, 1, 2, 3]:
+        for t in [0, 1, 2, 3, 4]:
             t_preds = [p for p in self.predictions if p[2] == t]
             if t_preds:
                 t_correct = sum(1 for p in t_preds if p[0] == p[1])
