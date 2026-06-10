@@ -81,7 +81,7 @@ class LinkPredictor(nn.Module):
         return self.lin2(h)
 
 class ZTATemporalGraphNetwork(nn.Module):
-    def __init__(self, num_nodes, node_feat_dim, msg_dim, memory_dim=64, time_dim=32, num_hops=2, hash_buckets=10000, hash_dim=16, hist_feat_dim=3):
+    def __init__(self, num_nodes, node_feat_dim, msg_dim, memory_dim=64, time_dim=32, num_hops=2, hash_buckets=10000, hash_dim=16, hist_feat_dim=6):
         super().__init__()
 
         self.num_hops = num_hops
@@ -190,19 +190,8 @@ class ZTATemporalGraphNetwork(nn.Module):
         z = self.gnn(x, last_update, edge_index, hist_t, hist_msg)
         return z
 
-    def compute_hist_feats(self, src_ids, dst_ids, device):
-        """Per-event interaction-history features for the directed ``src→dst`` pairs.
-
-        Returns ``[log1p(pair_count), log1p(src_count), pair_count/(src_count+1)]``:
-        how often this exact pair was seen, how active the src is, and the fraction of
-        the src's traffic that habitually targets this dst. A never-seen pair from an
-        active src (ratio≈0) is the novelty cue for lateral movement — but benign
-        *exploration* shares it, so this signal is only discriminative in combination
-        with the temporal memory / structural head (that is the honest, non-degenerate
-        contribution). Counts come from benign-gated history only (anti-poisoning).
-
-        ``src_ids`` / ``dst_ids`` are iterables of *global* node ids (ints).
-        """
+    def _hist_triplet(self, src_ids, dst_ids, device):
+        """``[log1p(pair_count), log1p(src_count), pair_count/(src_count+1)]`` per pair."""
         pc = torch.tensor(
             [self.pair_count.get((int(s), int(d)), 0) for s, d in zip(src_ids, dst_ids)],
             dtype=torch.float, device=device,
@@ -211,6 +200,32 @@ class ZTATemporalGraphNetwork(nn.Module):
             [self.src_count.get(int(s), 0) for s in src_ids], dtype=torch.float, device=device,
         )
         return torch.stack([torch.log1p(pc), torch.log1p(sc), pc / (sc + 1.0)], dim=-1)
+
+    def compute_hist_feats(self, src_ids, dst_ids, device, aux_src_ids=None):
+        """Per-event interaction-history features for the directed ``src→dst`` pairs (6-dim).
+
+        First triplet: how often this exact pair was seen, how active the src is, and the
+        fraction of the src's traffic that habitually targets this dst. A never-seen pair
+        from an active src (ratio≈0) is the novelty cue for lateral movement — but benign
+        *exploration* shares it, so this signal is only discriminative in combination
+        with the temporal memory / structural head (that is the honest, non-degenerate
+        contribution). Counts come from benign-gated history only (anti-poisoning).
+
+        Second triplet: the same statistics for the auxiliary ``aux_src→dst`` pairs.
+        On the access edge (user→resource) the aux src is the DEVICE: its per-resource
+        habituality counters replace the direct device→resource temporal edge of the
+        v1 schema, so an infected machine's unusual reach stays visible without a 4th
+        edge per request. ``aux_src_ids=None`` (binding edges, datasets without a
+        device entity) zero-pads the second triplet.
+
+        ``src_ids`` / ``dst_ids`` / ``aux_src_ids`` are iterables of *global* node ids.
+        """
+        base = self._hist_triplet(src_ids, dst_ids, device)
+        if aux_src_ids is None:
+            aux = torch.zeros_like(base)
+        else:
+            aux = self._hist_triplet(aux_src_ids, dst_ids, device)
+        return torch.cat([base, aux], dim=-1)
 
     def score(self, z, nf, h_idx, src_local, dst_local, cur_msg, delta_t, delta_t_src, hist_feats):
         """Benign-vs-anomalous logit for ``src_local -> dst_local`` carrying ``cur_msg``.

@@ -136,12 +136,22 @@ app = FastAPI(title="Graphagate TGN inference", version="0.1.0", lifespan=lifesp
 
 # --- request / response schemas ------------------------------------------------
 class EventIn(BaseModel):
-    key_src: EntityKey = Field(..., description="Source entity key (IP / user).")
+    key_user: EntityKey = Field(..., description="User entity key.")
+    key_device: EntityKey = Field(
+        ..., description="Device entity key (hardware id: 'tpm:<id>' or 'ck:<cookie>')."
+    )
     key_dst: EntityKey = Field(..., description="Destination entity key (resource URI).")
+    key_source: Optional[EntityKey] = Field(
+        None,
+        description=(
+            "Source entity key (client IP / network context). Optional: when omitted "
+            "the source→device edge is skipped (never alias the IP onto key_device)."
+        ),
+    )
     timestamp: int = Field(..., description="Event time (e.g. Unix epoch, integer).")
     features: list[float] = Field(..., description="Edge message (Zero-Trust signals).")
     src_feat: Optional[list[float]] = Field(
-        None, description="Source static attributes (role / clearance / tier)."
+        None, description="User/Device static attributes (role / clearance / tier)."
     )
     dst_feat: Optional[list[float]] = Field(
         None, description="Destination static attributes."
@@ -239,6 +249,7 @@ def health() -> dict:
         "threshold_dirty": STATE.threshold_dirty,
         "msg_dim": int(STATE.hp.get("msg_dim", 0)),
         "node_feat_dim": int(STATE.hp.get("node_feat_dim", 0)),
+        "schema_version": int(STATE.hp.get("schema_version", 1)),
     }
 
 
@@ -250,16 +261,18 @@ def infer(ev: EventIn, background_tasks: BackgroundTasks) -> ScoreOut:
     with STATE.lock:
         score, is_anomaly = score_event(
             STATE.model, STATE.registry, STATE.threshold,
-            ev.key_src, ev.key_dst, ev.timestamp, ev.features, STATE.device,
-            threshold_dirty=STATE.threshold_dirty,
+            ev.key_user, ev.key_device, ev.key_dst, ev.timestamp, ev.features, STATE.device,
+            key_source=ev.key_source, threshold_dirty=STATE.threshold_dirty,
             src_feat=ev.src_feat, dst_feat=ev.dst_feat, update=False,
         )
     t1 = time.perf_counter()
     sys_stats = get_sys_stats()
-    
+
     background_tasks.add_task(_broadcast_task, {
         "action": "infer",
-        "key_src": ev.key_src,
+        "key_user": ev.key_user,
+        "key_device": ev.key_device,
+        "key_source": ev.key_source,
         "key_dst": ev.key_dst,
         "score": float(score),
         "is_anomaly": bool(is_anomaly),
@@ -277,8 +290,8 @@ def update(ev: EventIn) -> OkOut:
     with STATE.lock:
         commit_event(
             STATE.model, STATE.registry,
-            ev.key_src, ev.key_dst, ev.timestamp, ev.features, STATE.device,
-            src_feat=ev.src_feat, dst_feat=ev.dst_feat,
+            ev.key_user, ev.key_device, ev.key_dst, ev.timestamp, ev.features, STATE.device,
+            key_source=ev.key_source, src_feat=ev.src_feat, dst_feat=ev.dst_feat,
         )
     return OkOut()
 
@@ -291,16 +304,18 @@ def score(ev: EventIn, background_tasks: BackgroundTasks) -> ScoreOut:
     with STATE.lock:
         s, is_anomaly = score_event(
             STATE.model, STATE.registry, STATE.threshold,
-            ev.key_src, ev.key_dst, ev.timestamp, ev.features, STATE.device,
-            threshold_dirty=STATE.threshold_dirty,
+            ev.key_user, ev.key_device, ev.key_dst, ev.timestamp, ev.features, STATE.device,
+            key_source=ev.key_source, threshold_dirty=STATE.threshold_dirty,
             src_feat=ev.src_feat, dst_feat=ev.dst_feat, update=True,
         )
     t1 = time.perf_counter()
     sys_stats = get_sys_stats()
-    
+
     background_tasks.add_task(_broadcast_task, {
         "action": "score",
-        "key_src": ev.key_src,
+        "key_user": ev.key_user,
+        "key_device": ev.key_device,
+        "key_source": ev.key_source,
         "key_dst": ev.key_dst,
         "score": float(s),
         "is_anomaly": bool(is_anomaly),

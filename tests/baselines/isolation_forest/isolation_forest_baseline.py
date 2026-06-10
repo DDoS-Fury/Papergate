@@ -87,12 +87,26 @@ def isolation_forest_baseline(cfg: TGNConfig = TGNConfig()):
     random.seed(cfg.seed)
 
     print("Generating synthetic streaming data (same params as TGN)...")
-    src, dst, t, msg, y, types, node_features, resource_uris, _ = generate_streaming_data(
+    stream = generate_streaming_data(
         num_users=cfg.num_users,
-        num_ips=cfg.num_ips,
+        num_devices=cfg.num_devices,
+        num_sources=cfg.num_sources,
         num_resources=cfg.num_resources,
         num_events=cfg.num_events,
+        num_wipe_slots=cfg.num_wipe_slots,
+        num_theft_slots=cfg.num_theft_slots,
+        benign_explore_prob=cfg.benign_explore_prob,
+        p_roam=cfg.p_roam,
+        p_shared_device=cfg.p_shared_device,
+        p_cookie_wipe=cfg.p_cookie_wipe,
+        p_cred_theft=cfg.p_cred_theft,
         seed=cfg.seed,
+    )
+    # Tabular actor = the DEVICE node (hardware id), the v2 analogue of the old
+    # IP-keyed src; the access target stays the resource.
+    src, dst, t, msg, y, types, node_features = (
+        stream.device, stream.dst, stream.t, stream.msg, stream.y, stream.types,
+        stream.node_features,
     )
 
     # Per-event features incl. causal history counts (no graph structure / temporal context).

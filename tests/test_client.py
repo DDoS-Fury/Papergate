@@ -23,7 +23,7 @@ async def test_client(duration_seconds=120):
             
             label = event.pop("label")
             etype = event.pop("type")
-            key_src = event["key_src"]
+            key_actor = event["key_user"]
             
             # 2. Call /infer
             req_start = time.time()
@@ -48,12 +48,12 @@ async def test_client(duration_seconds=120):
             api_threshold = resp_data.get("threshold", 0.5)
             opa_is_anomaly = anomaly_score > api_threshold
             
-            user_counts[key_src] = user_counts.get(key_src, 0) + 1
+            user_counts[key_actor] = user_counts.get(key_actor, 0) + 1
             is_policy_violation = (etype == 1)
-            
+
             # GRACE PERIOD: Per i primissimi eventi di un nuovo utente (cold-start),
             # l'Orchestrator si fida delle policy statiche (JWT/OPA) per fargli creare una baseline.
-            if user_counts[key_src] <= 5:
+            if user_counts[key_actor] <= 5:
                 allow = not is_policy_violation
             else:
                 allow = (not is_policy_violation) and (not opa_is_anomaly)

@@ -152,8 +152,12 @@ def load_lanl_stream(
         f"[lanl] events={len(t_l)} computers={num_nodes} lateral={n_lateral} "
         f"benign={len(t_l) - n_lateral} window={window} stride={benign_stride}"
     )
+    # Host-to-host auth has a single actor entity (the source computer): map it to the
+    # USER role of the v2 schema; ``device_nodes``/``source_nodes`` stay ``None``, so
+    # the pipeline scores and commits only the user→dst access edge (no binding edges,
+    # no binding objectives, aux history triplet zero-padded).
     return StreamData(
-        src=torch.tensor(src_l, dtype=torch.long),
+        user=torch.tensor(src_l, dtype=torch.long),
         dst=torch.tensor(dst_l, dtype=torch.long),
         t=torch.tensor(t_l, dtype=torch.long),
         msg=torch.tensor(msg_l, dtype=torch.float),

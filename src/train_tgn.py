@@ -27,7 +27,12 @@ from graphagate.calibration import (
     routed_predict,
 )
 from graphagate.config import TGNConfig, TGN_CHECKPOINT_PATH, TGN_STATS_PATH
-from graphagate.data.stream_synthetic import generate_streaming_data
+from graphagate.data.stream_synthetic import (
+    SCEN_ROAMING,
+    SCEN_SHARED,
+    SCEN_WIPED,
+    generate_streaming_data,
+)
 from graphagate.eval_common import causal_src_seen
 from graphagate.model.registry import NodeRegistry
 from graphagate.model.tgn import ZTATemporalGraphNetwork, stable_hash
@@ -41,9 +46,13 @@ from graphagate.serve_tgn import (
 )
 
 
-def _replay(model, src, dst, t, msg, y, device, *, threshold=None,
-            threshold_dirty=None, gate_by_label=False):
-    """Per-event streaming replay matching the serving path.
+def _replay(model, source_nodes, device_nodes, user, dst, t, msg, y, device, *,
+            threshold=None, threshold_dirty=None, gate_by_label=False):
+    """Per-event streaming replay matching the serving path (v2: up to 3 edges).
+
+    ``source_nodes`` / ``device_nodes`` may be ``None`` (datasets without a network /
+    hardware entity, e.g. LANL host-to-host auth): the corresponding binding edges are
+    skipped, exactly like :func:`serve_tgn.score_event` with ``key_source=None``.
 
     Memory update gating:
       - ``gate_by_label=True``  -> update on ground-truth benign (calibration);
@@ -57,17 +66,30 @@ def _replay(model, src, dst, t, msg, y, device, *, threshold=None,
     ``threshold`` is used everywhere (legacy behaviour). Returns ``(scores, labels)``.
     """
     model.eval()
-    scores = np.empty(src.shape[0], dtype=np.float64)
-    labels = np.empty(src.shape[0], dtype=np.int64)
-    src_l, dst_l, t_l, y_l = src.tolist(), dst.tolist(), t.tolist(), y.tolist()
+    scores = np.empty(user.shape[0], dtype=np.float64)
+    labels = np.empty(user.shape[0], dtype=np.int64)
+    u_l, d_l, t_l, y_l = user.tolist(), dst.tolist(), t.tolist(), y.tolist()
+    dev_l = device_nodes.tolist() if device_nodes is not None else None
+    src_l = source_nodes.tolist() if source_nodes is not None else None
 
-    for i in range(len(src_l)):
-        s, d, tv, lab = src_l[i], dst_l[i], t_l[i], y_l[i]
+    for i in range(len(u_l)):
+        u, d, tv, lab = u_l[i], d_l[i], t_l[i], y_l[i]
+        dev = dev_l[i] if dev_l is not None else None
+        src_ip = src_l[i] if src_l is not None else None
         msg_vec = msg[i]
-        # Same scoring path as serving: raw model score then the kill-chain precursor
-        # prior (boosts an entity that recently alerted). Computed before record_alert.
-        raw_score = infer_score(model, s, d, tv, msg_vec, device)
-        score = min(1.0, raw_score * precursor_boost(model, s, tv))
+        # Same scoring path as serving: max over the present edges, then the kill-chain
+        # precursor prior (boosts an entity that recently alerted), computed before
+        # record_alert. The "actor" carrying alerts/trust is the device when present.
+        features_bind = [0.0] * len(msg_vec)
+        edge_scores = []
+        if src_ip is not None and dev is not None:
+            edge_scores.append(infer_score(model, src_ip, dev, tv, features_bind, device))
+        if dev is not None:
+            edge_scores.append(infer_score(model, dev, u, tv, features_bind, device))
+        edge_scores.append(infer_score(model, u, d, tv, msg_vec, device, aux_src_idx=dev))
+        raw_score = max(edge_scores)
+        actor = dev if dev is not None else u
+        score = min(1.0, raw_score * precursor_boost(model, actor, tv))
         scores[i] = score
         labels[i] = lab
 
@@ -77,15 +99,24 @@ def _replay(model, src, dst, t, msg, y, device, *, threshold=None,
 
         do_update = (lab == 0) if gate_by_label else (score < eff_thr)
         if do_update:
-            update_memory(model, s, d, tv, msg_vec, device)
+            if src_ip is not None and dev is not None:
+                update_memory(model, src_ip, dev, tv, features_bind, device)
+            if dev is not None:
+                update_memory(model, dev, u, tv, features_bind, device)
+            update_memory(model, u, d, tv, msg_vec, device,
+                          aux_pair=(dev, d) if dev is not None else None)
 
         snort_alert = msg_vec[1] > 0.5
         is_anomaly = (score >= eff_thr) if not gate_by_label else (lab == 1)
         if is_anomaly or snort_alert:
-            record_alert(model, s, tv)  # arm the precursor (recon → lateral)
-            model.node_feat[s, 14] = max(0.0, model.node_feat[s, 14].item() - 0.5)
+            record_alert(model, actor, tv)  # arm the precursor (recon → lateral)
+            model.node_feat[actor, 14] = max(0.0, model.node_feat[actor, 14].item() - 0.5)
+            if actor != u:
+                model.node_feat[u, 14] = max(0.0, model.node_feat[u, 14].item() - 0.5)
         else:
-            model.node_feat[s, 14] = min(1.0, model.node_feat[s, 14].item() + 0.01)
+            model.node_feat[actor, 14] = min(1.0, model.node_feat[actor, 14].item() + 0.01)
+            if actor != u:
+                model.node_feat[u, 14] = min(1.0, model.node_feat[u, 14].item() + 0.01)
 
     return scores, labels
 
@@ -116,17 +147,17 @@ def _pr_from_preds(preds, labels):
 def _rule_baseline(test_msg):
     """Trivial detector: flag if any Zero-Trust edge signal fires.
 
-    Columns are ``[ja3, snort, s1, s2, s3, method]``: an event is suspicious when the
-    TLS trust is broken (``ja3==0``), Snort alerts (``snort==1``) or any sensor fires.
-    This catches *contextual* anomalies but is blind to *policy* violations (which
-    share benign edge features) — it quantifies how much the TGN adds beyond rules.
+    Columns are ``[ja3, s1, s2, s3, method, role, clearance]``: an event is suspicious
+    when the TLS trust is broken (``ja3==0``) or any Snort/sensor probe fires. Column 4
+    is the HTTP method, NOT a sensor (an earlier revision included it, silently flagging
+    every POST). This catches *contextual* anomalies but is blind to *policy* violations
+    (which share benign edge features) — it quantifies how much the TGN adds beyond rules.
     """
     return (
         (test_msg[:, 0] == 0.0)
         | (test_msg[:, 1] == 1.0)
         | (test_msg[:, 2] == 1.0)
         | (test_msg[:, 3] == 1.0)
-        | (test_msg[:, 4] == 1.0)
     ).astype(int)
 
 
@@ -168,11 +199,19 @@ class StreamData:
     mapped dataset (e.g. LANL auth — see ``tests/eval_lanl.py``) for external validity.
     Node indices are ``0..num_nodes-1`` and ``keys[i]`` is the external registry key for
     slot ``i`` (used for the deterministic hashed-identity embedding). Structural negatives
-    are drawn uniformly from the destination id-range ``[neg_lo, neg_lo + neg_num)`` — the
+    for the access edge are drawn uniformly from ``[neg_lo, neg_lo + neg_num)`` — the
     resource range for the synthetic stream, the whole computer range for host-to-host auth.
+
+    v2 schema: ``source_nodes`` (client IP) and ``device_nodes`` (hardware id) are
+    optional. ``None`` skips the corresponding binding edge and its training objective —
+    a device-less dataset (LANL) degrades to the single ``user → dst`` edge. The
+    ``usr_lo/usr_num`` / ``dev_lo/dev_num`` ranges drive the binding-edge negative
+    sampling (random users for device→user, random devices for source→device); they are
+    only needed when the corresponding entity tensors are present. ``scenario`` is the
+    benign-context bitmask of the synthetic generator (``None`` skips scenario evals).
     """
 
-    src: torch.Tensor
+    user: torch.Tensor
     dst: torch.Tensor
     t: torch.Tensor
     msg: torch.Tensor
@@ -183,29 +222,44 @@ class StreamData:
     num_nodes: int
     neg_lo: int
     neg_num: int
+    device_nodes: torch.Tensor | None = None
+    source_nodes: torch.Tensor | None = None
+    scenario: torch.Tensor | None = None
+    usr_lo: int = 0
+    usr_num: int = 0
+    dev_lo: int = 0
+    dev_num: int = 0
 
 
 def _synthetic_stream_data(cfg: TGNConfig) -> StreamData:
-    """Build :class:`StreamData` from the synthetic generator (the default path).
+    """Build :class:`StreamData` from the synthetic v2 generator (the default path).
 
-    Reproduces the previous in-line setup exactly: users + IPs are keyed by their integer
-    ids, resources by their URI strings (so the orchestrator can send strings natively), and
-    structural negatives are sampled over the resource id-range.
+    Users are keyed by their integer ids, devices by ``tpm:<id>`` / ``ck:<uuid>``
+    strings, sources by IP strings and resources by their URI strings (so the
+    orchestrator can send all of them natively); structural negatives are sampled over
+    the resource id-range.
     """
-    src, dst, t, msg, y, types, node_features, resource_uris, _auth_mask = generate_streaming_data(
+    s = generate_streaming_data(
         num_users=cfg.num_users,
-        num_ips=cfg.num_ips,
+        num_devices=cfg.num_devices,
+        num_sources=cfg.num_sources,
         num_resources=cfg.num_resources,
         num_events=cfg.num_events,
+        num_wipe_slots=cfg.num_wipe_slots,
+        num_theft_slots=cfg.num_theft_slots,
         benign_explore_prob=cfg.benign_explore_prob,
+        p_roam=cfg.p_roam,
+        p_shared_device=cfg.p_shared_device,
+        p_cookie_wipe=cfg.p_cookie_wipe,
+        p_cred_theft=cfg.p_cred_theft,
         seed=cfg.seed,
     )
-    # auth_mask is intentionally dropped — see _sample_structural_negatives (de-circularisation).
-    keys = list(range(cfg.num_users + cfg.num_ips)) + list(resource_uris)
     return StreamData(
-        src=src, dst=dst, t=t, msg=msg, y=y, types=types, node_features=node_features,
-        keys=keys, num_nodes=cfg.total_nodes,
-        neg_lo=cfg.total_nodes - cfg.num_resources, neg_num=cfg.num_resources,
+        user=s.user, dst=s.dst, t=s.t, msg=s.msg, y=s.y, types=s.types,
+        node_features=s.node_features, keys=s.keys, num_nodes=s.num_nodes,
+        neg_lo=s.res_lo, neg_num=s.res_num,
+        device_nodes=s.device, source_nodes=s.source, scenario=s.scenario,
+        usr_lo=s.user_lo, usr_num=s.user_num, dev_lo=s.dev_lo, dev_num=s.dev_num,
     )
 
 
@@ -232,13 +286,14 @@ def train_tgn(cfg: TGNConfig = TGNConfig(), *, dataset: "StreamData | None" = No
     else:
         print("Using injected dataset stream...")
         data = dataset
-    src, dst, t, msg, y, types = data.src, data.dst, data.t, data.msg, data.y, data.types
+    user_arr, dst, t, msg, y, types = data.user, data.dst, data.t, data.msg, data.y, data.types
+    device_arr, source_arr, scenario = data.device_nodes, data.source_nodes, data.scenario
     node_features = data.node_features
     total_nodes = data.num_nodes
     capacity = total_nodes + cfg.capacity_headroom
     neg_lo, neg_num = data.neg_lo, data.neg_num
 
-    n = len(src)
+    n = len(dst)
     n_train = int(n * cfg.train_frac)
     n_val = int(n * cfg.val_frac)
     train_end, val_end = n_train, n_train + n_val
@@ -297,7 +352,7 @@ def train_tgn(cfg: TGNConfig = TGNConfig(), *, dataset: "StreamData | None" = No
     optimizer = AdamW(model.parameters(), lr=cfg.learning_rate)
 
     # Chronological split (the stream is already time-ordered).
-    n = len(src)
+    n = len(dst)
     n_train = int(n * cfg.train_frac)
     n_val = int(n * cfg.val_frac)
     train_end, val_end = n_train, n_train + n_val
@@ -318,11 +373,13 @@ def train_tgn(cfg: TGNConfig = TGNConfig(), *, dataset: "StreamData | None" = No
             optimizer.zero_grad()
             start_idx, end_idx = i * bs, i * bs + bs
 
-            b_src = src[start_idx:end_idx].to(device)
+            b_user = user_arr[start_idx:end_idx].to(device)
             b_dst = dst[start_idx:end_idx].to(device)
             b_t = t[start_idx:end_idx].to(device)
             b_msg = msg[start_idx:end_idx].to(device)
             b_y = y[start_idx:end_idx].to(device)
+            b_device = device_arr[start_idx:end_idx].to(device) if device_arr is not None else None
+            b_source = source_arr[start_idx:end_idx].to(device) if source_arr is not None else None
 
             # NOTE: the trust score (node_feat[:, 14]) is NO LONGER mutated from
             # ground-truth labels here. Doing so coupled the labels into a persistent
@@ -335,64 +392,91 @@ def train_tgn(cfg: TGNConfig = TGNConfig(), *, dataset: "StreamData | None" = No
             if not benign_mask.any():
                 continue
 
-            p_src = b_src[benign_mask]
+            p_user = b_user[benign_mask]
             p_dst = b_dst[benign_mask]
             p_t = b_t[benign_mask]
             p_msg = b_msg[benign_mask]
+            p_device = b_device[benign_mask] if b_device is not None else None
+            p_source = b_source[benign_mask] if b_source is not None else None
 
-            # STRUCTURAL NEGATIVES — for each positive, K uniform random resource
-            # destinations (standard self-supervised temporal link prediction). They are
-            # independent of the generator's auth_mask / habitual sets, so detection is
-            # honest generalisation, not a memorised test rule. The objective below is a
-            # *ranking* loss (InfoNCE): rank the true dst above the K alternatives given
-            # the src's history — the likelihood signal that exposes lateral movement.
-            P = len(p_src)
+            # STRUCTURAL NEGATIVES — for each positive, K uniform random alternatives
+            # (standard self-supervised temporal link prediction), one set per edge of
+            # the chain. They are independent of the generator's habitual sets, so
+            # detection is honest generalisation, not a memorised test rule:
+            #   * access  user→resource: K random RESOURCES — "which resources does this
+            #     user habitually reach" (the lateral-movement objective);
+            #   * binding device→user:   K random USERS — "which users does this machine
+            #     habitually host" (the credential-theft / session-binding objective);
+            #   * binding source→device: K random DEVICES — "which machines live behind
+            #     this IP" (the network-binding objective; roaming positives in the
+            #     stream teach it that a warm device on a new IP is tolerable).
+            # The binding objectives are NOT optional: with the access edge anchored on
+            # the (warm) user, a credential thief touching the victim's habitual
+            # resources looks benign there — the anomaly lives only in the bindings.
+            P = len(p_user)
             K = cfg.infonce_k
-            res_lo = neg_lo
-            num_res = neg_num
-            neg_flat = _sample_structural_negatives(
-                P * K, num_res, res_lo, device, avoid=p_dst.repeat_interleave(K)
-            )  # (P*K,)
-            src_rep = p_src.repeat_interleave(K)  # (P*K,)
+            neg_res = _sample_structural_negatives(
+                P * K, neg_num, neg_lo, device, avoid=p_dst.repeat_interleave(K)
+            )
+            user_rep = p_user.repeat_interleave(K)
+            has_bind = p_device is not None and data.dev_num > 0
+            has_src = has_bind and p_source is not None
+            if has_bind:
+                neg_usr = _sample_structural_negatives(
+                    P * K, data.usr_num, data.usr_lo, device, avoid=user_rep
+                )
+                dev_rep = p_device.repeat_interleave(K)
+            if has_src:
+                neg_dev = _sample_structural_negatives(
+                    P * K, data.dev_num, data.dev_lo, device, avoid=dev_rep
+                )
+                src_rep = p_source.repeat_interleave(K)
 
             # Expand every involved node to its stored temporal neighbourhood and embed
             # once; the heads below differ only in which endpoints / message they score,
             # sharing the same history-conditioned embeddings.
-            nodes = torch.cat([p_src, p_dst, neg_flat]).unique()
+            parts = [p_user, p_dst, neg_res]
+            if has_bind:
+                parts += [p_device, neg_usr]
+            if has_src:
+                parts += [p_source, neg_dev]
+            nodes = torch.cat(parts).unique()
             n_id, edge_index, hist_t, hist_msg = model.neighbor_loader(nodes)
             z = model.embed(n_id, edge_index, hist_t, hist_msg)
             assoc = model.neighbor_loader._assoc
             nf = model.node_feat[n_id]
             h_idx = model.node_hash[n_id]
-            s_loc, d_loc = assoc[p_src], assoc[p_dst]
-            sK_loc, negK_loc = assoc[src_rep], assoc[neg_flat]
 
-            # RECENCY (Δt since last src→dst contact) + interaction-history features.
-            tv_l, s_l, dpos_l = p_t.tolist(), p_src.tolist(), p_dst.tolist()
-            delta_t_pos = torch.tensor(
-                [tv_l[i] - model.last_contact.get((s_l[i], dpos_l[i]), 0) for i in range(P)],
-                dtype=torch.float, device=device,
-            )
-            srcrep_l, negflat_l = src_rep.tolist(), neg_flat.tolist()
-            tvrep_l = p_t.repeat_interleave(K).tolist()
-            delta_t_neg = torch.tensor(
-                [tvrep_l[j] - model.last_contact.get((srcrep_l[j], negflat_l[j]), 0) for j in range(P * K)],
-                dtype=torch.float, device=device,
-            )
-            delta_t_src = (p_t - model.memory.last_update[p_src]).to(torch.float)
-            delta_t_src_rep = delta_t_src.repeat_interleave(K)
+            tv_l, u_l, dpos_l = p_t.tolist(), p_user.tolist(), p_dst.tolist()
+            dev_l = p_device.tolist() if has_bind else None
+            src_l = p_source.tolist() if has_src else None
+            tv_rep = p_t.repeat_interleave(K)
 
-            hist_pos = model.compute_hist_feats(s_l, dpos_l, device)
-            hist_neg = model.compute_hist_feats(srcrep_l, negflat_l, device)
+            def _edge_logits(src_nodes, dst_nodes, t_nodes, msgs, hist_feats):
+                """Score one edge group: Δt(pair recency), Δt(src activity), then heads."""
+                s_list, d_list, t_list = src_nodes.tolist(), dst_nodes.tolist(), t_nodes.tolist()
+                d_pair = torch.tensor(
+                    [t_list[j] - model.last_contact.get((s_list[j], d_list[j]), 0)
+                     for j in range(len(s_list))],
+                    dtype=torch.float, device=device,
+                )
+                d_src = (t_nodes - model.memory.last_update[src_nodes]).to(torch.float)
+                return model.score(
+                    z, nf, h_idx, assoc[src_nodes], assoc[dst_nodes], msgs, d_pair, d_src, hist_feats
+                )
+
+            zeros_msg = torch.zeros_like(p_msg)
+            zeros_msg_rep = torch.zeros(P * K, p_msg.size(1), device=device)
             msg_rep = p_msg.repeat_interleave(K, dim=0)
 
-            # --- POSITIVE EDGES (healthy behaviour) ---
-            pos_out = model.score(z, nf, h_idx, s_loc, d_loc, p_msg, delta_t_pos, delta_t_src, hist_pos)
-
-            # --- STRUCTURAL NEGATIVES (src paired with K random resources) ---
-            negK_out = model.score(
-                z, nf, h_idx, sK_loc, negK_loc, msg_rep, delta_t_neg, delta_t_src_rep, hist_neg
-            ).view(P, K)
+            # --- ACCESS EDGE user→resource (full message + device-aux history) ---
+            hist_acc_pos = model.compute_hist_feats(u_l, dpos_l, device, aux_src_ids=dev_l)
+            hist_acc_neg = model.compute_hist_feats(
+                user_rep.tolist(), neg_res.tolist(), device,
+                aux_src_ids=dev_rep.tolist() if has_bind else None,
+            )
+            pos_access = _edge_logits(p_user, p_dst, p_t, p_msg, hist_acc_pos)
+            neg_access = _edge_logits(user_rep, neg_res, tv_rep, msg_rep, hist_acc_neg).view(P, K)
 
             # --- CONTEXTUAL NEGATIVES (off-manifold edge message via additive Gaussian
             # noise). A *different mechanism* from the eval's contextual anomalies
@@ -401,23 +485,40 @@ def train_tgn(cfg: TGNConfig = TGNConfig(), *, dataset: "StreamData | None" = No
             # rule baseline already catches them — see eval), so this term mainly keeps
             # the feature head from ignoring the message.
             neg_msg = p_msg + torch.randn_like(p_msg) * 0.5
-            neg_out_ctx = model.score(z, nf, h_idx, s_loc, d_loc, neg_msg, delta_t_pos, delta_t_src, hist_pos)
+            neg_out_ctx = _edge_logits(p_user, p_dst, p_t, neg_msg, hist_acc_pos)
 
             # --- UNSUPERVISED LOSS ---
-            #   * InfoNCE ranking: among {true dst, K random dsts} the true dst must score
-            #     most-benign (highest logit) given the src's history. This is the lateral
-            #     objective and is AP-aligned (a relative/soft target, unlike the old hard
-            #     0/1 negative that over-fit the circular non-habitual definition).
-            #   * positive BCE anchor: keeps benign logits high so the FPR-calibrated
+            #   * InfoNCE ranking per edge: among {true endpoint, K random alternatives}
+            #     the true one must score most-benign given the src's history. AP-aligned
+            #     (a relative/soft target, unlike a hard 0/1 negative).
+            #   * positive BCE anchors: keep benign logits high so the FPR-calibrated
             #     threshold is meaningful (InfoNCE alone fixes only relative order).
             #   * contextual BCE: off-manifold message ⇒ anomalous.
-            logits = torch.cat([pos_out.unsqueeze(1), negK_out], dim=1)  # (P, 1+K); col 0 = positive
             target = torch.zeros(P, dtype=torch.long, device=device)
             loss = (
-                F.cross_entropy(logits, target)
-                + F.binary_cross_entropy_with_logits(pos_out, torch.ones_like(pos_out))
+                F.cross_entropy(torch.cat([pos_access.unsqueeze(1), neg_access], dim=1), target)
+                + F.binary_cross_entropy_with_logits(pos_access, torch.ones_like(pos_access))
                 + F.binary_cross_entropy_with_logits(neg_out_ctx, torch.zeros_like(neg_out_ctx))
             )
+
+            if has_bind:
+                hist_du_pos = model.compute_hist_feats(dev_l, u_l, device)
+                hist_du_neg = model.compute_hist_feats(dev_rep.tolist(), neg_usr.tolist(), device)
+                pos_du = _edge_logits(p_device, p_user, p_t, zeros_msg, hist_du_pos)
+                neg_du = _edge_logits(dev_rep, neg_usr, tv_rep, zeros_msg_rep, hist_du_neg).view(P, K)
+                loss = loss + (
+                    F.cross_entropy(torch.cat([pos_du.unsqueeze(1), neg_du], dim=1), target)
+                    + F.binary_cross_entropy_with_logits(pos_du, torch.ones_like(pos_du))
+                )
+            if has_src:
+                hist_sd_pos = model.compute_hist_feats(src_l, dev_l, device)
+                hist_sd_neg = model.compute_hist_feats(src_rep.tolist(), neg_dev.tolist(), device)
+                pos_sd = _edge_logits(p_source, p_device, p_t, zeros_msg, hist_sd_pos)
+                neg_sd = _edge_logits(src_rep, neg_dev, tv_rep, zeros_msg_rep, hist_sd_neg).view(P, K)
+                loss = loss + (
+                    F.cross_entropy(torch.cat([pos_sd.unsqueeze(1), neg_sd], dim=1), target)
+                    + F.binary_cross_entropy_with_logits(pos_sd, torch.ones_like(pos_sd))
+                )
 
             loss.backward()
             optimizer.step()
@@ -425,16 +526,33 @@ def train_tgn(cfg: TGNConfig = TGNConfig(), *, dataset: "StreamData | None" = No
 
             # Predict-then-update: commit benign traffic to memory, neighbour store, the
             # recency cache and the interaction-history counters (benign-only — anomalies
-            # never enter the baseline, matching the serving anti-poisoning gate).
-            model.memory.update_state(p_src, p_dst, p_t, p_msg)
+            # never enter the baseline, matching the serving anti-poisoning gate). Edge
+            # order mirrors serving: source→device, device→user, user→resource.
+            if has_src:
+                model.memory.update_state(p_source, p_device, p_t, zeros_msg)
+                model.memory.detach()
+                model.neighbor_loader.insert(p_source, p_device, p_t, zeros_msg)
+            if has_bind:
+                model.memory.update_state(p_device, p_user, p_t, zeros_msg)
+                model.memory.detach()
+                model.neighbor_loader.insert(p_device, p_user, p_t, zeros_msg)
+            model.memory.update_state(p_user, p_dst, p_t, p_msg)
             model.memory.detach()
-            model.neighbor_loader.insert(p_src, p_dst, p_t, p_msg)
-            for i in range(P):
-                s = s_l[i]
-                d = dpos_l[i]
-                model.last_contact[(s, d)] = tv_l[i]
-                model.pair_count[(s, d)] = model.pair_count.get((s, d), 0) + 1
-                model.src_count[s] = model.src_count.get(s, 0) + 1
+            model.neighbor_loader.insert(p_user, p_dst, p_t, p_msg)
+            for j in range(P):
+                u, d, tv_j = u_l[j], dpos_l[j], tv_l[j]
+                pairs = [(u, d)]
+                if has_src:
+                    pairs.append((src_l[j], dev_l[j]))
+                if has_bind:
+                    pairs.append((dev_l[j], u))
+                for a, b in pairs:
+                    model.last_contact[(a, b)] = tv_j
+                    model.pair_count[(a, b)] = model.pair_count.get((a, b), 0) + 1
+                    model.src_count[a] = model.src_count.get(a, 0) + 1
+                if has_bind:
+                    # aux (device, resource) habituality counter — no temporal edge.
+                    model.pair_count[(dev_l[j], d)] = model.pair_count.get((dev_l[j], d), 0) + 1
 
         print(f"Epoch {epoch:02d} | Train Loss: {total_loss / max(num_train_batches, 1):.4f}")
 
@@ -444,8 +562,12 @@ def train_tgn(cfg: TGNConfig = TGNConfig(), *, dataset: "StreamData | None" = No
     # post-training node features so calibration does not bleed trust state into the test
     # replay and so re-runs stay idempotent.
     node_feat_post_train = model.node_feat.clone()
+    def _slice(arr, lo, hi):
+        return arr[lo:hi] if arr is not None else None
+
     val_scores, val_labels = _replay(
-        model, src[train_end:val_end], dst[train_end:val_end], t[train_end:val_end],
+        model, _slice(source_arr, train_end, val_end), _slice(device_arr, train_end, val_end),
+        user_arr[train_end:val_end], dst[train_end:val_end], t[train_end:val_end],
         msg[train_end:val_end], y[train_end:val_end], device, gate_by_label=True,
     )
     benign_val_scores = val_scores[val_labels == 0]
@@ -498,7 +620,8 @@ def train_tgn(cfg: TGNConfig = TGNConfig(), *, dataset: "StreamData | None" = No
     model.node_feat.copy_(node_feat_post_train)
     model.recent_alert.clear()  # don't let calibration-slice alerts pre-condition the test stream
     test_scores, test_labels = _replay(
-        model, src[val_end:], dst[val_end:], t[val_end:], msg[val_end:], y[val_end:],
+        model, _slice(source_arr, val_end, n), _slice(device_arr, val_end, n),
+        user_arr[val_end:], dst[val_end:], t[val_end:], msg[val_end:], y[val_end:],
         device, threshold=threshold, threshold_dirty=threshold_dirty, gate_by_label=False,
     )
 
@@ -547,10 +670,10 @@ def train_tgn(cfg: TGNConfig = TGNConfig(), *, dataset: "StreamData | None" = No
     #     indistinguishable from benign exploration except by temporal/relational pattern).
     #     This is the model's real target.
     print("\n--- METRICHE PER TIPO DI ANOMALIA ---")
-    vs_rule = {1: "OPA-owned  ", 2: "rule-trivial", 3: "rule-blind "}
+    vs_rule = {1: "OPA-owned  ", 2: "rule-trivial", 3: "rule-blind ", 4: "rule-blind "}
     per_type = {}
     benign = test_types == 0
-    for type_id, name in ((1, "policy"), (2, "contextual"), (3, "lateral")):
+    for type_id, name in ((1, "policy"), (2, "contextual"), (3, "lateral"), (4, "cred-theft")):
         sel = benign | (test_types == type_id)
         s_sel, l_sel = test_scores[sel], (test_types[sel] == type_id).astype(int)
         if l_sel.sum() == 0:
@@ -570,7 +693,8 @@ def train_tgn(cfg: TGNConfig = TGNConfig(), *, dataset: "StreamData | None" = No
     # a freshly-compromised IP may have no benign history yet). Report lateral recall split
     # by whether the src had >=1 benign event before the event (warmed) vs not (cold), so
     # the honest "where detection is even possible" number is visible next to the overall one.
-    src_seen_test = causal_src_seen(src.numpy(), y.numpy())[val_end:]
+    actor_arr = device_arr if device_arr is not None else user_arr
+    src_seen_test = causal_src_seen(actor_arr.numpy(), y.numpy())[val_end:]
     lat_mask = test_types == 3
     lat_pred = test_preds  # routed operational decision
     warmed = lat_mask & src_seen_test
@@ -587,6 +711,53 @@ def train_tgn(cfg: TGNConfig = TGNConfig(), *, dataset: "StreamData | None" = No
           f"recall@thr={cold_start['recall_warmed']:.4f} | AUC={cold_start.get('auc_warmed', float('nan')):.4f}")
     print(f"  cold   src (no history yet)     : n={cold_start['n_cold']:4d} | "
           f"recall@thr={cold_start['recall_cold']:.4f}  (detection not yet possible)")
+
+    # --- SCENARIO-LEVEL EVALUATION (the v2-schema goals) ----------------------
+    # (a) roaming / wiped-cookie benign events must not become false positives;
+    # (b) credential theft (new IP + new device on a known user) must be caught;
+    # (c) lateral movement on shared machines must not be diluted by the user split.
+    scenario_metrics = {}
+    if scenario is not None:
+        scen_test = scenario[val_end:].numpy()
+        benign_t = test_labels == 0
+
+        def _fpr(mask):
+            return float(test_preds[mask].mean()) if mask.any() else float("nan")
+
+        plain = benign_t & (scen_test == 0)
+        roam = benign_t & ((scen_test & SCEN_ROAMING) != 0)
+        wiped = benign_t & ((scen_test & SCEN_WIPED) != 0)
+        scenario_metrics["fpr_plain"] = _fpr(plain)
+        scenario_metrics["fpr_roaming"] = _fpr(roam)
+        scenario_metrics["fpr_wiped"] = _fpr(wiped)
+        scenario_metrics["n_roaming"] = int(roam.sum())
+        scenario_metrics["n_wiped"] = int(wiped.sum())
+
+        theft = test_types == 4
+        if theft.any():
+            scenario_metrics["theft_recall"] = float(test_preds[theft].mean())
+            sel = benign | theft
+            scenario_metrics["theft_auc"] = float(
+                roc_auc_score((test_types[sel] == 4).astype(int), test_scores[sel])
+            )
+            scenario_metrics["n_theft"] = int(theft.sum())
+
+        shared_lat = (test_types == 3) & ((scen_test & SCEN_SHARED) != 0)
+        if shared_lat.any():
+            scenario_metrics["shared_lateral_recall"] = float(test_preds[shared_lat].mean())
+            scenario_metrics["n_shared_lateral"] = int(shared_lat.sum())
+
+        print("\n--- SCENARI v2 (goal a/b/c) ---")
+        print(f"  benign FPR  plain={scenario_metrics['fpr_plain']:.4f} | "
+              f"roaming={scenario_metrics['fpr_roaming']:.4f} (n={scenario_metrics['n_roaming']}) | "
+              f"wiped-cookie={scenario_metrics['fpr_wiped']:.4f} (n={scenario_metrics['n_wiped']})")
+        if "theft_recall" in scenario_metrics:
+            print(f"  credential theft: recall@thr={scenario_metrics['theft_recall']:.4f} | "
+                  f"AUC={scenario_metrics['theft_auc']:.4f} (n={scenario_metrics['n_theft']})")
+        if "shared_lateral_recall" in scenario_metrics:
+            print(f"  lateral su device condivisi: recall@thr="
+                  f"{scenario_metrics['shared_lateral_recall']:.4f} "
+                  f"(n={scenario_metrics['n_shared_lateral']})")
 
     # --- RULE-BASED BASELINE (value-add reference) ---------------------------
     base_pred = _rule_baseline(test_msg)
@@ -615,6 +786,7 @@ def train_tgn(cfg: TGNConfig = TGNConfig(), *, dataset: "StreamData | None" = No
     # Ablation runs (save=False) must not overwrite the full-model artifact in public/.
     if save:
         hp = {
+            "schema_version": cfg.schema_version,
             "capacity": capacity,
             "node_feat_dim": cfg.node_feat_dim,
             "msg_dim": cfg.msg_dim,
@@ -655,6 +827,7 @@ def train_tgn(cfg: TGNConfig = TGNConfig(), *, dataset: "StreamData | None" = No
         "fpr_after": new_fpr,
         "per_type": per_type,
         "cold_start": cold_start,
+        "scenario": scenario_metrics,
         "use_struct_head": use_struct_head,
         "use_hash_identity": use_hash_identity,
         "use_hist_feats": use_hist_feats,

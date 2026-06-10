@@ -458,6 +458,9 @@ let simInterval = null;
 function handleStreamEvent(data) {
     eventCount++;
     if(statEvents) statEvents.textContent = eventCount.toLocaleString();
+    // Live events carry key_user/key_device/key_source/key_dst (v2 schema); the
+    // simulated path still feeds key_src. Normalise on the device (the actor).
+    if (data.key_src === undefined) data.key_src = data.key_device;
     
     // Update real system stats if provided by backend (Live Mode)
     if (liveToggle && liveToggle.checked) {
