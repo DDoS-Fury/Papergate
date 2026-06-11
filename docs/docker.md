@@ -114,6 +114,12 @@ Esegue gli esperimenti multi-seed di rimozione strutturale (ablation) per certif
 docker compose --profile ablations up
 ```
 
+Per valutare il comportamento del modello omettendo obbligatoriamente il tracciamento hardware/dispositivo (`key_device`), è disponibile un profilo di ablation in tempo reale che lancia un test set di 120 secondi. Questo simula uno scenario in cui nessun dispositivo client è identificato, bypassando l'arco logico e testando la classificazione diretta IP -> Utente:
+
+```bash
+docker compose --profile serve-tgn --profile ablation-no-device up --build
+```
+
 ### 6. Validità Esterna (Dataset LANL Reale)
 Avvia la pipeline di inferenza isolata sul dataset governativo pubblico **LANL Comprehensive Multi-Source**. Fondamentale per provare sul campo l'efficacia del *cost-sensitive routing* su attacchi laterali reali (red-team).
 

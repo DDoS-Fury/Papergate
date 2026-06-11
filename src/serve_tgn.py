@@ -281,7 +281,7 @@ def score_event(
     registry: NodeRegistry,
     threshold: float,
     key_user: Hashable,
-    key_device: Hashable,
+    key_device: Hashable | None,
     key_dst: Hashable,
     timestamp: int,
     features,
@@ -314,13 +314,14 @@ def score_event(
     """
     model.eval()
     user_idx = _admit(model, registry, key_user)
-    device_idx = _admit(model, registry, key_device)
+    device_idx = None if key_device is None else _admit(model, registry, key_device)
     dst_idx = _admit(model, registry, key_dst)
     source_idx = None if key_source is None else _admit(model, registry, key_source)
 
     if src_feat is not None:
         _set_node_features(model, user_idx, src_feat, device)
-        _set_node_features(model, device_idx, src_feat, device)
+        if device_idx is not None:
+            _set_node_features(model, device_idx, src_feat, device)
     if dst_feat is not None:
         _set_node_features(model, dst_idx, dst_feat, device)
     if source_idx is not None:
@@ -328,18 +329,27 @@ def score_event(
 
     features_bind = [0.0] * len(features)
     edge_scores = [
-        infer_score(model, device_idx, user_idx, timestamp, features_bind, device),
         infer_score(model, user_idx, dst_idx, timestamp, features, device,
                     aux_src_idx=device_idx),
     ]
-    if source_idx is not None:
+    if device_idx is not None:
         edge_scores.append(
-            infer_score(model, source_idx, device_idx, timestamp, features_bind, device)
+            infer_score(model, device_idx, user_idx, timestamp, features_bind, device)
         )
+        if source_idx is not None:
+            edge_scores.append(
+                infer_score(model, source_idx, device_idx, timestamp, features_bind, device)
+            )
+    elif source_idx is not None:
+        # If device is missing, source connects directly to user
+        edge_scores.append(
+            infer_score(model, source_idx, user_idx, timestamp, features_bind, device)
+        )
+        
     raw_score = max(edge_scores)
-    # Kill-chain precursor prior — keyed on the DEVICE node, so on a shared machine the
-    # recon→lateral boost covers every user that touches it.
-    score = min(1.0, raw_score * precursor_boost(model, device_idx, timestamp))
+    # Kill-chain precursor prior — keyed on the DEVICE node (if present), else on USER
+    boost_idx = device_idx if device_idx is not None else user_idx
+    score = min(1.0, raw_score * precursor_boost(model, boost_idx, timestamp))
     eff_threshold = threshold
     if threshold_dirty is not None and signal_dirty(features):
         eff_threshold = threshold_dirty
@@ -347,19 +357,27 @@ def score_event(
 
     snort_alert = features[1] > 0.5
     if is_anomaly or snort_alert:
-        record_alert(model, device_idx, timestamp)
-        model.node_feat[device_idx, 14] = max(0.0, model.node_feat[device_idx, 14].item() - 0.5)
+        record_alert(model, boost_idx, timestamp)
+        if device_idx is not None:
+            model.node_feat[device_idx, 14] = max(0.0, model.node_feat[device_idx, 14].item() - 0.5)
         model.node_feat[user_idx, 14] = max(0.0, model.node_feat[user_idx, 14].item() - 0.5)
     else:
-        model.node_feat[device_idx, 14] = min(1.0, model.node_feat[device_idx, 14].item() + 0.01)
+        if device_idx is not None:
+            model.node_feat[device_idx, 14] = min(1.0, model.node_feat[device_idx, 14].item() + 0.01)
         model.node_feat[user_idx, 14] = min(1.0, model.node_feat[user_idx, 14].item() + 0.01)
 
     if update and not is_anomaly:
-        if source_idx is not None:
-            update_memory(model, source_idx, device_idx, timestamp, features_bind, device)
-        update_memory(model, device_idx, user_idx, timestamp, features_bind, device)
-        update_memory(model, user_idx, dst_idx, timestamp, features, device,
-                      aux_pair=(device_idx, dst_idx))
+        if device_idx is not None:
+            if source_idx is not None:
+                update_memory(model, source_idx, device_idx, timestamp, features_bind, device)
+            update_memory(model, device_idx, user_idx, timestamp, features_bind, device)
+            update_memory(model, user_idx, dst_idx, timestamp, features, device,
+                          aux_pair=(device_idx, dst_idx))
+        else:
+            if source_idx is not None:
+                update_memory(model, source_idx, user_idx, timestamp, features_bind, device)
+            update_memory(model, user_idx, dst_idx, timestamp, features, device,
+                          aux_pair=None)
 
     return score, is_anomaly
 
@@ -368,7 +386,7 @@ def commit_event(
     model,
     registry: NodeRegistry,
     key_user: Hashable,
-    key_device: Hashable,
+    key_device: Hashable | None,
     key_dst: Hashable,
     timestamp: int,
     features,
@@ -390,24 +408,31 @@ def commit_event(
     """
     model.eval()
     user_idx = _admit(model, registry, key_user)
-    device_idx = _admit(model, registry, key_device)
+    device_idx = None if key_device is None else _admit(model, registry, key_device)
     dst_idx = _admit(model, registry, key_dst)
     source_idx = None if key_source is None else _admit(model, registry, key_source)
 
     if src_feat is not None:
         _set_node_features(model, user_idx, src_feat, device)
-        _set_node_features(model, device_idx, src_feat, device)
+        if device_idx is not None:
+            _set_node_features(model, device_idx, src_feat, device)
     if dst_feat is not None:
         _set_node_features(model, dst_idx, dst_feat, device)
     if source_idx is not None:
         _set_source_network_feature(model, source_idx, key_source)
 
     features_bind = [0.0] * len(features)
-    if source_idx is not None:
-        update_memory(model, source_idx, device_idx, timestamp, features_bind, device)
-    update_memory(model, device_idx, user_idx, timestamp, features_bind, device)
-    update_memory(model, user_idx, dst_idx, timestamp, features, device,
-                  aux_pair=(device_idx, dst_idx))
+    if device_idx is not None:
+        if source_idx is not None:
+            update_memory(model, source_idx, device_idx, timestamp, features_bind, device)
+        update_memory(model, device_idx, user_idx, timestamp, features_bind, device)
+        update_memory(model, user_idx, dst_idx, timestamp, features, device,
+                      aux_pair=(device_idx, dst_idx))
+    else:
+        if source_idx is not None:
+            update_memory(model, source_idx, user_idx, timestamp, features_bind, device)
+        update_memory(model, user_idx, dst_idx, timestamp, features, device,
+                      aux_pair=None)
 
 
 def save_model(model, registry: NodeRegistry, threshold: float, hp: dict,

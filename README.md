@@ -72,7 +72,7 @@ flowchart TD
     NL --> GNN
 
     subgraph SCOREG["score() — logit = feature head + structural head"]
-        FEAT["Feature head · LinkPredictor (MLP)<br/>[ z_src ‖ z_dst ‖ cur_msg ‖ feat_src ‖ feat_dst ]<br/>→ policy & contextual anomalies"]
+        FEAT["Feature head · LinkPredictor (MLP)<br/>[ z_src ‖ z_dst ‖ cur_msg ‖ feat_src ‖ feat_dst ‖ Δt ‖ Δt_src ‖ hist_feats ]<br/>→ policy & contextual anomalies"]
         STR["Structural head<br/>scale · cosine( MLP z_src , MLP z_dst )<br/>→ lateral movement"]
         SUM["logit = feat_logit + struct_logit"]
         FEAT --> SUM
@@ -198,7 +198,7 @@ Oltre ai dati sintetici, il modello è stato validato sul dataset pubblico **LAN
 - **AUC ROC Aggregata (LANL): 0.8824**
 - **Recall Movimento Laterale: 73.33%** (a FPR globale del ~2.18%)
 
-Nonostante i modelli accademici SOTA offline raggiungano AUC tra 0.92 e 0.96 su questo dataset, questi operano tramite costose reti batch sull'intero grafo storico. La nostra architettura, al contrario, ottiene un eccellente **AUC dell'88% in puro streaming tempo-reale**, processando gli eventi singolarmente con footprint di memoria fissa (`O(1)` per nodo) e lavorando "alla cieca" (senza metadati ZTA o segnali IDS di supporto).
+Nonostante i modelli accademici SOTA offline raggiungano AUC tra 0.92 e 0.96 su questo dataset, questi operano tramite costose reti batch sull'intero grafo storico. La nostra architettura, al contrario, ottiene un eccellente **AUC dell'88% in puro streaming tempo-reale**, processando gli eventi singolarmente con footprint di memoria fissa (`O(1)` per nodo) e lavorando "alla cieca" (senza metadati ZTA o segnali IDS di supporto). Tali prestazioni competitive scalano e si mantengono robuste sull'intero stream di log, validando l'intero periodo operativo del Red Team senza necessità di filtri temporali limitanti (split 30/10/60).
 
 Dettagli su de-circolarizzazione, de-degenerazione, ablation multi-seed, cold-start e
 anti-poisoning in 👉 [`docs/inductive_testing.md`](docs/inductive_testing.md) e

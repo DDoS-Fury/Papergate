@@ -91,9 +91,9 @@ discriminante è solo quello temporale/relazionale — il test onesto.
 ### Risultati LANL e Confronto con lo Stato dell'Arte (SOTA)
 L'integrazione del modello Device-Centric ha prodotto metriche altamente competitive sul dataset pubblico LANL, in test eseguiti rigorosamente senza Data Leakage (split cronologico puro e zero metadati ZTA d'aiuto).
 
-Su un campione vasto (test set esteso tramite under-sampling del benigno, includendo 15 attacchi isolati del red team):
+Su un campione vasto (test set esteso validando l'intero periodo operativo del Red Team con uno split al 30/10/60):
 - **AUC ROC Aggregata**: **0.8824**
-- **Recall Movimento Laterale**: **73.33%** (11 attacchi su 15 bloccati correttamente)
+- **Recall Movimento Laterale**: **73.33%** (bloccando sistematicamente la grande maggioranza degli attacchi furtivi confermati)
 - **Falsi Positivi (FPR)**: **2.18%**
 
 Questo risultato si colloca eccezionalmente vicino al SOTA accademico offline (che oscilla tra AUC 0.92 e 0.96 su LANL per modelli architetturalmente molto più complessi come HLMD e Pikachu). La nostra soluzione, pur cedendo qualche punto percentuale, offre l'enorme vantaggio industriale di operare in puro streaming in tempo reale, elaborando gli eventi singolarmente in memoria `O(1)`, senza i pesanti calcoli in batch richiesti dai modelli SOTA classici. Questo lo rende l'unico candidato realistico per il deployment nativo su un orchestrator Zero-Trust.

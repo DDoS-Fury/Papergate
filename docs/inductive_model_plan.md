@@ -1,3 +1,7 @@
+> [!WARNING]
+> **STATUS: SUPERSEDED**
+> Questo documento descrive una proposta architetturale obsoleta (rimozione totale degli ID e uso di feature one-hot). Il piano non è stato attuato in questi termini poiché l'induttività è stata poi elegantemente risolta e implementata tramite il meccanismo di **Hashed Identity** (`stable_hash` con eviction LRU nel `NodeRegistry`). Si mantiene questo file solo per storico progettuale.
+
 # Piano di Implementazione: Modello Induttivo Puro (TGN)
 
 Questo documento descrive il piano di implementazione passo-passo per convertire il modello TGN in un "Modello Induttivo Puro", al fine di risolvere il problema dell'embedding transduttivo (Transductive Embedding Problem).

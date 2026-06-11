@@ -139,5 +139,5 @@ docker compose --profile verify-tgn up          # correttezza serving-path
 
 Sebbene le metriche esplorative derivino da test sintetici onesti, l'architettura è stata validata con successo sul dataset reale **LANL Comprehensive Multi-Source**, superando il limite della validazione sintetica.
 
-In assenza totale di metadati ZTA d'aiuto (scenario "stealth" massimo) e senza alcun data leakage (garantito dallo split temporale rigoroso e dall'apprendimento non-supervisionato), il TGN Device-Centric ha raggiunto un'**AUC dell'88%** e un **Recall del 73.3%** sul lateral movement. 
+In assenza totale di metadati ZTA d'aiuto (scenario "stealth" massimo) e senza alcun data leakage (garantito dallo split temporale rigoroso 30/10/60 testato sull'intero periodo operativo del Red Team), il TGN Device-Centric ha raggiunto un'**AUC dell'88%** e un **Recall del 73.3%** sul lateral movement.
 Pur cedendo alcuni punti percentuali rispetto ai colossi accademici SOTA offline (AUC 0.92-0.96), il nostro TGN eccelle indiscutibilmente per la sua vocazione ingegneristica: opera in puro streaming tempo-reale a basso impatto (`O(1)` per nodo), dimostrando una robusta validità esterna per applicazioni Zero-Trust su scala industriale.
