@@ -40,7 +40,7 @@ class TGNConfig:
     # MUST equal len(RESOURCE_URIS) in stream_synthetic.py: resource node keys are
     # the exact route URIs the security-orchestrator sends as key_dst.
     num_resources: int = 19
-    num_events: int = 50000
+    num_events: int = 200000
 
     # Spare device-node slots for the generator's dynamic scenarios: a cookie wipe
     # re-keys a machine (new cold device node), a credential-theft incident brings a
@@ -83,7 +83,7 @@ class TGNConfig:
     time_dim: int = 32
     memory_dim: int = 256
     num_hops: int = 3
-    hash_buckets: int = 10000
+    hash_buckets: int = 100000
     hash_dim: int = 16
     # Temporal neighbours kept per node in the (bounded, in-memory) neighbour loader.
     # Enables message passing over each entity's recent interaction history → the

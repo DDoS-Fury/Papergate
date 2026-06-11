@@ -16,7 +16,7 @@ from graphagate.config import TGNConfig
 from graphagate.data.stream_synthetic import ZTAStreamSimulator
 
 
-async def event_generator(seed=None, warmup_steps=None, cfg: TGNConfig = TGNConfig()):
+async def event_generator(seed=None, warmup_steps=None, cfg: TGNConfig = TGNConfig(), omit_device: bool = False):
     sim = ZTAStreamSimulator(
         num_users=cfg.num_users,
         num_devices=cfg.num_devices,
@@ -44,7 +44,7 @@ async def event_generator(seed=None, warmup_steps=None, cfg: TGNConfig = TGNConf
     nf = sim.node_features
     while True:
         ev = sim.step()
-        yield {
+        event_dict = {
             "key_user": ev["key_user"],
             "key_device": ev["key_device"],
             "key_source": ev["key_source"],
@@ -56,4 +56,8 @@ async def event_generator(seed=None, warmup_steps=None, cfg: TGNConfig = TGNConf
             "label": ev["label"],
             "type": ev["etype"],
         }
+        if omit_device:
+            event_dict.pop("key_device", None)
+            
+        yield event_dict
         await asyncio.sleep(0)

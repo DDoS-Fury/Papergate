@@ -110,9 +110,11 @@ services:
     command: ["/app/tests/eval_lanl.py",
               "--auth-path", "/data/auth.txt.gz",
               "--redteam-path", "/data/redteam.txt",
-              "--window-start", "720000",
-              "--window-end", "780000",
-              "--epochs", "2"]
+              "--max-events", "10000000",
+              "--benign-stride", "10",
+              "--epochs", "2",
+              "--window-pad", "1209600",
+              "--train-frac", "0.3"]
 
   # Ablation study: full vs no-struct-head vs no-hashed-identity (save=False, non
   # tocca gli artifact in public/). Il contributo della parte temporale è invece
@@ -127,3 +129,20 @@ services:
       - ./tests:/app/tests
     entrypoint: ["python"]
     command: ["/app/tests/ablations/run_ablations.py"]
+
+  # Ablation study per valutare l'efficacia del modello senza il device edge.
+  # Utilizza il test client per inviare stream al serve-tgn omettendo il parametro key_device.
+  # Dipende dal serve-tgn che deve essere già in esecuzione (o avviato insieme con i due profili).
+  test-ablation:
+    <<: *base
+    profiles: ["ablation-no-device"]
+    container_name: graphagate-test-ablation
+    volumes:
+      - ./public:/app/public
+      - ./src:/app/src
+      - ./tests:/app/tests
+    entrypoint: ["python"]
+    command: ["/app/tests/test_client.py", "--host", "serve-tgn", "--port", "8088", "--duration", "120", "--no-device"]
+    depends_on:
+      serve-tgn:
+        condition: service_healthy

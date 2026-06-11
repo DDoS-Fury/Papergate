@@ -137,8 +137,8 @@ app = FastAPI(title="Graphagate TGN inference", version="0.1.0", lifespan=lifesp
 # --- request / response schemas ------------------------------------------------
 class EventIn(BaseModel):
     key_user: EntityKey = Field(..., description="User entity key.")
-    key_device: EntityKey = Field(
-        ..., description="Device entity key (hardware id: 'tpm:<id>' or 'ck:<cookie>')."
+    key_device: Optional[EntityKey] = Field(
+        None, description="Device entity key (hardware id: 'tpm:<id>' or 'ck:<cookie>'). Optional."
     )
     key_dst: EntityKey = Field(..., description="Destination entity key (resource URI).")
     key_source: Optional[EntityKey] = Field(

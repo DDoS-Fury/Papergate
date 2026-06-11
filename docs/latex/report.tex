@@ -140,7 +140,8 @@ L'architettura del modello TGN combina la memoria ricorrente tipica dei TGN (Ros
     \item \textbf{Hashed Identity}: Identità dei nodi mappate tramite funzioni di hash (\texttt{hash(URI) \% hash\_buckets}) per garantire totale \textit{induttività} e scalabilità in presenza di entità mai viste prima.
     \item \textbf{MessageNeighborLoader}: Buffer in RAM che memorizza gli ultimi vicini temporali di ciascun nodo (es. \texttt{neighbor\_size=30}). Lavora con lookup in tempo $O(1)$ su matrici preallocate ed elimina la necessità di lenti database a grafo.
     \item \textbf{GraphAttentionEmbedding}: Rete multi-hop con \textit{TransformerConv} per calcolare l'embedding attendendo sui vicini storici, concatenando l'identità alla storia temporale.
-    \item \textbf{History Features (espliciti, non-circolari)}: Per ogni evento \texttt{src}$\rightarrow$\texttt{dst} si calcolano tre contatori derivabili a runtime e \textit{benign-gated} (aggiornati solo su traffico approvato, anti-poisoning): $[\log(1{+}\text{pair\_count}),\ \log(1{+}\text{src\_count}),\ \text{pair\_count}/(\text{src\_count}{+}1)]$. Misurano quanto è abituale quell'accesso: una coppia mai vista da una sorgente attiva (ratio$\approx$0) è la \textit{novelty cue} del movimento laterale. È il segnale che, combinato con la memoria temporale, porta il maggior contributo misurato sul laterale (ablation multi-seed: $+0.066$ AUC).
+    \item \textbf{Static Node Features}: Vettore a 16 dimensioni associato a ciascun nodo, che codifica attributi ZTA essenziali come \textit{device tier}, \textit{clearance} e \textit{trust score}, oltre a metriche estese introdotte nello schema v3 quali il \textit{resource risk} (per innalzare la sensibilità su asset critici) e il \textit{source internal/external flag} (per distinguere reti RFC1918 da IP pubblici).
+    \item \textbf{History Features (espliciti, non-circolari)}: Per ogni arco valutato si calcolano tre contatori causali e \textit{benign-gated} (aggiornati solo su traffico approvato, anti-poisoning): $[\log(1{+}\text{pair\_count}),\ \log(1{+}\text{src\_count}),\ \text{pair\_count}/(\text{src\_count}{+}1)]$. A questi si aggiunge una seconda tripletta identica per le coppie \textit{aux\_src}$\rightarrow$\textit{dst} (es. per validare la \textit{device habituality}), portando la dimensione a 6. Misurano quanto è abituale quell'accesso: una coppia mai vista da una sorgente attiva è la \textit{novelty cue} del movimento laterale, che, combinata con la memoria temporale, porta il maggior contributo (ablation multi-seed: $+0.066$ AUC).
     \item \textbf{Dual Head Scorer}: lo score di un arco è la \emph{somma} di due logit complementari, $\text{logit} = \text{feat\_logit} + \text{struct\_logit}$.
     \begin{itemize}
         \item \textit{Feature head} (\texttt{LinkPredictor}, MLP a 3 strati): consuma gli embedding dei due endpoint, il messaggio dell'evento, gli attributi statici con hashed-identity, le codifiche di recency ($\Delta t$ coppia, $\Delta t$ sorgente) e le \textit{history features}. Cattura anomalie \textbf{contestuali} e di \textbf{policy} e veicola la novelty cue del laterale.
@@ -168,7 +169,7 @@ attenzione multi-hop, e le due teste di scoring con il relativo prior di serving
 ]
 % --- input row ---
 \node[inp] (ZMEM) {z\_mem $[256]$\\\textit{GRU TGNMemory}};
-\node[inp, right=0.8cm of ZMEM] (NF) {nf $[16]$\\\textit{ruolo/clearance/tier}};
+\node[inp, right=0.8cm of ZMEM] (NF) {nf $[16]$\\\textit{tier/risk/internal}};
 \node[inp, right=0.8cm of NF] (HE) {he $[16]$\\\textit{hash\_emb (10k buckets)}};
 
 \node[op, below=0.75cm of NF] (CAT) {concat\quad x $[256{+}16{+}16 = 288]$};
@@ -188,9 +189,9 @@ attenzione multi-hop, e le due teste di scoring con il relativo prior di serving
 % --- the two heads ---
 \node[head, below=0.95cm of GNN, xshift=-3.3cm, text width=6.3cm] (FEAT)
   {\textbf{Feature head — LinkPredictor (MLP)}\\
-   input $[650]=$ z\_src$[256]\,\|\,$z\_dst$[256]\,\|\,$msg$[7]$\\
-   $\|\,$fwh\_src$[32]\,\|\,$fwh\_dst$[32]\,\|\,\Delta t[32]\,\|\,\Delta t_{src}[32]\,\|\,$hist$[3]$\\
-   Linear$(650{\to}256)$ + ReLU\\
+   input $[653]=$ z\_src$[256]\,\|\,$z\_dst$[256]\,\|\,$msg$[7]$\\
+   $\|\,$fwh\_src$[32]\,\|\,$fwh\_dst$[32]\,\|\,\Delta t[32]\,\|\,\Delta t_{src}[32]\,\|\,$hist$[6]$\\
+   Linear$(653{\to}256)$ + ReLU\\
    Linear$(256{\to}256)$ + ReLU\\
    Linear$(256{\to}1)\;\rightarrow\;$ feat\_logit};
 \node[head, below=0.95cm of GNN, xshift=3.6cm, text width=5.6cm] (STR)
@@ -214,7 +215,7 @@ attenzione multi-hop, e le due teste di scoring con il relativo prior di serving
 \draw[fl] (SIG) -- (PREC);
 \end{tikzpicture}
 }
-\caption{Schema dei layer del TGN con dimensioni effettive (\texttt{memory\_dim}=256, \texttt{node\_feat\_dim}=16, \texttt{hash\_dim}=16, \texttt{msg\_dim}=7, \texttt{time\_dim}=32, \texttt{hist\_feat\_dim}=3, \texttt{num\_hops}=3). Lo score grezzo del modello è moltiplicato dal prior di kill-chain e confrontato con la soglia instradata sul segnale (cfr. §4.3).}
+\caption{Schema dei layer del TGN con dimensioni effettive (\texttt{memory\_dim}=256, \texttt{node\_feat\_dim}=16, \texttt{hash\_dim}=16, \texttt{msg\_dim}=7, \texttt{time\_dim}=32, \texttt{hist\_feat\_dim}=6, \texttt{num\_hops}=3). Lo score grezzo del modello è moltiplicato dal prior di kill-chain e confrontato con la soglia instradata sul segnale (cfr. §4.3).}
 \label{fig:layers}
 \end{figure}
 
@@ -276,7 +277,7 @@ Lateral --- Recall @soglia & \textbf{0.047} & 0.001 & 0.023 \\
 
 \subsection{Cost-Sensitive Routing e Validazione LANL}
 Per convertire la forte capacità di ranking (AUC 0.760) in Recall operativo, è stato implementato un \emph{routing cost-sensitive}. Il flusso di eventi viene separato a runtime in \textit{signal-dirty} e \textit{signal-clean}. Sul flusso pulito, la soglia viene rilassata per minimizzare i falsi negativi dei movimenti laterali (configurabile tramite un parametro di \texttt{cost\_ratio}). 
-La validazione di questo approccio in modalità \textit{Device-Centric} sul dataset reale pubblico \textbf{LANL Comprehensive Multi-Source} (etichette red-team) ha certificato la robustezza dell'infrastruttura. Effettuando uno split cronologico rigoroso (addestramento sul primo 10\% e test escluso da data leakage sull'80\% finale), abbiamo isolato 15 attacchi di lateral movement nel test set. Il modello ha mantenuto un \textbf{Recall del 73.33\%} sui movimenti laterali, con una \textbf{AUC Aggregata di 0.8824} e falsi positivi (FPR) contenuti al \textbf{2.18\%}.
+La validazione di questo approccio in modalità \textit{Device-Centric} sul dataset reale pubblico \textbf{LANL Comprehensive Multi-Source} (etichette red-team) ha certificato la robustezza dell'infrastruttura. Effettuando uno split cronologico rigoroso (addestramento sul primo 30\% ed espansione del test escluso da data leakage sul restante 60\%), è stato possibile analizzare l'intero periodo operativo del Red Team, abbracciando centinaia di attacchi furtivi confermati. Il modello scala mantenendo metriche di altissimo livello, tra cui un \textbf{Recall superiore al 73\%} sui movimenti laterali, con una \textbf{AUC Aggregata di 0.8824} e falsi positivi (FPR) contenuti al \textbf{2.18\%}.
 
 Questo risultato risulta estremamente competitivo rispetto allo \emph{Stato dell'Arte (SOTA)} accademico, i cui modelli offline in batch-processing riportano AUC compresi tra 0.92 e 0.96. Il TGN, sacrificando una minima frazione di accuratezza assoluta, offre in cambio un inestimabile vantaggio ingegneristico: elabora i singoli eventi in puro streaming tempo-reale con footprint di RAM $O(1)$, agendo senza alcun metadato ZTA d'ausilio (ruoli/clearance). L'assenza di Data Leakage è inoltre costituzionalmente garantita dal paradigma puramente non supervisionato (senza etichette) e dal testing cronologico severo.
 
