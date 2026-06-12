@@ -49,6 +49,10 @@ def main() -> int:
     p.add_argument("--cost-ratio", type=float, default=TGNConfig().cost_ratio)
     p.add_argument("--train-frac", type=float, default=0.7)
     p.add_argument("--val-frac", type=float, default=0.1)
+    # Offline streaming-eval batch size. >1 scores a block against the start-of-batch memory
+    # snapshot then commits in batch (standard batched-TGN regime) to saturate the GPU; the
+    # online serving path is unaffected. Lower it if you hit CUDA OOM. See train_tgn._replay.
+    p.add_argument("--eval-batch-size", type=int, default=1024)
     args = p.parse_args()
 
     window = None
@@ -64,7 +68,7 @@ def main() -> int:
 
     # Override only the knobs that matter for an injected stream; entity-count / num_events
     # fields are unused when ``dataset`` is supplied.
-    cfg = dataclasses.replace(TGNConfig(), epochs=args.epochs, cost_ratio=args.cost_ratio, train_frac=args.train_frac, val_frac=args.val_frac)
+    cfg = dataclasses.replace(TGNConfig(), epochs=args.epochs, cost_ratio=args.cost_ratio, train_frac=args.train_frac, val_frac=args.val_frac, eval_batch_size=args.eval_batch_size)
 
     print("\n--- TRAIN + EVALUATE (LANL external validity) ---")
     metrics = train_tgn(cfg, dataset=data, save=False)

@@ -12,6 +12,7 @@ Pipeline:
 """
 
 import random
+import sys
 from dataclasses import dataclass
 
 import numpy as np
@@ -19,6 +20,7 @@ import torch
 import torch.nn.functional as F
 from torch.optim import AdamW
 from sklearn.metrics import average_precision_score, roc_auc_score
+from tqdm import tqdm
 
 from graphagate.calibration import (
     cost_sensitive_threshold,
@@ -46,13 +48,31 @@ from graphagate.serve_tgn import (
 )
 
 
+def _pbar(iterable=None, *, total=None, desc=None):
+    """A tqdm progress bar that renders cleanly in a TTY *and* in ``docker compose`` logs.
+
+    On a real terminal it updates smoothly; when stderr is not a TTY (docker-compose / CI)
+    it throttles to one ASCII line every ~10 s, so the logs get periodic, readable progress
+    instead of a flood of carriage returns. It is never disabled — watching progress in the
+    container logs is exactly the point.
+    """
+    is_tty = sys.stderr.isatty()
+    return tqdm(
+        iterable, total=total, desc=desc, disable=False,
+        mininterval=(0.5 if is_tty else 10.0), dynamic_ncols=True, ascii=not is_tty,
+    )
+
+
 def _replay(model, source_nodes, device_nodes, user, dst, t, msg, y, device, *,
-            threshold=None, threshold_dirty=None, gate_by_label=False):
-    """Per-event streaming replay matching the serving path (v2: up to 3 edges).
+            threshold=None, threshold_dirty=None, gate_by_label=False,
+            batch_size=1, desc="replay"):
+    """Streaming replay matching the serving path (v2: up to 3 edges), optionally batched.
 
     ``source_nodes`` / ``device_nodes`` may be ``None`` (datasets without a network /
     hardware entity, e.g. LANL host-to-host auth): the corresponding binding edges are
-    skipped, exactly like :func:`serve_tgn.score_event` with ``key_source=None``.
+    skipped, exactly like :func:`serve_tgn.score_event` with ``key_source=None``. They are
+    dataset-level (every event carries them, or none does), so each block is a set of
+    equally-shaped edge groups.
 
     Memory update gating:
       - ``gate_by_label=True``  -> update on ground-truth benign (calibration);
@@ -64,60 +84,157 @@ def _replay(model, source_nodes, device_nodes, user, dst, t, msg, y, device, *,
     Snort / sensor) use ``threshold_dirty`` and the rest use the recall-oriented
     ``threshold`` (the signal-clean threshold). With ``threshold_dirty=None`` a single
     ``threshold`` is used everywhere (legacy behaviour). Returns ``(scores, labels)``.
+
+    ``batch_size`` controls offline GPU batching: ``1`` is bit-for-bit the old per-event
+    loop; ``B>1`` scores a block of ``B`` events against the *start-of-batch* memory snapshot
+    with one shared neighbour expansion + GNN forward (the exact pattern the training loop
+    already uses) and commits the benign-gated memory updates in batch afterwards — the
+    standard batched-TGN regime the model is trained under, which saturates the GPU on large
+    streams (LANL). The cheap per-event feedback (kill-chain precursor, trust nudge,
+    decision) stays strictly sequential, so the lateral-movement precursor keeps its exact
+    within-batch ordering. This is the OFFLINE eval/calibration path only — the online
+    server (:mod:`serve_tgn`) is untouched and remains strictly sequential.
     """
     model.eval()
-    scores = np.empty(user.shape[0], dtype=np.float64)
-    labels = np.empty(user.shape[0], dtype=np.int64)
+    N = int(user.shape[0])
+    scores = np.empty(N, dtype=np.float64)
+    labels = np.asarray(y.tolist(), dtype=np.int64)
     u_l, d_l, t_l, y_l = user.tolist(), dst.tolist(), t.tolist(), y.tolist()
     dev_l = device_nodes.tolist() if device_nodes is not None else None
     src_l = source_nodes.tolist() if source_nodes is not None else None
+    has_bind = device_nodes is not None
+    has_src = has_bind and source_nodes is not None
+    msg_dim = msg.shape[1]
+    TRUST = 14  # runtime trust slot in node_feat (the only column replay mutates)
 
-    for i in range(len(u_l)):
-        u, d, tv, lab = u_l[i], d_l[i], t_l[i], y_l[i]
-        dev = dev_l[i] if dev_l is not None else None
-        src_ip = src_l[i] if src_l is not None else None
-        msg_vec = msg[i]
-        # Same scoring path as serving: max over the present edges, then the kill-chain
-        # precursor prior (boosts an entity that recently alerted), computed before
-        # record_alert. The "actor" carrying alerts/trust is the device when present.
-        features_bind = [0.0] * len(msg_vec)
-        edge_scores = []
-        if src_ip is not None and dev is not None:
-            edge_scores.append(infer_score(model, src_ip, dev, tv, features_bind, device))
-        if dev is not None:
-            edge_scores.append(infer_score(model, dev, u, tv, features_bind, device))
-        edge_scores.append(infer_score(model, u, d, tv, msg_vec, device, aux_src_idx=dev))
-        raw_score = max(edge_scores)
-        actor = dev if dev is not None else u
-        score = min(1.0, raw_score * precursor_boost(model, actor, tv))
-        scores[i] = score
-        labels[i] = lab
+    # CPU mirror of the trust feature: the sequential per-event feedback mutates it exactly
+    # (at any batch size), written back to the GPU column once per block so the next block's
+    # scoring sees it. Only Phase 1 reads node_feat[:, TRUST] (on GPU); only Phase 2 writes it.
+    trust = model.node_feat[:, TRUST].detach().cpu().numpy().copy()
 
-        eff_thr = threshold
-        if threshold_dirty is not None and signal_dirty(msg_vec):
-            eff_thr = threshold_dirty
+    def _bump(a, b, tv):
+        """Advance the benign-gated recency / interaction-history counters (cf. update_memory)."""
+        model.last_contact[(a, b)] = tv
+        model.pair_count[(a, b)] = model.pair_count.get((a, b), 0) + 1
+        model.src_count[a] = model.src_count.get(a, 0) + 1
 
-        do_update = (lab == 0) if gate_by_label else (score < eff_thr)
-        if do_update:
-            if src_ip is not None and dev is not None:
-                update_memory(model, src_ip, dev, tv, features_bind, device)
-            if dev is not None:
-                update_memory(model, dev, u, tv, features_bind, device)
-            update_memory(model, u, d, tv, msg_vec, device,
-                          aux_pair=(dev, d) if dev is not None else None)
+    pbar = _pbar(total=N, desc=desc)
+    for start in range(0, N, batch_size):
+        end = min(start + batch_size, N)
+        B = end - start
 
-        snort_alert = msg_vec[1] > 0.5
-        is_anomaly = (score >= eff_thr) if not gate_by_label else (lab == 1)
-        if is_anomaly or snort_alert:
-            record_alert(model, actor, tv)  # arm the precursor (recon → lateral)
-            model.node_feat[actor, 14] = max(0.0, model.node_feat[actor, 14].item() - 0.5)
-            if actor != u:
-                model.node_feat[u, 14] = max(0.0, model.node_feat[u, 14].item() - 0.5)
-        else:
-            model.node_feat[actor, 14] = min(1.0, model.node_feat[actor, 14].item() + 0.01)
-            if actor != u:
-                model.node_feat[u, 14] = min(1.0, model.node_feat[u, 14].item() + 0.01)
+        with torch.no_grad():
+            bu = user[start:end].to(device)
+            bd = dst[start:end].to(device)
+            bt = t[start:end].to(device)
+            bmsg = msg[start:end].to(device).float()
+            bdev = device_nodes[start:end].to(device) if has_bind else None
+            bsrc = source_nodes[start:end].to(device) if has_src else None
+            zeros_msg = torch.zeros(B, msg_dim, device=device)
+            us, ds, ts = u_l[start:end], d_l[start:end], t_l[start:end]
+            devs = dev_l[start:end] if has_bind else None
+            srcs = src_l[start:end] if has_src else None
 
+            # --- Phase 1: one shared neighbour expansion + GNN forward for the whole block.
+            node_parts = [bu, bd]
+            if has_bind:
+                node_parts.append(bdev)
+            if has_src:
+                node_parts.append(bsrc)
+            nodes = torch.cat(node_parts).unique()
+            n_id, edge_index, hist_t, hist_msg = model.neighbor_loader(nodes)
+            z = model.embed(n_id, edge_index, hist_t, hist_msg)
+            assoc = model.neighbor_loader._assoc
+            nf = model.node_feat[n_id]
+            h_idx = model.node_hash[n_id]
+
+            def _grp_anom(s_g, d_g, s_list, d_list, msg_g, aux_list):
+                """Anomaly score (1 - P(benign)) per edge of one group — a vectorised infer_score."""
+                d_pair = torch.tensor(
+                    [ts[k] - model.last_contact.get((s_list[k], d_list[k]), 0) for k in range(B)],
+                    dtype=torch.float, device=device,
+                )
+                d_src = (bt - model.memory.last_update[s_g]).to(torch.float)
+                hist = model.compute_hist_feats(s_list, d_list, device, aux_src_ids=aux_list)
+                logit = model.score(
+                    z, nf, h_idx, assoc[s_g], assoc[d_g], msg_g, d_pair, d_src, hist
+                )
+                return 1.0 - torch.sigmoid(logit)
+
+            raw = _grp_anom(bu, bd, us, ds, bmsg, devs)  # access edge (aux src = device)
+            if has_bind:
+                raw = torch.maximum(raw, _grp_anom(bdev, bu, devs, us, zeros_msg, None))
+            if has_src:
+                raw = torch.maximum(raw, _grp_anom(bsrc, bdev, srcs, devs, zeros_msg, None))
+            raw_np = raw.detach().cpu().numpy()
+            bmsg_rows = bmsg.tolist()
+
+            # --- Phase 2: sequential per-event feedback (precursor / trust / decision).
+            do_update = np.zeros(B, dtype=bool)
+            for j in range(B):
+                i = start + j
+                lab = y_l[i]
+                u = us[j]
+                tv = ts[j]
+                actor = devs[j] if has_bind else u
+                score = min(1.0, float(raw_np[j]) * precursor_boost(model, actor, tv))
+                scores[i] = score
+
+                eff_thr = threshold
+                msg_row = bmsg_rows[j]
+                if threshold_dirty is not None and signal_dirty(msg_row):
+                    eff_thr = threshold_dirty
+                do_update[j] = (lab == 0) if gate_by_label else (score < eff_thr)
+
+                snort_alert = msg_row[1] > 0.5
+                is_anomaly = (lab == 1) if gate_by_label else (score >= eff_thr)
+                if is_anomaly or snort_alert:
+                    record_alert(model, actor, tv)  # arm the precursor (recon → lateral)
+                    trust[actor] = max(0.0, trust[actor] - 0.5)
+                    if actor != u:
+                        trust[u] = max(0.0, trust[u] - 0.5)
+                else:
+                    trust[actor] = min(1.0, trust[actor] + 0.01)
+                    if actor != u:
+                        trust[u] = min(1.0, trust[u] + 0.01)
+
+            # --- Phase 3: batched benign-gated memory / neighbour / counter commit (serving
+            # edge order: source→device, device→user, user→resource — mirrors the train loop).
+            sel = np.nonzero(do_update)[0]
+            if sel.size:
+                sel_t = torch.as_tensor(sel, dtype=torch.long, device=device)
+                su, sd, st_, sm = bu[sel_t], bd[sel_t], bt[sel_t], bmsg[sel_t]
+                zb = torch.zeros(int(sel.size), msg_dim, device=device)
+                if has_src:
+                    ssrc, sdev = bsrc[sel_t], bdev[sel_t]
+                    model.memory.update_state(ssrc, sdev, st_, zb)
+                    model.memory.detach()
+                    model.neighbor_loader.insert(ssrc, sdev, st_, zb)
+                if has_bind:
+                    sdev = bdev[sel_t]
+                    model.memory.update_state(sdev, su, st_, zb)
+                    model.memory.detach()
+                    model.neighbor_loader.insert(sdev, su, st_, zb)
+                model.memory.update_state(su, sd, st_, sm)
+                model.memory.detach()
+                model.neighbor_loader.insert(su, sd, st_, sm)
+                for j in sel.tolist():
+                    u, d, tv = us[j], ds[j], ts[j]
+                    if has_src:
+                        _bump(srcs[j], devs[j], tv)
+                    if has_bind:
+                        _bump(devs[j], u, tv)
+                    _bump(u, d, tv)
+                    if has_bind:  # aux (device, resource) habituality counter (no temporal edge)
+                        dvd = (devs[j], d)
+                        model.pair_count[dvd] = model.pair_count.get(dvd, 0) + 1
+
+            # Commit this block's trust feedback so the next block scores against it.
+            model.node_feat[:, TRUST] = torch.as_tensor(
+                trust, dtype=model.node_feat.dtype, device=device
+            )
+        pbar.update(B)
+    pbar.close()
     return scores, labels
 
 
@@ -371,7 +488,8 @@ def train_tgn(cfg: TGNConfig = TGNConfig(), *, dataset: "StreamData | None" = No
         total_loss = 0.0
         num_train_batches = train_end // bs
 
-        for i in range(num_train_batches):
+        epoch_bar = _pbar(range(num_train_batches), desc=f"Epoch {epoch:02d}/{cfg.epochs} [train]")
+        for i in epoch_bar:
             optimizer.zero_grad()
             start_idx, end_idx = i * bs, i * bs + bs
 
@@ -524,7 +642,11 @@ def train_tgn(cfg: TGNConfig = TGNConfig(), *, dataset: "StreamData | None" = No
 
             loss.backward()
             optimizer.step()
-            total_loss += loss.item()
+            batch_loss = loss.item()
+            total_loss += batch_loss
+            # refresh=False: store the postfix but let the bar's own throttled refresh
+            # (mininterval) draw it — otherwise every batch forces a line in non-TTY logs.
+            epoch_bar.set_postfix(loss=f"{batch_loss:.4f}", refresh=False)
 
             # Predict-then-update: commit benign traffic to memory, neighbour store, the
             # recency cache and the interaction-history counters (benign-only — anomalies
@@ -571,6 +693,7 @@ def train_tgn(cfg: TGNConfig = TGNConfig(), *, dataset: "StreamData | None" = No
         model, _slice(source_arr, train_end, val_end), _slice(device_arr, train_end, val_end),
         user_arr[train_end:val_end], dst[train_end:val_end], t[train_end:val_end],
         msg[train_end:val_end], y[train_end:val_end], device, gate_by_label=True,
+        batch_size=cfg.eval_batch_size, desc="Calibrazione (replay val)",
     )
     benign_val_scores = val_scores[val_labels == 0]
     if benign_val_scores.size == 0:
@@ -615,7 +738,15 @@ def train_tgn(cfg: TGNConfig = TGNConfig(), *, dataset: "StreamData | None" = No
             print(f"    thr={thr:.4f} | lateral_recall={rec:.3f} | benign_fpr={fpr:.4f}")
 
     # --- STREAMING EVALUATION (event-by-event, predicted-benign gating) ------
-    print("\n--- INIZIO FASE DI INFERENZA / ANOMALY DETECTION (per-evento) ---")
+    if cfg.eval_batch_size > 1:
+        print(
+            f"\n[!] eval_batch_size={cfg.eval_batch_size} > 1: i punteggi sono "
+            f"l'APPROSSIMAZIONE BATCHATA (veloce, ma NON identica al serving sequenziale: "
+            f"staleness intra-batch). Per numeri finali / da pubblicare usa eval_batch_size=1.",
+            file=sys.stderr,
+        )
+    _mode = f"batch={cfg.eval_batch_size}" if cfg.eval_batch_size > 1 else "per-evento"
+    print(f"\n--- INIZIO FASE DI INFERENZA / ANOMALY DETECTION ({_mode}) ---")
     # Memory + neighbour history legitimately continue from the (benign) calibration
     # slice, but reset the runtime trust feature to the post-training snapshot so the
     # test stream is not pre-conditioned by calibration.
@@ -625,6 +756,7 @@ def train_tgn(cfg: TGNConfig = TGNConfig(), *, dataset: "StreamData | None" = No
         model, _slice(source_arr, val_end, n), _slice(device_arr, val_end, n),
         user_arr[val_end:], dst[val_end:], t[val_end:], msg[val_end:], y[val_end:],
         device, threshold=threshold, threshold_dirty=threshold_dirty, gate_by_label=False,
+        batch_size=cfg.eval_batch_size, desc="Inferenza (replay test)",
     )
 
     test_types = types[val_end:].numpy()

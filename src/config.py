@@ -116,6 +116,12 @@ class TGNConfig:
     batch_size: int = 200
     epochs: int = 15
     learning_rate: float = 1e-3
+    # Offline streaming-eval batch size (calibration + test replay only — NOT the online
+    # serving path, which stays strictly sequential). 1 = exact per-event behaviour; larger
+    # values score a whole block against the start-of-batch memory snapshot then commit the
+    # updates in batch (the standard batched-TGN regime the model is already trained under),
+    # saturating the GPU on large datasets like LANL. See train_tgn._replay.
+    eval_batch_size: int = 1
 
     # Chronological split fractions (test = 1 - train - val).
     train_frac: float = 0.7

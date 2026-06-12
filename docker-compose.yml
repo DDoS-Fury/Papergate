@@ -114,7 +114,8 @@ services:
               "--benign-stride", "10",
               "--epochs", "2",
               "--window-pad", "1209600",
-              "--train-frac", "0.3"]
+              "--train-frac", "0.3",
+              "--eval-batch-size", "1024"]
 
   # Ablation study: full vs no-struct-head vs no-hashed-identity (save=False, non
   # tocca gli artifact in public/). Il contributo della parte temporale è invece
