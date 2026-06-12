@@ -140,14 +140,14 @@ L'architettura del modello TGN combina la memoria ricorrente tipica dei TGN (Ros
     \item \textbf{Hashed Identity}: Identità dei nodi mappate tramite funzioni di hash (\texttt{hash(URI) \% hash\_buckets}) per garantire totale \textit{induttività} e scalabilità in presenza di entità mai viste prima.
     \item \textbf{MessageNeighborLoader}: Buffer in RAM che memorizza gli ultimi vicini temporali di ciascun nodo (es. \texttt{neighbor\_size=30}). Lavora con lookup in tempo $O(1)$ su matrici preallocate ed elimina la necessità di lenti database a grafo.
     \item \textbf{GraphAttentionEmbedding}: Rete multi-hop con \textit{TransformerConv} per calcolare l'embedding attendendo sui vicini storici, concatenando l'identità alla storia temporale.
-    \item \textbf{Static Node Features}: Vettore a 16 dimensioni associato a ciascun nodo, che codifica attributi ZTA essenziali come \textit{device tier}, \textit{clearance} e \textit{trust score}, oltre a metriche estese introdotte nello schema v3 quali il \textit{resource risk} (per innalzare la sensibilità su asset critici) e il \textit{source internal/external flag} (per distinguere reti RFC1918 da IP pubblici).
+    \item \textbf{Static Node Features}: Vettore a 16 dimensioni associato a ciascun nodo, che codifica attributi ZTA essenziali come \textit{device tier}, \textit{clearance} e \textit{trust score}, oltre a metriche estese introdotte nello schema v3 quali il \textit{resource risk} (per innalzare la sensibilità su asset critici) e il \textit{source internal/external flag} (per distinguere reti RFC1918 da IP pubblici; ablatabile e \emph{disattivato di default} nella configurazione corrente, poiché il roaming esterno benigno può mascherare il furto di credenziali — la coppia external$\rightarrow$device che esporrebbe l'attaccante).
     \item \textbf{History Features (espliciti, non-circolari)}: Per ogni arco valutato si calcolano tre contatori causali e \textit{benign-gated} (aggiornati solo su traffico approvato, anti-poisoning): $[\log(1{+}\text{pair\_count}),\ \log(1{+}\text{src\_count}),\ \text{pair\_count}/(\text{src\_count}{+}1)]$. A questi si aggiunge una seconda tripletta identica per le coppie \textit{aux\_src}$\rightarrow$\textit{dst} (es. per validare la \textit{device habituality}), portando la dimensione a 6. Misurano quanto è abituale quell'accesso: una coppia mai vista da una sorgente attiva è la \textit{novelty cue} del movimento laterale, che, combinata con la memoria temporale, porta il maggior contributo (ablation multi-seed: $+0.066$ AUC).
     \item \textbf{Dual Head Scorer}: lo score di un arco è la \emph{somma} di due logit complementari, $\text{logit} = \text{feat\_logit} + \text{struct\_logit}$.
     \begin{itemize}
         \item \textit{Feature head} (\texttt{LinkPredictor}, MLP a 3 strati): consuma gli embedding dei due endpoint, il messaggio dell'evento, gli attributi statici con hashed-identity, le codifiche di recency ($\Delta t$ coppia, $\Delta t$ sorgente) e le \textit{history features}. Cattura anomalie \textbf{contestuali} e di \textbf{policy} e veicola la novelty cue del laterale.
         \item \textit{Structural head}: similarità coseno (scalata da una temperatura apprendibile) delle proiezioni non-lineari degli embedding. \emph{Nota onesta}: l'ablation a 3 seed la mostra \textbf{marginale} sul laterale ($0.778$ con vs $0.770$ senza); il segnale laterale è portato in realtà dalle \textit{history features}, dalla memoria temporale e dal precursore di kill-chain, non da questa testa (candidata a semplificazione).
     \end{itemize}
-    \item \textbf{Kill-chain Precursor (prior di serving, non addestrato)}: il movimento laterale segue tipicamente un alert di recon (Snort / anomalia rilevata) sulla \emph{stessa} entità, ma il gate predict-then-update scarta quel precursore dalla memoria TGN. Si mantiene quindi uno stato per-entità \texttt{recent\_alert} e si applica un fattore \emph{moltiplicativo} allo score, $1 + \text{max\_boost}\cdot 0.5^{\,\Delta t / \text{half\_life}}$ (default $\text{max\_boost}{=}3$, $\text{half\_life}{=}10^5$\,s). Moltiplicativo per costruzione: alza uno score già sospetto sopra soglia senza trasformare in falsi positivi gli score benigni $\approx 0$ (ablation: $+0.073$ AUC). Non è un input addestrato (il training solo-benigno lo renderebbe una feature morta).
+    \item \textbf{Kill-chain Precursor (prior di serving, non addestrato)}: il movimento laterale segue tipicamente un alert di recon (Snort / anomalia rilevata) sulla \emph{stessa} entità, ma il gate predict-then-update scarta quel precursore dalla memoria TGN. Si mantiene quindi uno stato per-entità \texttt{recent\_alert} e si applica un fattore \emph{moltiplicativo} allo score, $1 + \text{max\_boost}\cdot 0.5^{\,\Delta t / \text{half\_life}}$ (default $\text{max\_boost}{=}2$, $\text{half\_life}{=}600$\,s). Moltiplicativo per costruzione: alza uno score già sospetto sopra soglia senza trasformare in falsi positivi gli score benigni $\approx 0$ (ablation: $+0.073$ AUC). Non è un input addestrato (il training solo-benigno lo renderebbe una feature morta).
 \end{itemize}
 
 \subsection{Schema dei layer della rete neurale}
@@ -170,7 +170,7 @@ attenzione multi-hop, e le due teste di scoring con il relativo prior di serving
 % --- input row ---
 \node[inp] (ZMEM) {z\_mem $[256]$\\\textit{GRU TGNMemory}};
 \node[inp, right=0.8cm of ZMEM] (NF) {nf $[16]$\\\textit{tier/risk/internal}};
-\node[inp, right=0.8cm of NF] (HE) {he $[16]$\\\textit{hash\_emb (10k buckets)}};
+\node[inp, right=0.8cm of NF] (HE) {he $[16]$\\\textit{hash\_emb (100k buckets)}};
 
 \node[op, below=0.75cm of NF] (CAT) {concat\quad x $[256{+}16{+}16 = 288]$};
 \draw[fl] (ZMEM) |- (CAT);
@@ -210,7 +210,7 @@ attenzione multi-hop, e le due teste di scoring con il relativo prior di serving
 \node[op, below=0.6cm of SUM] (SIG) {$P(\text{benign})=\sigma(\text{logit})$\quad$\rightarrow$\quad score $= 1-P(\text{benign})$};
 \draw[fl] (SUM) -- (SIG);
 \node[out, below=0.6cm of SIG, text width=10cm] (PREC)
-  {$\times$ \textbf{precursor\_boost} $= 1 + 3\cdot 0.5^{\,\Delta t/10^{5}}$ (prior di serving, non addestrato)\\
+  {$\times$ \textbf{precursor\_boost} $= 1 + 2\cdot 0.5^{\,\Delta t/600}$ (prior di serving, non addestrato)\\
    $\rightarrow$ score finale $\;\Rightarrow\;$ decisione instradata sul segnale (soglia clean / dirty)};
 \draw[fl] (SIG) -- (PREC);
 \end{tikzpicture}
@@ -251,7 +251,7 @@ In fase di valutazione o in ambiente live, l'architettura rileva 3 macro-categor
 
 \section{Valutazione Sperimentale e Confronto con le Baseline}
 \label{sec:eval}
-La valutazione è condotta sullo split di test (20\% finale dello stream sintetico, 50\,000 eventi totali, \texttt{seed}=42) tramite replay per-evento attraverso l'esatto codice di serving. Per quantificare il contributo \emph{effettivo} della componente temporale, il TGN è confrontato con due baseline addestrate sullo stesso traffico benigno, con identico split cronologico, soglia calibrata all'1\% di FPR e protocollo di valutazione (codice in \texttt{tests/baselines/}):
+La valutazione è condotta sullo split di test (20\% finale dello stream sintetico, \texttt{seed}=42) tramite replay per-evento attraverso l'esatto codice di serving (\texttt{num\_events}=200\,000, di cui il 20\% finale $=40\,000$ eventi di test). Per quantificare il contributo \emph{effettivo} della componente temporale, il TGN è confrontato con due baseline addestrate sullo stesso traffico benigno, con identico split cronologico, soglia calibrata all'1\% di FPR e protocollo di valutazione (codice in \texttt{tests/baselines/}):
 \begin{itemize}
     \item \textbf{Isolation Forest}: detector non relazionale sulle sole feature statiche per-evento (nessuna struttura di grafo) --- rappresenta il ``pavimento'' privo di informazione strutturale.
     \item \textbf{GNN non temporale}: ablation del TGN su grafo statico aggregato, con lo \emph{stesso} curriculum di negative sampling de-circolarizzato (InfoNCE su destinazioni casuali + rumore contestuale) e gli \emph{stessi} contatori tabellari di storia, ma priva di memoria ricorrente e vicinato temporale. Isola la sola componente temporale (lateral AUC 0.486, $\approx$ caso).

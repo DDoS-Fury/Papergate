@@ -14,6 +14,8 @@ dependencies = [
     "torch_geometric>=2.6,<3.0",
     "numpy>=1.26,<3.0",
     "scikit-learn>=1.4",
+    # Progress bars for training + offline streaming evaluation (TTY-aware, docker-log safe).
+    "tqdm>=4.66",
     # HTTP inference service (graphagate.serve_api); pydantic ships with fastapi.
     "fastapi>=0.110,<1.0",
     "uvicorn[standard]>=0.29",
