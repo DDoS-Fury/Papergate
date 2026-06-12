@@ -7,3 +7,4 @@ scikit-learn>=1.4
 tqdm>=4.66
 codecarbon
 psutil>=5.9.0
+xgboost>=2.0.0

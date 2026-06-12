@@ -74,10 +74,20 @@ def _replay(model, source_nodes, device_nodes, user, dst, t, msg, y, device, *,
     dataset-level (every event carries them, or none does), so each block is a set of
     equally-shaped edge groups.
 
-    Memory update gating:
-      - ``gate_by_label=True``  -> update on ground-truth benign (calibration);
-      - ``gate_by_label=False`` -> update on predicted benign (``score < threshold``),
-        i.e. the realistic, label-free serving behaviour.
+    Memory update gating (who is committed into TGN memory):
+      - ``gate_by_label=True``  -> commit on ground-truth benign (calibration replay,
+        which has no threshold yet so it cannot self-gate);
+      - ``gate_by_label=False`` -> commit on the **OPA-ALLOW proxy**: every event the
+        deterministic signal layer does not flag (``not signal_dirty``). This mirrors the
+        deployed two-step flow — :func:`serve_tgn.score_event` with ``update=False`` returns
+        the score, OPA folds it (soft-weighted) into a decision *dominated by the
+        deterministic policy/sensor layer*, and :func:`serve_tgn.commit_event` runs only on
+        ALLOW. Gating the commit on the model's *own* score (``score < threshold``) instead
+        is the no-OPA, self-serving deployment: it starves misclassified-benign (FP) events
+        out of memory, their state goes stale, their score stays high, and the benign FPR
+        runs away (the val->test blow-up). Committing on the observable signal keeps benign
+        memory fresh; the residual surface — signal-clean laterals OPA would also admit — is
+        committed too, so the reported FPR is conservative rather than oracle-optimistic.
 
     Decision threshold mirrors :func:`serve_tgn.score_event`: when ``threshold_dirty`` is
     given, the decision is *signal-routed* — events whose edge signal fires (broken JA3 /
@@ -184,7 +194,9 @@ def _replay(model, source_nodes, device_nodes, user, dst, t, msg, y, device, *,
                 msg_row = bmsg_rows[j]
                 if threshold_dirty is not None and signal_dirty(msg_row):
                     eff_thr = threshold_dirty
-                do_update[j] = (lab == 0) if gate_by_label else (score < eff_thr)
+                # Commit gate = OPA ALLOW proxy (signal-clean), NOT the model's own score:
+                # see the docstring. eff_thr below still routes the trust/precursor alarm.
+                do_update[j] = (lab == 0) if gate_by_label else (not signal_dirty(msg_row))
 
                 snort_alert = msg_row[1] > 0.5
                 is_anomaly = (lab == 1) if gate_by_label else (score >= eff_thr)

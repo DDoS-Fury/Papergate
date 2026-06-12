@@ -41,7 +41,8 @@ from graphagate.train_tgn import _replay, _synthetic_stream_data
 
 def _replay_ref(model, source_nodes, device_nodes, user, dst, t, msg, y, device, *,
                 threshold=None, threshold_dirty=None, gate_by_label=False):
-    """Verbatim copy of the ORIGINAL per-event _replay — the parity ground truth."""
+    """Per-event ground truth for BATCHING parity (gating kept in lock-step with _replay:
+    serving-path commit = OPA-ALLOW proxy, ``not signal_dirty``)."""
     model.eval()
     scores = np.empty(user.shape[0], dtype=np.float64)
     labels = np.empty(user.shape[0], dtype=np.int64)
@@ -71,7 +72,8 @@ def _replay_ref(model, source_nodes, device_nodes, user, dst, t, msg, y, device,
         if threshold_dirty is not None and signal_dirty(msg_vec):
             eff_thr = threshold_dirty
 
-        do_update = (lab == 0) if gate_by_label else (score < eff_thr)
+        # Commit gate mirrors _replay: OPA-ALLOW proxy (signal-clean) for the serving path.
+        do_update = (lab == 0) if gate_by_label else (not signal_dirty(msg_vec))
         if do_update:
             if src_ip is not None and dev is not None:
                 update_memory(model, src_ip, dev, tv, features_bind, device)
