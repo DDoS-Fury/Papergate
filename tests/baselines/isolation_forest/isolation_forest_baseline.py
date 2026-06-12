@@ -37,6 +37,7 @@ import random
 import numpy as np
 from sklearn.ensemble import IsolationForest
 from sklearn.metrics import average_precision_score, roc_auc_score
+from sklearn.model_selection import ParameterSampler
 
 from graphagate.config import TGNConfig
 from graphagate.data.stream_synthetic import generate_streaming_data
@@ -132,15 +133,56 @@ def isolation_forest_baseline(cfg: TGNConfig = TGNConfig()):
     test_types = types_np[val_end:]
 
     # --- FIT (unsupervised, benign train events only) ------------------------
-    print("--- INIZIO ADDESTRAMENTO UNSUPERVISED (Isolation Forest) ---")
+    print("--- INIZIO ADDESTRAMENTO E TUNING UNSUPERVISED (Isolation Forest) ---")
     X_train_benign = X_train[y_train == 0]
     print(f"Train benigni: {X_train_benign.shape[0]} / {X_train.shape[0]} eventi")
-    model = IsolationForest(
-        n_estimators=200,
-        contamination="auto",
-        random_state=cfg.seed,
-    )
-    model.fit(X_train_benign)
+    
+    param_grid = {
+        'n_estimators': [100, 200, 300, 400],
+        'max_samples': ['auto', 256, 512, 1024],
+        'max_features': [1.0, 0.8, 0.5],
+        'contamination': ['auto', 0.01, 0.05, 0.1]
+    }
+    
+    n_iter = 10
+    param_list = list(ParameterSampler(param_grid, n_iter=n_iter, random_state=cfg.seed))
+    
+    best_model = None
+    best_auc = -1.0
+    best_params = None
+    
+    print(f"Avvio ricerca randomizzata su {n_iter} combinazioni con n_jobs=18...")
+    # Poiché n_jobs si applica al training del singolo modello IsolationForest, 
+    # eseguiamo il loop in modo sequenziale, ma ogni fit() sfrutterà i 18 thread.
+    
+    for i, params in enumerate(param_list):
+        model = IsolationForest(
+            random_state=cfg.seed,
+            n_jobs=18,
+            **params
+        )
+        model.fit(X_train_benign)
+        
+        # Validazione sul validation set per trovare il miglior set di iperparametri
+        # L'orientamento è: più alto = più anomalo
+        val_scores_raw = -model.score_samples(X_val)
+        val_scores = val_scores_raw * precursor_fac[train_end:val_end]
+        
+        # Se nel validation set è presente almeno un'anomalia, calcoliamo l'AUC
+        if len(np.unique(y_val)) > 1:
+            auc = roc_auc_score(y_val, val_scores)
+        else:
+            auc = 0.0 # fallback
+            
+        print(f"Iter {i+1:2d}/{n_iter} - Val AUC: {auc:.4f} - Params: {params}")
+        
+        if auc > best_auc:
+            best_auc = auc
+            best_model = model
+            best_params = params
+            
+    print(f"\nMigliori parametri trovati (Val AUC={best_auc:.4f}): {best_params}")
+    model = best_model
 
     # Anomaly score: higher = more anomalous (matches the TGN's 1 - P(benign)).
     def anomaly_score(features):

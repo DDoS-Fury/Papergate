@@ -93,6 +93,18 @@ services:
     entrypoint: ["python"]
     command: ["/app/tests/baselines/ocsvm/ocsvm_baseline.py"]
 
+  # XGBoost (sklearn): approccio ML supervisionato.
+  baseline-xgboost:
+    <<: *base
+    profiles: ["baseline-xgboost"]
+    container_name: graphagate-baseline-xgboost
+    volumes:
+      - ./public:/app/public
+      - ./src:/app/src
+      - ./tests:/app/tests
+    entrypoint: ["python"]
+    command: ["/app/tests/baselines/xgboost/xgboost_baseline.py"]
+
   # Validità esterna: valuta il detector di movimenti laterali sul dataset PUBBLICO
   # LANL auth (etichette red-team), rimappato come stream ZTA. Scarica auth.txt.gz e
   # redteam.txt da https://csr.lanl.gov/data/cyber1/ e mettili in ./data (NON versionati);
