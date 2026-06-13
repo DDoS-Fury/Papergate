@@ -1,5 +1,22 @@
 # Lessons
 
+## Testare i pesi senza riaddestrare / senza sovrascriverli
+- `serve_api` (lifespan) RISALVA lo stato in `public/` allo shutdown (SIGTERM del container). Un test
+  live via compose che monta `./public` SOVRASCRIVE quindi i pesi puliti ad ogni stop. **Regola:**
+  per i test live montare una COPIA (`cp -r public .test_public` + `docker-compose.test.yml`), mai
+  `./public`. Verificare sempre con `sha256sum -c` prima/dopo.
+- Per le metriche TGN sintetiche (AUC/AP) sui pesi correnti NON serve riaddestrare-e-salvare: usare
+  `train_tgn(save=False)` — ricalcola l'eval sullo stesso stream (stessi dati/seed delle baseline)
+  e NON tocca `public/`. Non esiste un entrypoint di solo-eval su checkpoint (la memoria salvata è
+  post-training, non ri-replayabile 1:1). `stats.json` persiste solo l'operating-point routed
+  (recall/precision/FPR), NON gli AUC/AP → quelli vanno (ri)calcolati.
+- `lateral AUC` è single-run-instabile (GPU non-det. ±0.01–0.03): un singolo 0.90 NON sostituisce il
+  valore multi-seed pubblicabile (~0.77). Aggiornare la tabella single-run è ok se è coerente
+  (tutte le righe single-run, stessi dati), ma marcare il caveat e non riscrivere la narrativa.
+- XGBoost NON è installato nell'immagine (`pip install xgboost` a runtime) ed è SUPERVISIONATO →
+  upper-bound, non baseline non supervisionata comparabile col TGN.
+
+
 ## Batched offline eval (`_replay`) — fidelity is dataset-dependent
 - The batched-TGN "score block against start-of-batch memory, commit updates after" regime is
   exact at `batch_size=1` and is the same regime training uses. BUT on LANL the auth stream is
