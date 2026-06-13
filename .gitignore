@@ -27,3 +27,6 @@ public/*.json
 
 # LANL dataset
 data/
+
+# Throwaway weight copy for weight-safe live tests (docker-compose.test.yml)
+.test_public/

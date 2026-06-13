@@ -50,7 +50,6 @@ async def test_client(host="localhost", port=8888, duration_seconds=120, no_devi
             tracker.record_latency(latency)
             
             is_anomaly = resp_data.get("is_anomaly", False)
-            anomaly_score = resp_data.get("anomaly_score", 1.0)
             tracker.record_prediction(is_anomaly, label == 1, etype)
             
             # 3. Simulate Orchestrator/OPA decision
