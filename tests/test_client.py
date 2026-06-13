@@ -59,13 +59,7 @@ async def test_client(host="localhost", port=8888, duration_seconds=120, no_devi
             user_counts[key_actor] = user_counts.get(key_actor, 0) + 1
             is_policy_violation = (etype == 1)
 
-            # GRACE PERIOD MANDATORIA PER COLD-START:
-            # Senza questo, i primi eventi legittimi ma "sospetti" (perché senza storico)
-            # verrebbero bloccati, negando l'aggiornamento della memoria e bloccando l'utente per sempre.
-            if user_counts[key_actor] <= 5:
-                allow = not is_policy_violation
-            else:
-                allow = (not is_policy_violation) and (not opa_is_anomaly)
+            allow = (not is_policy_violation) and (not opa_is_anomaly)
                 
             if allow:
                 try:
