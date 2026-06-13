@@ -75,13 +75,10 @@ async def _load_worker(wid, session, seed, deadline, lat, preds, errors, counts)
         preds.append((is_anom, label == 1, etype))
         counts[0] += 1
 
-        # Mirror test_client's OPA + cold-start grace decision, then conditional /update.
+        # OPA decision, then conditional /update.
         user_counts[key_actor] = user_counts.get(key_actor, 0) + 1
         policy_violation = (etype == 1)
-        if user_counts[key_actor] <= 5:
-            allow = not policy_violation
-        else:
-            allow = (not policy_violation) and (not (score > thr))
+        allow = (not policy_violation) and (not (score > thr))
         if allow:
             try:
                 async with session.post(f"{BASE_URL}/update", json=ev) as r:

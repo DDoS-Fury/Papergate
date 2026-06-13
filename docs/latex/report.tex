@@ -63,7 +63,7 @@ L'architettura del modello TGN combina la memoria ricorrente tipica dei TGN (Ros
 \node[hop, below=0.5cm of HOP2] (HOP3)
   {\textbf{hop 3}: TransformerConv$(256{\to}256)$ $+$ \textit{residuo}\\$\to$ LayerNorm \textit{(no ReLU)} $\;\to\;$ \textbf{z}$[256]$};
 
-\node[note, text width=3.2cm, left=0.7cm of HOP2] (EDGE)
+\node[note, text width=4.0cm, left=1.0cm of HOP2] (EDGE)
   {\textbf{edge\_attr}\\$[\,$time\_enc$(\Delta t_{hist})\,\|\,$hist\_msg$\,]$\\$=[32{+}7]=39$};
 
 \draw[fl] (CAT.south) -- (HOP1.north);
@@ -71,7 +71,7 @@ L'architettura del modello TGN combina la memoria ricorrente tipica dei TGN (Ros
 \draw[fl] (HOP2) -- (HOP3);
 \draw[fl, densely dashed] (EDGE.east) -- (HOP2.west);
 % connessioni residue (lato destro)
-\draw[res] (HOP1.east) -- ++(0.45,0) |- (HOP2.east);
+\draw[res] (HOP1.east) -- ++(0.85,0) |- (HOP2.east);
 \draw[res] (HOP2.east) -- ++(0.85,0) |- (HOP3.east);
 \coordinate (GAER) at ([xshift=1.0cm]HOP3.east);
 
@@ -100,7 +100,7 @@ L'architettura del modello TGN combina la memoria ricorrente tipica dei TGN (Ros
 
 % ===== MERGE + SIGMOID + PRECURSORE =====
 \coordinate (BOT) at ([yshift=-1.1cm]F3.south);
-\node[op] (SUM) at (HOP3 |- BOT) {logit $=$ feat\_logit $+$ struct\_logit};
+\node[op, below=0.1cm] (SUM) at (HOP3 |- BOT) {logit $=$ feat\_logit $+$ struct\_logit};
 \draw[fl] (F3.south) |- (SUM.west);
 \draw[fl] (S3.south) |- (SUM.east);
 
@@ -115,7 +115,7 @@ L'architettura del modello TGN combina la memoria ricorrente tipica dei TGN (Ros
 % ===== RIQUADRI DEI COMPONENTI D'ALTO LIVELLO (background) =====
 \begin{scope}[on background layer]
   \node[gaebox, fit=(HOP1)(HOP2)(HOP3)(EDGE)(GAER),
-        label={[lbl, anchor=south west]north west:GraphAttentionEmbedding --- 3 hop, \texttt{neighbor\_size}=30}] {};
+        label={[lbl, anchor=south west]north west:GraphAttentionEmbedding - \texttt{neighbor\_size}=30}] {};
   % outer scorer prima (piano piu' arretrato), poi le due teste interne
   \node[scorerbox, fit=(FIN)(F1)(F2)(F3)(S1)(S2)(S3),
         label={[lbl, anchor=south west]north west:Dual Head Scorer}] (SCORER) {};
@@ -126,7 +126,7 @@ L'architettura del modello TGN combina la memoria ricorrente tipica dei TGN (Ros
 \end{scope}
 
 \end{tikzpicture}
-\caption{Schema dei layer del TGN con dimensioni effettive (\texttt{memory\_dim}=256, \texttt{node\_feat\_dim}=16, \texttt{hash\_dim}=16, \texttt{msg\_dim}=7, \texttt{time\_dim}=32, \texttt{hist\_feat\_dim}=6, \texttt{num\_hops}=3). I sottocomponenti interni sono disegnati separatamente ma racchiusi nel riquadro del rispettivo componente d'alto livello: i tre hop dentro \textit{GraphAttentionEmbedding} e le due teste (\textit{Feature}/\textit{Structural}) dentro il \textit{Dual Head Scorer}. Tutti i \texttt{TransformerConv} usano \texttt{heads}=4, \texttt{dropout}=0.1 e concatenano \texttt{edge\_attr} (alimenta ogni hop). Lo score grezzo $1-P(\text{benign})$ è moltiplicato dal prior di kill-chain (con cap a 1) e confrontato con la soglia instradata sul segnale; a serving lo score dell'evento è il massimo sui suoi archi (accesso e binding).}
+\caption{Schema dei layer dove i moduli interni sono esplicitati per i due di alto livello (GAE ed il Dual Head Scorer): i tre hop dentro \textit{GraphAttentionEmbedding} e le due teste (\textit{Feature}/\textit{Structural}) dentro il \textit{Dual Head Scorer}. Tutti i \texttt{TransformerConv} usano \texttt{heads}=4, \texttt{dropout}=0.1 e concatenano \texttt{edge\_attr} (alimenta ogni hop). Lo score grezzo $1-P(\text{benign})$ è moltiplicato dal prior di kill-chain (con cap a 1) e confrontato con la soglia instradata sul segnale; a serving lo score dell'evento è il massimo sui suoi archi (accesso e binding).}
 \label{fig:layers}
 \end{figure}
 
@@ -183,7 +183,7 @@ In fase di valutazione o in ambiente live, l'architettura rileva 3 macro-categor
 \begin{enumerate}
     \item \textit{Policy Anomaly}: l'entità agisce al di fuori del proprio ruolo, clearance o device tier. Intercettata agevolmente dalla Feature head grazie alle feature statiche ZTA.
     \item \textit{Contextual Anomaly}: la connessione ha caratteristiche insolite o ha innescato sensori IPS. Rilevata dalla Feature head decostruendo le \textit{edge features}.
-    \item \textit{Lateral Movement}: l'accesso è formalmente autorizzato a livello di regole OPA, ma \textit{non abituale}. Avviene tipicamente nel ``pivoting''. Essendo indistinguibile sintatticamente dal traffico benigno, la classificazione ricade quasi del tutto sull'architettura GNN.
+    \item \textit{Lateral Movement}: l'accesso è formalmente autorizzato a livello di regole OPA, ma \textit{non abituale}. Avviene tipicamente nel ``pivoting''. Essendo indistinguibile sintatticamente dal traffico benigno, la classificazione ricade quasi del tutto sull'architettura implementata.
 \end{enumerate}
 
 \section{Valutazione sperimentale e confronto con le baseline}
@@ -243,9 +243,9 @@ Nel momento di chiusura del framework (o tramite specifici endpoint API persiste
 
 \section{Limiti e sfide implementative}
 
-\subsection{Il paradosso dell'induttività (cold start)}
+% \subsection{Il paradosso dell'induttività (cold start)}
 
-Affinché il TGN riconosca deviazioni strutturali di alto livello, la rete neurale deve esplorare la baseline (\textit{Temporal Neighborhood}) su un orizzonte storico. Al primo accesso, un utente appena iscritto risulterebbe sempre in uno stato di fallimento topologico. Durante questa prima fase (cold start), l'Orchestrator OPA è sprovvisto dell'intelligenza del sistema di Intelligenza Artificiale. Per abbassare tale superficie d'attacco, si limita il buio di validazione con un \textit{Grace Period} ristretto a soli 5 eventi.
+% Affinché il TGN riconosca deviazioni strutturali di alto livello, la rete neurale deve esplorare la baseline (\textit{Temporal Neighborhood}) su un orizzonte storico. Al primo accesso, un utente appena iscritto risulterebbe sempre in uno stato di fallimento topologico. Durante questa prima fase (cold start), l'Orchestrator OPA è sprovvisto dell'intelligenza del sistema di Intelligenza Artificiale. Per abbassare tale superficie d'attacco, si limita il buio di validazione con un \textit{Grace Period} ristretto a soli 5 eventi.
 
 \subsection{La sfida del lateral movement}
 
