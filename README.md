@@ -29,10 +29,11 @@ assegnando uno score a ogni nuovo evento in modo sequenziale.
 - **Unsupervised anomaly detection** — addestrato esclusivamente su traffico benigno tramite negative
   sampling. Per ogni evento benigno il modello viene spinto verso *benigno* e su tre tipi di
   perturbazione verso *anomalo*; lo score di anomalia è calcolato come `1 − P(benign)`.
-- **Tre classi di anomalie rilevate** — *contestuale* (fiducia TLS compromessa / allarmi
-  dai sensori), *policy* (un'entità che agisce al di fuori del proprio ruolo/clearance/tier), e *movimento
+- **Classi di anomalie rilevate** — *contestuale* (fiducia TLS compromessa / allarmi
+  dai sensori), *policy* (un'entità che agisce al di fuori del proprio ruolo/clearance/tier), *movimento
   laterale* (un accesso autorizzato ma **non abituale** — stesse feature d'arco del traffico benigno,
-  rilevabile esclusivamente tramite lo storico delle interazioni).
+  rilevabile esclusivamente tramite lo storico delle interazioni) e *credential theft* (IP **e** device
+  mai visti che si agganciano a un utente noto).
 - **Serving in tempo reale** — `src/serve_tgn.py` espone le primitive (`load_model`,
   `infer_score`, `update_memory`, `score_event`, `commit_event`) e `src/serve_api.py`
   le incapsula in un **microservizio di inferenza REST/JSON** (`graphagate.serve_api`, profilo Compose
@@ -93,16 +94,16 @@ flowchart TD
 | Componente (`attributo`) | Ruolo |
 |---|---|
 | **TGNMemory** (`memory`) | Stato ricorrente per-nodo aggiornato via GRU dai messaggi degli eventi: la "memoria storica" del comportamento di ogni entità. Espone `z_mem` e `last_update`. `memory_dim` è stata aumentata a 256 per gestire l'impronta comportamentale complessa. |
-| **Hashed Identity** (`hash_emb`) | Embedding apprendibile via hashing deterministico della chiave (`stable_hash`, BLAKE2b). Mantiene induttività al 100% per i nodi nuovi e dà a ogni entità — incluse le **risorse** — un'identità distinguibile. *Nota onesta:* l'ablation multi-seed mostra che per il lateral è ormai **ridondante** (sussunta dalle feature di storia esplicite: rimuoverla non peggiora il lateral AUC). |
-| **History features** (`compute_hist_feats`) | Per ogni evento `[log1p(pair_count), log1p(src_count), pair/(src+1)]`: contatori d'interazione causali e *benign-gated* (derivabili a runtime, non circolari). Iniettano il segnale di **novità** della coppia src→dst. Ablation: **+0.066 AUC** sul lateral. |
-| **Kill-chain precursor** (`recent_alert`, `precursor_boost`) | Prior moltiplicativo *serving-time* che alza lo score di un'entità subito dopo un suo alert (recon→lateral), con decadimento `0.5^(Δt/half_life)`. Stato fuori dalla memoria TGN (il gate scarterebbe il precursore); **non** è un input addestrato. Ablation: **+0.073 AUC** sul lateral, senza costo di precisione. |
+| **Hashed Identity** (`hash_emb`) | Embedding apprendibile via hashing deterministico della chiave (`stable_hash`, BLAKE2b). Mantiene induttività al 100% per i nodi nuovi e dà a ogni entità — incluse le **risorse** — un'identità distinguibile. *Nota onesta:* l'ablation multi-seed le attribuisce un contributo modesto sul lateral (**−0.046 AUC** rimuovendola), comunque superiore a quello del precursore. |
+| **History features** (`compute_hist_feats`) | Per ogni evento `[log1p(pair_count), log1p(src_count), pair/(src+1)]`: contatori d'interazione causali e *benign-gated* (derivabili a runtime, non circolari). Iniettano il segnale di **novità** della coppia src→dst — il **contributo dominante** sul lateral. Ablation multi-seed: **+0.163 AUC**. |
+| **Kill-chain precursor** (`recent_alert`, `precursor_boost`) | Prior moltiplicativo *serving-time* che alza lo score di un'entità subito dopo un suo alert (recon→lateral), con decadimento `0.5^(Δt/half_life)`. Stato fuori dalla memoria TGN (il gate scarterebbe il precursore); **non** è un input addestrato. Ablation multi-seed: **+0.013 AUC** sul lateral — contributo **marginale** (come la testa strutturale). |
 | **Static node features** (`node_feat`) | Attributi statici ZTA per-nodo, buffer `[num_nodes, 16]`. Indici usati: `[2]` device tier, `[3]` resource priority, `[4]` resource **risk** (mirror di `getResourceSensitivity`/`matrice_sicurezza`), `[5]` source network **internal/external** (RFC1918, derivato dall'IP — feature, non gate), `[14]` trust_score. |
 | **MessageNeighborLoader** (`neighbor_loader`) | Ring-buffer **bounded in RAM** con gli ultimi `neighbor_size=30` vicini temporali per nodo. Abilita il message-passing sul vicinato storico — il segnale **strutturale** per il lateral movement — con memoria `O(num_nodes·K·msg_dim)` costante. **Nessun database a grafo.** |
 | **GraphAttentionEmbedding** (`gnn`) | Reti multi-hop (`num_hops=3`) di `TransformerConv` (4 teste, con connessioni residuali) che calcolano l'embedding di nodo `z` attendendo sui vicini temporali estesi; `edge_attr` = encoding del tempo relativo `Δt` concatenato al messaggio storico dell'arco. |
 | **Feature head** (`link_pred`, `LinkPredictor`) | MLP su `[z_src, z_dst, cur_msg, feat_src, feat_dst, Δt_enc, history_feats]`. Allenata con un obiettivo **InfoNCE** (ranking della dst vera sopra K casuali) + ancora BCE positiva + BCE contestuale. È la testa che — con memoria + history feats — porta il segnale **lateral**. |
 | **Structural head** (`struct_proj`, `struct_scale`) | Similarità coseno scalata tra le proiezioni di `z_src` e `z_dst`. *Nota onesta:* l'ablation multi-seed la mostra **marginale** (rimuoverla non cambia il lateral AUC) — candidata a semplificazione. |
 | **NodeRegistry** (`registry`) | Mappa le chiavi-entità esterne → slot di memoria, con **ammissione dinamica** di entità mai viste e **eviction LRU**. Su eviction azzera lo slot in memoria, feature statiche, message store e vicinato. |
-| **Calibrazione soglia** | Soglia di decisione calibrata su uno slice benigno held-out al *target FPR* (default 0.05). |
+| **Calibrazione soglia** | Soglia di decisione calibrata su uno slice benigno held-out al *target FPR* (default 0.01); il flusso *signal-clean* usa una soglia cost-sensitive con cap sull'FPR (`clean_fpr_cap`=0.05). |
 | **Anti-poisoning gate** | Memoria e neighbour loader vengono aggiornati **solo** per eventi classificati benigni → la baseline non viene avvelenata da eventi ostili. |
 
 #### Performance e Gestione Memoria (O(1) Lookup)
@@ -152,19 +153,19 @@ etichette binarie `y`, un vettore `types` per la valutazione per-classe e un bit
 
 ## Validazione (risultati onesti)
 
-Valutazione **de-circolarizzata + de-degenerata** sullo stream sintetico (FPR target 1%,
-split cronologico 70/10/20, solo benigno in training, soglia calibrata sul benigno di
-validazione). Focus sul **lateral** (policy è di OPA, contextual è banale). **Tutte le
+Valutazione **de-circolarizzata + de-degenerata** sullo stream sintetico (`num_events`=200k,
+`seed`=42, FPR target 1%, split cronologico 70/10/20, solo benigno in training, soglia calibrata
+sul benigno di validazione). Focus sul **lateral** (policy è di OPA, contextual è banale). **Tutte le
 baseline ricevono gli stessi segnali tabellari del TGN** (feature di storia causali + lo stesso
 prior precursor): così il divario col TGN isola il contributo della **macchina
 temporale-relazionale**, non dei contatori.
 
 | Modello (stessi segnali tabellari) | Agg AUC | Agg AP | **lateral AUC** | lateral Rec@1%FPR |
 |---|---|---|---|---|
-| One-Class SVM | 0.611 | 0.476 | 0.393 | 0.6% |
-| Static GNN (grafo, **no temporale**) | 0.598 | 0.511 | 0.486 ≈ caso | 0.1% |
-| Isolation Forest | 0.703 | 0.335 | 0.650 | 2.3% |
-| **TGN (full)** | **0.912** | **0.820** | **0.760** | **4.7%** |
+| One-Class SVM | 0.845 | 0.793 | 0.632 | 4.7% |
+| Static GNN (grafo, **no temporale**) | 0.574 | 0.569 | 0.468 ≈ caso | 13.9% (spurio) |
+| Isolation Forest | 0.775 | 0.628 | 0.639 | 1.0% |
+| **TGN (full)** | **0.947** | **0.870** | **0.900** | **13.0%** |
 
 > **Risultati schema v3 (4 nodi / 3 archi, chiavi namespaced + feature resource-risk,
 > run pieno 50k/15ep, seed 42).** Lateral AUC **0.837** (v2: 0.818; v1: 0.760), AUC aggregata
@@ -181,39 +182,36 @@ temporale-relazionale**, non dei contatori.
 > `signal_dirty`/rule-baseline che trattava il metodo HTTP come un sensore (ogni POST finiva
 > sulla soglia conservativa), quindi precision/recall alla soglia NON sono confrontabili 1:1
 > con la riga v1; il punto operativo si regola con `cost_ratio` / `clean_fpr_cap`. I numeri
-> baseline in tabella sono del run v1 (da rigenerare coi profili Compose `baseline-*`).
+> in tabella (TGN **e** baseline) sono del run de-circolarizzato corrente (200k/seed 42, profili
+> Compose `baseline-*`), coerenti con la relazione tecnica; i blocchi v2/v3 qui sopra sono
+> snapshot storici di run più piccoli (50k) e quindi su scala diversa.
 
 - **Lo Static GNN — stessi contatori + precursor, stessa struttura di grafo, ma senza la
-  macchina temporale — sta a caso sul lateral (0.49).** Il TGN arriva a **0.76**: il segnale
-  laterale vive nella **memoria ricorrente + vicinato temporale**, non nei contatori (che tutti
-  hanno). Ablation multi-seed (3 seed): history feats **+0.066** AUC, precursor **+0.073**;
-  struct head marginale; hashed identity ormai **sussunta** dalle feature di storia.
-- **Recall@1%FPR ~4.7%** resta basso: la soglia globale è dominata dalle classi facili. Il
-  segnale onesto è l'**AUC 0.76** (≫ caso); il «~40% recall» precedente era un artefatto circolare.
-
-### Validazione Esterna (Dataset LANL e SOTA)
-
-Oltre ai dati sintetici, il modello è stato validato sul dataset pubblico **LANL Comprehensive Multi-Source** (il gold standard per la detection del movimento laterale host-to-host). Il modello in modalità Device-Centric ha raggiunto metriche altamente competitive rispetto allo Stato dell'Arte (SOTA) in totale assenza di Data Leakage (garantita dallo split strettamente cronologico e dall'addestramento puramente non supervisionato):
-
-- **AUC ROC Aggregata (LANL): 0.8824**
-- **Recall Movimento Laterale: 73.33%** (a FPR globale del ~2.18%)
-
-Nonostante i modelli accademici SOTA offline raggiungano AUC tra 0.92 e 0.96 su questo dataset, questi operano tramite costose reti batch sull'intero grafo storico. La nostra architettura, al contrario, ottiene un eccellente **AUC dell'88% in puro streaming tempo-reale**, processando gli eventi singolarmente con footprint di memoria fissa (`O(1)` per nodo) e lavorando "alla cieca" (senza metadati ZTA o segnali IDS di supporto). Tali prestazioni competitive scalano e si mantengono robuste sull'intero stream di log, validando l'intero periodo operativo del Red Team senza necessità di filtri temporali limitanti (split 30/10/60).
+  macchina temporale — sta a caso sul lateral (0.47).** Il TGN arriva a **0.90** (single-run;
+  **0.882±0.012** in media multi-seed a 3 seed): il segnale laterale vive nella **memoria
+  ricorrente + vicinato temporale**, non nei contatori (che tutti hanno). Ablation multi-seed
+  (3 seed): history feats **+0.163** AUC (il contributo dominante), hashed identity **+0.046**;
+  precursor **+0.013** e struct head **+0.007** entrambi **marginali**.
+- **Recall@1%FPR ~13%** resta basso (la soglia globale è dominata dalle classi facili); il 13.9%
+  della Static GNN è **spurio** (AUC≈caso con soglia permissiva, non un segnale reale). Il segnale
+  onesto è l'**AUC 0.90 / 0.882 multi-seed** (≫ caso); il «~40% recall» precedente era un artefatto
+  circolare. La conversione in recall operativo passa per il routing cost-sensitive (Sez. soglia):
+  sul test sintetico il recall laterale sale a ~25–29% (FPR benigno ~5–6%).
 
 Dettagli su de-circolarizzazione, de-degenerazione, ablation multi-seed, cold-start e
 anti-poisoning in 👉 [`docs/inductive_testing.md`](docs/inductive_testing.md) e
 [`docs/lateral_movement.md`](docs/lateral_movement.md). Riproduzione: profili Compose
-`training-tgn`, `baseline-iforest`, `baseline-ocsvm`, `baseline-gnn`, `ablations`, `verify-tgn`,
-`eval-lanl` (validità esterna su LANL auth).
+`training-tgn`, `baseline-iforest`, `baseline-ocsvm`, `baseline-gnn`, `ablations`, `verify-tgn`.
 
 ## Limitazioni e Threat Model
 
 Da leggere prima di trattare le metriche come garanzie di produzione:
 
-- **Validità esterna.** Per la validità esterna è disponibile la valutazione su dataset **pubblico**: LANL auth
-  (etichette red-team = movimento laterale) rimappato come stream ZTA, profilo Compose
-  `eval-lanl` (vedi `tests/eval_lanl.py` e risultati sopra). Estensioni future:
-  DARPA OpTC, CIC-IDS.
+- **Validità esterna.** Al momento la valutazione è solo su stream **sintetico**. La validità
+  esterna su dataset reali resta **lavoro futuro** (DARPA OpTC, CIC-IDS, ed eventualmente una
+  rivalutazione *faithful*/non-batchata di LANL auth — i numeri LANL preliminari, ottenuti con
+  eval batchato, non sono affidabili per la pubblicazione e l'idoneità del dataset host-to-host
+  a un modello ZTA event-streaming è da verificare).
 - **Anti-poisoning gate auto-deciso.** Memoria/vicinato si aggiornano solo per eventi
   *scorati* benigni. Conseguenze intrinseche: un attaccante stealthy scorato benigno
   **avvelena** la baseline; un benigno scorato anomalo non viene mai appreso (**starvation**).
@@ -222,7 +220,11 @@ Da leggere prima di trattare le metriche come garanzie di produzione:
 - **Endpoint non autenticati.** `/update`, `/score`, `/persist` non hanno auth: chiunque
   raggiunga il servizio può alterare lo stato, bypassando il gate. Il design assume un
   orchestrator fidato su rete privata; non esporre il servizio senza TLS + autenticazione.
-- **Lateral movement risolto (Cost-sensitive routing).** Grazie all'implementazione del routing basato sui falsi negativi (cost_ratio=20.0), il recall operativo all'1% globale è stato definitivamente sciolto. Sul dataset reale LANL abbiamo ottenuto un crollo dei falsi positivi allo **0.38%** pur mantenendo il **100% di recall laterale** e una AUC record di **0.9981** in test. La conversione del ranking in metrica operativa è ora stabile in produzione.
+- **Recall operativo del lateral (non "risolto").** Il routing cost-sensitive (`cost_ratio`=20.0,
+  `clean_fpr_cap`=0.05) converte il ranking (lateral AUC ~0.90) in recall operativo, ma resta
+  limitato: sul test sintetico il recall laterale passa da ~13% (soglia globale 1% FPR) a ~25–29%
+  (decisione instradata, FPR benigno ~5–6%). È un trade-off regolabile via `cost_ratio` /
+  `clean_fpr_cap`, **non** un problema chiuso.
 - **Precursor = euristica.** Il prior kill-chain assume che il lateral segua un recon che fa
   scattare Snort sullo stesso IP. Regge nel generatore; un attaccante che evita il recon rumoroso
   lo aggira. È un prior additivo onesto, non una garanzia.
