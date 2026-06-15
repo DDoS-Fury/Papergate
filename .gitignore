@@ -30,3 +30,7 @@ data/
 
 # Throwaway weight copy for weight-safe live tests (docker-compose.test.yml)
 .test_public/
+
+docs/latex/*.out
+docs/latex/*.log
+docs/latex/*.aux
