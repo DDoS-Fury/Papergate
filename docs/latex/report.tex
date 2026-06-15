@@ -15,7 +15,7 @@
 
 \begin{document}
 \maketitle
-\chapter{Il modello Graphagate: Temporal \\Graph Network}
+\chapter{Il modello Graphagate: Temporal Graph Network}
 
 \section{Introduzione}
 
@@ -27,7 +27,24 @@ Ogni accesso (una richiesta IP/device verso una risorsa) rappresenta un arco tem
 
 L'architettura del modello combina la memoria ricorrente tipica dei TGN (Rossi et al., 2020) con un gestore del vicinato ottimizzato (bounded in RAM) e uno \textit{scorer} a due teste che permette di analizzare le anomalie su due fronti: contestuale/policy e strutturale.
 
-\begin{figure}[p]
+\subsection{Componenti principali}
+
+\begin{itemize}
+    \item \textit{TGNMemory}: struttura basata su GRU che aggiorna lo stato storico di ciascun nodo con i messaggi degli eventi in ingresso. La dimensione è impostata a 256 per gestire le impronte comportamentali.
+    \item \textit{Hashed Identity}: identità dei nodi mappate tramite funzioni di hash (\texttt{hash(URI) \% hash\_buckets}) per garantire totale \textit{induttività} e scalabilità in presenza di entità mai viste prima.
+    \item \textit{MessageNeighborLoader}: buffer in RAM che memorizza gli ultimi vicini temporali di ciascun nodo (es. \texttt{neighbor\_size=30}). Lavora con lookup in tempo $O(1)$ su matrici preallocate ed elimina la necessità di lenti database a grafo.
+    \item \textit{GraphAttentionEmbedding}: rete multi-hop con \textit{TransformerConv} per calcolare l'embedding attendendo sui vicini storici, concatenando l'identità alla storia temporale.
+    \item \textit{Static Node Features}: vettore a 16 dimensioni associato a ciascun nodo, che codifica attributi ZTA essenziali come \textit{device tier}, \textit{clearance} e \textit{trust score}, oltre a metriche estese introdotte nello schema v3 quali il \textit{resource risk} (per innalzare la sensibilità su asset critici) e il \textit{source internal/external flag} (per distinguere reti RFC1918 da IP pubblici; ablatabile e \emph{disattivato di default} nella configurazione corrente, poiché il roaming esterno benigno può mascherare il furto di credenziali --- la coppia external$\rightarrow$device che esporrebbe l'attaccante).
+    \item \textit{History Features} (esplicite, non circolari): per ogni arco valutato si calcolano tre contatori causali e \textit{benign-gated} (aggiornati solo su traffico approvato, anti-poisoning): $[\log(1{+}\text{pair\_count}),\ \log(1{+}\text{src\_count}),\ \text{pair\_count}/(\text{src\_count}{+}1)]$. A questi si aggiunge una seconda tripletta identica per le coppie \textit{aux\_src}$\rightarrow$\textit{dst} (es. per validare la \textit{device habituality}), portando la dimensione a 6. Misurano quanto è abituale quell'accesso: una coppia mai vista da una sorgente attiva è la \textit{novelty cue} del movimento laterale, che, combinata con la memoria temporale, porta il maggior contributo (ablation multi-seed a 3 seed: $+0.163$ AUC, il segnale dominante del laterale).
+    \item \textit{Dual Head Scorer}: lo score di un arco è la \emph{somma} di due logit complementari, $\text{logit} = \text{feat\_logit} + \text{struct\_logit}$.
+    \begin{itemize}
+        \item \textit{Feature head} (\texttt{LinkPredictor}, MLP a 3 strati): consuma gli embedding dei due endpoint, il messaggio dell'evento, gli attributi statici con hashed-identity, le codifiche di recency ($\Delta t$ coppia, $\Delta t$ sorgente) e le \textit{history features}. Cattura anomalie \textit{contestuali} e di \textit{policy} e veicola la novelty cue del laterale.
+        \item \textit{Structural head}: similarità coseno (scalata da una temperatura apprendibile) delle proiezioni non-lineari degli embedding. \emph{Nota}: l'ablation a 3 seed la mostra \emph{marginale} sul laterale ($0.882$ con vs $0.875$ senza, $+0.007$ AUC); su questo stream il segnale è già portato dalle \textit{history features} e dalla memoria temporale. La testa è comunque \emph{mantenuta} come segnale complementare a basso costo: l'ottimizzatore le assegna una temperatura non banale (\texttt{struct\_scale}$\approx 4.7$ nel checkpoint addestrato), dunque è \emph{attiva ma ridondante}, non inutilizzata. Poiché nel task sintetico il movimento laterale coincide quasi per costruzione con la \textit{pair-novelty} - catturata direttamente dalle history features - l'ablation ne sottostima probabilmente il contributo: il suo valore su topologie reali (dove il laterale ha struttura di grafo oltre alla semplice novità della coppia) e in regime di \textit{cold-start} o di \textit{poisoning} dei contatori, dove il coseno sugli embedding è un segnale indipendente dai contatori espliciti, è plausibile ma \emph{non ancora verificato}.
+    \end{itemize}
+    \item \textit{Kill-chain Precursor} (prior di serving, non addestrato): il movimento laterale segue tipicamente un alert di recon (Snort / anomalia rilevata) sulla \emph{stessa} entità, ma il gate predict-then-update scarta quel precursore dalla memoria TGN. Si mantiene quindi uno stato per-entità \texttt{recent\_alert} e si applica un fattore \emph{moltiplicativo} allo score, $1 + \text{max\_boost}\cdot 0.5^{\,\Delta t / \text{half\_life}}$ (default $\text{max\_boost}{=}2$, $\text{half\_life}{=}600$\,s). Moltiplicativo per costruzione: alza uno score già sospetto sopra soglia senza trasformare in falsi positivi gli score benigni $\approx 0$. Il suo contributo è però \emph{marginale} (ablation multi-seed a 3 seed: $+0.013$ AUC), comparabile a quello della testa strutturale. Non costituisce un input addestrato (il training solo-benigno lo renderebbe una feature morta).
+\end{itemize}
+
+\begin{figure}
 \centering
 \begin{tikzpicture}[
     font=\sffamily\scriptsize,
@@ -130,22 +147,6 @@ L'architettura del modello combina la memoria ricorrente tipica dei TGN (Rossi e
 \label{fig:layers}
 \end{figure}
 
-\subsection{Componenti principali}
-
-\begin{itemize}
-    \item \textit{TGNMemory}: struttura basata su GRU che aggiorna lo stato storico di ciascun nodo con i messaggi degli eventi in ingresso. La dimensione è impostata a 256 per gestire le impronte comportamentali.
-    \item \textit{Hashed Identity}: identità dei nodi mappate tramite funzioni di hash (\texttt{hash(URI) \% hash\_buckets}) per garantire totale \textit{induttività} e scalabilità in presenza di entità mai viste prima.
-    \item \textit{MessageNeighborLoader}: buffer in RAM che memorizza gli ultimi vicini temporali di ciascun nodo (es. \texttt{neighbor\_size=30}). Lavora con lookup in tempo $O(1)$ su matrici preallocate ed elimina la necessità di lenti database a grafo.
-    \item \textit{GraphAttentionEmbedding}: rete multi-hop con \textit{TransformerConv} per calcolare l'embedding attendendo sui vicini storici, concatenando l'identità alla storia temporale.
-    \item \textit{Static Node Features}: vettore a 16 dimensioni associato a ciascun nodo, che codifica attributi ZTA essenziali come \textit{device tier}, \textit{clearance} e \textit{trust score}, oltre a metriche estese introdotte nello schema v3 quali il \textit{resource risk} (per innalzare la sensibilità su asset critici) e il \textit{source internal/external flag} (per distinguere reti RFC1918 da IP pubblici; ablatabile e \emph{disattivato di default} nella configurazione corrente, poiché il roaming esterno benigno può mascherare il furto di credenziali --- la coppia external$\rightarrow$device che esporrebbe l'attaccante).
-    \item \textit{History Features} (esplicite, non circolari): per ogni arco valutato si calcolano tre contatori causali e \textit{benign-gated} (aggiornati solo su traffico approvato, anti-poisoning): $[\log(1{+}\text{pair\_count}),\ \log(1{+}\text{src\_count}),\ \text{pair\_count}/(\text{src\_count}{+}1)]$. A questi si aggiunge una seconda tripletta identica per le coppie \textit{aux\_src}$\rightarrow$\textit{dst} (es. per validare la \textit{device habituality}), portando la dimensione a 6. Misurano quanto è abituale quell'accesso: una coppia mai vista da una sorgente attiva è la \textit{novelty cue} del movimento laterale, che, combinata con la memoria temporale, porta il maggior contributo (ablation multi-seed a 3 seed: $+0.163$ AUC, il segnale dominante del laterale).
-    \item \textit{Dual Head Scorer}: lo score di un arco è la \emph{somma} di due logit complementari, $\text{logit} = \text{feat\_logit} + \text{struct\_logit}$.
-    \begin{itemize}
-        \item \textit{Feature head} (\texttt{LinkPredictor}, MLP a 3 strati): consuma gli embedding dei due endpoint, il messaggio dell'evento, gli attributi statici con hashed-identity, le codifiche di recency ($\Delta t$ coppia, $\Delta t$ sorgente) e le \textit{history features}. Cattura anomalie \textit{contestuali} e di \textit{policy} e veicola la novelty cue del laterale.
-        \item \textit{Structural head}: similarità coseno (scalata da una temperatura apprendibile) delle proiezioni non-lineari degli embedding. \emph{Nota}: l'ablation a 3 seed la mostra \emph{marginale} sul laterale ($0.882$ con vs $0.875$ senza, $+0.007$ AUC); su questo stream il segnale è già portato dalle \textit{history features} e dalla memoria temporale. La testa è comunque \emph{mantenuta} come segnale complementare a basso costo: l'ottimizzatore le assegna una temperatura non banale (\texttt{struct\_scale}$\approx 4.7$ nel checkpoint addestrato), dunque è \emph{attiva ma ridondante}, non inutilizzata. Poiché nel task sintetico il movimento laterale coincide quasi per costruzione con la \textit{pair-novelty} --- catturata direttamente dalle history features --- l'ablation ne sottostima probabilmente il contributo: il suo valore su topologie reali (dove il laterale ha struttura di grafo oltre alla semplice novità della coppia) e in regime di \textit{cold-start} o di \textit{poisoning} dei contatori, dove il coseno sugli embedding è un segnale indipendente dai contatori espliciti, è plausibile ma \emph{non ancora verificato}.
-    \end{itemize}
-    \item \textit{Kill-chain Precursor} (prior di serving, non addestrato): il movimento laterale segue tipicamente un alert di recon (Snort / anomalia rilevata) sulla \emph{stessa} entità, ma il gate predict-then-update scarta quel precursore dalla memoria TGN. Si mantiene quindi uno stato per-entità \texttt{recent\_alert} e si applica un fattore \emph{moltiplicativo} allo score, $1 + \text{max\_boost}\cdot 0.5^{\,\Delta t / \text{half\_life}}$ (default $\text{max\_boost}{=}2$, $\text{half\_life}{=}600$\,s). Moltiplicativo per costruzione: alza uno score già sospetto sopra soglia senza trasformare in falsi positivi gli score benigni $\approx 0$. Il suo contributo è però \emph{marginale} (ablation multi-seed a 3 seed: $+0.013$ AUC), comparabile a quello della testa strutturale: il segnale laterale è dominato dalle \textit{history features} e dalla memoria temporale. Non costituisce un input addestrato (il training solo-benigno lo renderebbe una feature morta).
-\end{itemize}
 
 \section{Fase di addestramento e calibrazione}
 
@@ -163,7 +164,7 @@ Il processo di ottimizzazione (guidato dall'algoritmo AdamW) somma tre termini s
     \item \textit{Contextual Negatives} (Gaussian Feature Noise): mantenendo intatta la destinazione, al messaggio dell'evento si somma rumore gaussiano ($\sigma{=}0.5$) e si addestra la \textit{Feature Head} a marcarlo come anomalo. Si tratta di un meccanismo distinto rispetto alle anomalie contestuali della valutazione (randomizzazione discreta dei segnali 0/1), così il modello non riceve la corruzione del test.
 \end{itemize}
 
-\paragraph{De-circolarizzazione (nessun data leak nei negativi).} I negativi strutturali usano \emph{solo} l'id-range delle destinazioni, mai la matrice degli autorizzati né i set abituali del generatore. Una versione precedente impiegava un ``hard negative'' ristretto agli \textit{autorizzati-ma-non-abituali} (con peso $\times 10$): essendo \emph{la definizione esatta} del movimento laterale di test, produceva un recall circolare e gonfiato. È stato rimosso di proposito (vedi \texttt{\_sample\_structural\_negatives}); ogni miglioria deriva da architettura/segnale, mai da negativi che rispecchiano la regola di test. Inoltre il trust (\texttt{node\_feat[:,14]}) non viene più mutato dalle etichette in training, evitando di accoppiare la label in una feature di input.
+% \paragraph{De-circolarizzazione (nessun data leak nei negativi).} I negativi strutturali usano \emph{solo} l'id-range delle destinazioni, mai la matrice degli autorizzati né i set abituali del generatore. Una versione precedente impiegava un ``hard negative'' ristretto agli \textit{autorizzati-ma-non-abituali} (con peso $\times 10$): essendo \emph{la definizione esatta} del movimento laterale di test, produceva un recall circolare e gonfiato. È stato rimosso di proposito (vedi \texttt{\_sample\_structural\_negatives}); ogni miglioria deriva da architettura/segnale, mai da negativi che rispecchiano la regola di test. Inoltre il trust (\texttt{node\_feat[:,14]}) non viene più mutato dalle etichette in training, evitando di accoppiare la label in una feature di input.
 
 \subsection{Calibrazione della soglia (cost-sensitive instradata sul segnale)}
 
