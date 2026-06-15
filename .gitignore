@@ -24,6 +24,7 @@ public/*.json
 .vscode/
 .antigravitycli/
 .claude/
+CLAUDE.md
 
 # LANL dataset
 data/
@@ -34,3 +35,4 @@ data/
 docs/latex/*.out
 docs/latex/*.log
 docs/latex/*.aux
+
