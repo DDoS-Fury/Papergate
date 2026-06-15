@@ -48,45 +48,96 @@ from graphagate.netclass import ip_is_internal
 
 ROLES = ["guest", "operator", "manager", "admin"]
 CLEARANCES = ["PUBLIC", "INTERNAL", "CONFIDENTIAL", "SECRET", "TOP_SECRET"]
+WRITE_METHODS = {1, 2, 3, 4}  # POST/PUT/DELETE/PATCH (0=GET is the only read)
 
-# Route templates keyed by URI: {method: (allowed_roles, min_tier, min_clearance)}.
-# methods: 0=GET, 1=POST, 2=PUT, 3=DELETE, 4=PATCH
-# Role sets mirror policy.rego (public_paths + matrice_sicurezza); tier/clearance
-# are behavioural attributes shaping benign habits, not OPA-enforced.
-_ALL_ROLES = set(ROLES)                      # public: guest included
-_AUTH = {"operator", "manager", "admin"}     # any authenticated role
-_MGR = {"manager", "admin"}
-_ADM = {"admin"}
-_PUBLIC_GET = {0: (_ALL_ROLES, 0, 0)}
-_PUBLIC_POST = {1: (_ALL_ROLES, 0, 0)}
+# --- Bell-LaPadula model: a 1:1 mirror of infra/opa/policy.rego ---------------------
+# These three maps are kept in lockstep with the rego `livelli`, `ruoli_to_blp` and
+# `matrice_sicurezza`. The generator's notion of "policy-compliant" MUST equal OPA's
+# allow decision so the model's benign manifold is exactly the set of accesses OPA
+# permits — and the `etype=1` violations are genuine OPA denials.
+SECURITY_LEVELS = {  # rego `livelli`
+    "PUBLIC": 0, "INTERNAL": 1, "CONFIDENTIAL": 2, "SECRET": 3, "TOP_SECRET": 4,
+}
+ROLE_CLEARANCE = {  # rego `ruoli_to_blp[*].clearance` — clearance DERIVES from the role
+    "guest": 0, "operator": 1, "manager": 2, "admin": 4,
+}
+ROLE_CATEGORIES = {  # rego `ruoli_to_blp[*].categorie` — compartments granted to the role
+    "guest": set(),
+    "operator": {"hr", "ops"},
+    "manager": {"hr", "ops", "finance"},
+    "admin": {"hr", "ops", "finance", "nuclear", "security"},
+}
 
-ROUTE_TEMPLATES = {
-    "/": _PUBLIC_GET,
-    "/materials": _PUBLIC_GET,
-    "/reserved": _PUBLIC_GET,
-    "/login": _PUBLIC_GET,
-    "/register": _PUBLIC_GET,
-    "/static": _PUBLIC_GET,
-    "/favicon.ico": _PUBLIC_GET,
-    "/api/v1/auth/register": _PUBLIC_POST,
-    "/api/v1/auth/login": _PUBLIC_POST,
-    "/api/v1/auth/verify-otp": _PUBLIC_POST,
-    "/api/v1/auth/register/begin": {1: (_AUTH, 1, 0)},
-    "/api/v1/auth/register/finish": {1: (_AUTH, 1, 0)},
-    "/api/v1/auth/login/begin": _PUBLIC_POST,
-    "/api/v1/auth/login/finish": _PUBLIC_POST,
-    "/api/v1/personnel": {0: (_AUTH, 1, 1), 1: (_AUTH, 1, 1)},
-    "/api/v1/documents": {0: (_MGR, 1, 2), 1: (_MGR, 1, 2), 3: (_MGR, 1, 2)},
-    # NB: tier/clearance minimi tenuti bassi di proposito — vincoli troppo
-    # stretti lasciano la rotta quasi senza traffico benigno di training e
-    # il modello impara "qualsiasi accesso = anomalia" (score saturo a 1.0).
-    "/api/v1/nuclear-materials": {0: (_MGR, 1, 2), 1: (_MGR, 1, 2), 3: (_MGR, 1, 2)},
-    "/api/v1/reactor-parameters": {0: (_ADM, 1, 2), 1: (_ADM, 1, 2), 3: (_ADM, 1, 2)},
-    "/api/v1/trusted-guard/sanitized-delete-personnel": {1: (_ADM, 1, 2)},
+TRUSTED_GUARD = "/api/v1/trusted-guard/sanitized-delete-personnel"
+
+# rego `matrice_sicurezza`: protected route -> (classification, required categories).
+SECURITY_MATRIX = {
+    "/api/v1/personnel":          ("INTERNAL",     {"hr"}),
+    "/api/v1/documents":          ("CONFIDENTIAL", {"finance"}),
+    "/api/v1/nuclear-materials":  ("TOP_SECRET",   {"nuclear"}),
+    "/api/v1/reactor-parameters": ("TOP_SECRET",   {"nuclear", "security"}),
+    TRUSTED_GUARD:                ("SECRET",       {"security"}),
+}
+
+# Methods each route serves (the candidate ``(route, method)`` action space).
+# methods: 0=GET, 1=POST, 2=PUT, 3=DELETE, 4=PATCH. Protected routes expose exactly the
+# methods declared in matrice_sicurezza; public/auth routes are GET or POST. Public routes
+# (everything outside SECURITY_MATRIX) are allowed for every role — OPA gates them on
+# ai_score only (rego `public_paths`). NB: /api/v1/auth/register/{begin,finish} are PUBLIC
+# in the current policy (they sit in public_paths), no longer authenticated-only.
+_GET, _POST = {0}, {1}
+ROUTE_METHODS = {
+    "/": _GET,
+    "/materials": _GET,
+    "/reserved": _GET,
+    "/login": _GET,
+    "/register": _GET,
+    "/static": _GET,
+    "/favicon.ico": _GET,
+    "/api/v1/auth/register": _POST,
+    "/api/v1/auth/login": _POST,
+    "/api/v1/auth/verify-otp": _POST,
+    "/api/v1/auth/register/begin": _POST,
+    "/api/v1/auth/register/finish": _POST,
+    "/api/v1/auth/login/begin": _POST,
+    "/api/v1/auth/login/finish": _POST,
+    "/api/v1/personnel": {0, 1},              # GET, POST
+    "/api/v1/documents": {0, 1, 3},           # GET, POST, DELETE
+    "/api/v1/nuclear-materials": {0, 1, 3},   # GET, POST, DELETE
+    "/api/v1/reactor-parameters": {0, 1, 3},  # GET, POST, DELETE
+    TRUSTED_GUARD: {1},                       # POST only
 }
 # Resource node keys MUST be the exact URIs the orchestrator sends as key_dst
 # (after its normalizeAIPath): no synthetic suffixes, one node per real route.
-RESOURCE_URIS = list(ROUTE_TEMPLATES)
+RESOURCE_URIS = list(ROUTE_METHODS)
+
+
+def policy_allows(role: str, method: int, uri: str) -> bool:
+    """OPA-equivalent allow decision for ``(role, method, route)`` — a direct port of
+    ``infra/opa/policy.rego`` (Bell-LaPadula + compartments + trusted-guard exception).
+
+    Public routes (anything outside :data:`SECURITY_MATRIX`) are allowed for every role;
+    OPA gates them on ``ai_score`` only, which is orthogonal to identity. For protected
+    routes we enforce, in order: the method must be one the route serves, the route's
+    compartments must be a subset of the role's categories, and Bell-LaPadula — *no
+    read-up* on GET (``clearance >= classification``) and *no write-down* on writes
+    (``clearance <= classification``), with the sanitized write-down exception that lets
+    ``admin`` POST the SECRET trusted-guard route.
+    """
+    if method not in ROUTE_METHODS.get(uri, set()):
+        return False
+    if uri not in SECURITY_MATRIX:
+        return True  # public / auth / static route
+    classification, categories = SECURITY_MATRIX[uri]
+    if not categories.issubset(ROLE_CATEGORIES[role]):
+        return False
+    clr = ROLE_CLEARANCE[role]
+    obj = SECURITY_LEVELS[classification]
+    if uri == TRUSTED_GUARD:
+        return role == "admin" and method == 1  # sanitized write-down (admin POST only)
+    if method == 0:  # GET — Simple Security Property (no read-up)
+        return clr >= obj
+    return clr <= obj  # writes — *-Property (no write-down)
 
 # Per-resource inherent RISK (node_feat index 4), in [0, 1]. Single source of truth:
 # this MIRRORS getResourceSensitivity() in
@@ -169,11 +220,12 @@ class ZTAStreamSimulator:
         self.res_lo = self.src_lo + self.src_slots
         self.num_nodes = self.res_lo + num_resources
 
-        self.resource_rules = [ROUTE_TEMPLATES[uri] for uri in RESOURCE_URIS]
-
         # --- users -----------------------------------------------------------------
-        self.user_roles = [np.random.choice(ROLES) for _ in range(num_users)]
-        self.user_clearances = [np.random.randint(0, 5) for _ in range(num_users)]
+        # Clearance is NOT independent: like policy.rego it derives from the role
+        # (ruoli_to_blp), so the role/clearance pair in every benign message is exactly
+        # what the JWT would carry in production.
+        self.user_roles = [str(np.random.choice(ROLES)) for _ in range(num_users)]
+        self.user_clearances = [ROLE_CLEARANCE[r] for r in self.user_roles]
 
         # --- physical machines (stable across cookie wipes) -------------------------
         # Tier: 0=no cert/tpm, 1=cert, 2=cert+tpm. tier-2 machines are TPM-keyed;
@@ -242,16 +294,14 @@ class ZTAStreamSimulator:
         self.node_features = nf
 
         # --- behaviour model -----------------------------------------------------------
-        # Valid actions per (machine, user): role/clearance from the user, tier from the
-        # machine. The habitual subset is per USER (the access edge is user -> resource).
-        self._valid_cache: dict[tuple[int, int], list[tuple[int, int]]] = {}
+        # Valid actions are OPA's allow set for the user's role (device tier is realism
+        # only, never a policy gate — OPA does not see it). The habitual subset is per
+        # USER (the access edge is user -> resource).
+        self._valid_cache: dict[str, list[tuple[int, int]]] = {}
+        self._violation_cache: dict[str, list[tuple[int, int]]] = {}
         self.user_habitual: list[set[tuple[int, int]]] = []
         for u in range(num_users):
-            tiers = [self.machine_tiers[m] for m in range(num_devices)
-                     if u in self.machine_users[m]]
-            best_tier = max(tiers) if tiers else 0
-            valid = self._role_valid_actions(self.user_roles[u], self.user_clearances[u],
-                                             best_tier)
+            valid = self._policy_valid_actions(self.user_roles[u])
             if valid:
                 k = max(1, len(valid) // 2)
                 hab_idx = np.random.choice(len(valid), size=k, replace=False)
@@ -270,22 +320,29 @@ class ZTAStreamSimulator:
         self._active_thefts: list[dict] = []
 
     # --- helpers ------------------------------------------------------------------------
-    def _role_valid_actions(self, role: str, clearance: int, tier: int):
-        out = []
-        for res_idx, rules in enumerate(self.resource_rules):
-            for method, (req_roles, min_tier, min_clearance) in rules.items():
-                if role in req_roles and tier >= min_tier and clearance >= min_clearance:
-                    out.append((res_idx, method))
-        return out
+    def _policy_valid_actions(self, role: str):
+        """``(resource_idx, method)`` actions OPA would ALLOW for this role (cached)."""
+        if role not in self._valid_cache:
+            self._valid_cache[role] = [
+                (r, m)
+                for r, uri in enumerate(RESOURCE_URIS)
+                for m in ROUTE_METHODS[uri]
+                if policy_allows(role, m, uri)
+            ]
+        return self._valid_cache[role]
 
-    def _valid_actions(self, machine: int, user: int):
-        key = (machine, user)
-        if key not in self._valid_cache:
-            self._valid_cache[key] = self._role_valid_actions(
-                self.user_roles[user], self.user_clearances[user],
-                self.machine_tiers[machine],
-            )
-        return self._valid_cache[key]
+    def _policy_violations(self, role: str):
+        """``(resource_idx, method)`` actions on PROTECTED routes that OPA would DENY for
+        this role — genuine policy.rego violations (read-up / write-down / missing
+        compartment). Public routes can never be a policy violation."""
+        if role not in self._violation_cache:
+            self._violation_cache[role] = [
+                (r, m)
+                for r, uri in enumerate(RESOURCE_URIS)
+                for m in ROUTE_METHODS[uri]
+                if uri in SECURITY_MATRIX and not policy_allows(role, m, uri)
+            ]
+        return self._violation_cache[role]
 
     def _maybe_wipe_cookie(self, machine: int) -> None:
         """Re-key a cookie-identified machine onto a fresh (cold) device slot."""
@@ -306,11 +363,10 @@ class ZTAStreamSimulator:
         """One credential-theft request: attacker IP + attacker device, victim identity."""
         u = incident["victim"]
         role, clr = self.user_roles[u], self.user_clearances[u]
-        # The attacker holds the victim's credentials: role/clearance checks pass; the
-        # behavioural tier does not bind them. Prefer non-public routes (the loot).
-        valid = self._role_valid_actions(role, clr, tier=2)
-        sensitive = [(r, m) for r, m in valid
-                     if self.resource_rules[r][m][0] is not _ALL_ROLES]
+        # The attacker holds the victim's credentials: OPA's role/clearance/category
+        # checks all pass. Prefer protected routes (the loot) over public ones.
+        valid = self._policy_valid_actions(role)
+        sensitive = [(r, m) for r, m in valid if RESOURCE_URIS[r] in SECURITY_MATRIX]
         res_idx, method = random.choice(sensitive or valid or [(0, 0)])
         feat = [1.0, 0.0, 0.0, 0.0, float(method),
                 ROLES.index(role) / (len(ROLES) - 1), clr / 4.0]
@@ -373,7 +429,6 @@ class ZTAStreamSimulator:
         dev_slot = self.machine_slot[machine]
         user = int(random.choice(self.machine_users[machine]))
         u_role, u_clearance = self.user_roles[user], self.user_clearances[user]
-        u_tier = self.machine_tiers[machine]
 
         scenario = 0
         if len(self.machine_users[machine]) > 1:
@@ -399,7 +454,7 @@ class ZTAStreamSimulator:
         )  # compromised machines blend in 70% of the time
 
         if not is_anomalous:
-            valid = self._valid_actions(machine, user)
+            valid = self._policy_valid_actions(u_role)
             habit = [a for a in valid if a in self.user_habitual[user]]
             non_habit = [a for a in valid if a not in self.user_habitual[user]]
             # Benign exploration: an authorised-but-non-habitual access (policy-clean,
@@ -426,7 +481,7 @@ class ZTAStreamSimulator:
                 anomaly_type = np.random.choice(["policy", "context", "lateral"])
 
             if anomaly_type == "lateral":
-                valid = self._valid_actions(machine, user)
+                valid = self._policy_valid_actions(u_role)
                 non_habit = [a for a in valid if a not in self.user_habitual[user]]
                 if non_habit:
                     res_idx, method = random.choice(non_habit)
@@ -439,17 +494,14 @@ class ZTAStreamSimulator:
                     etype = 3
                     if random.random() < 0.5:  # stolen identity inside the message
                         u_role = random.choice([r for r in ROLES if r != u_role])
-                        u_clearance = int(np.random.randint(0, 5))
+                        u_clearance = ROLE_CLEARANCE[u_role]  # spoofed role's clearance
                 else:
                     anomaly_type = "policy"
 
             if anomaly_type == "policy":
-                invalid = []
-                for r_idx, rules in enumerate(self.resource_rules):
-                    for m, (req_roles, min_tier, min_clearance) in rules.items():
-                        if (u_role not in req_roles or u_tier < min_tier
-                                or u_clearance < min_clearance):
-                            invalid.append((r_idx, m))
+                # A genuine OPA denial for this role: read-up, write-down, or a missing
+                # compartment on a protected route.
+                invalid = self._policy_violations(u_role)
                 if invalid:
                     res_idx, method = random.choice(invalid)
                 else:
