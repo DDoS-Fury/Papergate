@@ -45,3 +45,27 @@
   use `window_pad=0` (w_lo = rt_min) so laterals appear immediately. Load is fast (~10s) because
   rt_min is early in the file. Red-team is bursty: a chronological val slice can have 0 laterals
   (calibration then falls back to the conservative threshold — handled, deterministic).
+- **LANL red-team is front-sparse, mid-dense.** rt spans t=150885→2557047 (749 events). First 200k
+  events from rt_min hold only ~10 laterals. The densest region is a 5-day window [725488–1157488]
+  (503 laterals, 67%), peaking day 7 [755685–777285] (157 in 6h). For a focused ~200k-event eval
+  with the day-7 peak in TEST: `window=(500000,1157488)`, `benign_stride=360`, `max_events=200000`
+  → 200k ev, 265 laterals, 3.75 d, first lateral at idx≈0.25. Use `train_frac=0.25 val_frac=0.15`
+  (val gets 3 laterals, test 261). LANL benign density ≈57 ev/s raw → at stride 16, 200k ev spans
+  only ~15h (won't reach a burst): raise stride to cover more time.
+
+## Stale ablation numbers in report — RE-VERIFIED 2026-06-15 (multi-seed [42,7,123], 40k/12ep)
+- full lateral AUC = **0.882±0.012** (NOT the report's "~0.77 multi-seed" — that was stale and
+  *undersold* the model; single-run 0.90 and multi-seed 0.882 actually agree).
+- Δ lateral AUC vs full: **hist feats +0.163** (dominant), hashed-id +0.046, **precursor +0.013**
+  (marginal!), struct head +0.007 (marginal). Report claimed hist +0.066 / precursor +0.073 —
+  both wrong; precursor is now marginal like the struct head (hist absorbed its role).
+- agg AUC full = 0.947±0.004 → matches the published table exactly.
+- Rule: ablation deltas drift as the model/data evolve (de-circularization, benign_explore_prob).
+  Re-run `--profile ablations` before quoting any +ΔAUC in the report; don't trust prior prose.
+
+## LANL faithful (bs=1) ≪ batched full-span headline
+- Focused window above, 2 epochs, bs=1: agg/lat AUC **0.776**, lateral recall **15.3% @2.5%FPR**
+  (global threshold); cost-sensitive routing collapses (val 3 laterals → threshold≈1.0 → 0% recall).
+  The report's 0.8824 / >73% / 2.18% were a **batched full-span** run (cfr. batched-eval lesson)
+  — not reproducible faithfully on a focused window. User removed the LANL section entirely
+  (possibly not the right dataset for a streaming O(1) model).
