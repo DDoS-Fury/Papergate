@@ -1,3 +1,58 @@
+# TODO — Esperimento: device senza TPM → nodo `dev:guest` condiviso (2026-06-18)
+
+## Contesto
+Testare come si comporta il modello se TUTTI i device senza TPM collassano su un unico
+nodo `dev:guest` condiviso (mirror di `conf:guest`), invece di un nodo cookie per-macchina.
+Flag `guest_device_fallback` (default off) → A/B reversibile.
+Piano: /home/gabs/.claude/plans/obiettivo-vorrei-testare-il-whimsical-hejlsberg.md
+
+## Checklist
+- [x] 1. `netclass.py`: `GUEST_DEVICE = "dev:guest"` + helper `to_guest_device`
+- [x] 2. `config.py`: flag `guest_device_fallback: bool = False` in SyntheticConfig
+- [x] 3. `stream_synthetic.py`: collasso REALE via `machine_slot` su un unico slot guest
+        (non basta rietichettare le keys: in training i nodi sono slot id), wipe no-op,
+        attacker device cred-theft anch'esso collassato, wiring in generate_streaming_data
+- [x] 4. `serve_tgn.py`: collasso `to_guest_device(key_device)` in score_event/commit_event
+- [x] 5. `train_tgn.py`/`serve_api.py`: flag salvato in hp e riapplicato al serving
+- [x] 6. Test `tests/test_serve_v2.py` + verifica generatore (collasso, baseline, wipe)
+
+## Review
+- **Errore di impianto corretto in corsa:** il piano iniziale assumeva che rietichettare
+  `self.keys` collassasse i device. FALSO: in training i nodi sono indici di slot
+  (`device=dev_slot`), e `registry.preregister` esige chiavi UNICHE per slot. Vero collasso
+  = instradare `machine_slot` di ogni macchina non-TPM su un unico slot guest; gli slot
+  inerti tengono chiavi placeholder uniche. Vedi lessons.md.
+- **Verifiche (Docker `graphagate:latest`):** 12/12 pytest verdi (nuovo test incluso);
+  generatore con flag on → 1 sola key `dev:guest`, tutti gli eventi non-TPM su quello slot,
+  `preregister` identity su tutti gli slot, wipe neutralizzato (off=179→on=0 ad alto rate),
+  tier feature guest=0. Baseline (flag off) strutturalmente invariata (path guardato).
+- **Conseguenza sperimentale documentata:** l'attacker device del cred-theft, essendo
+  TPM-less, collassa anch'esso su guest → il tell device-identity sparisce; restano IP/JA3.
+
+## Run A/B (Docker GPU, 3 seed, theft-rich 80k/12ep, save=False) — `tests/ablations/run_guest_device_eval.py`
+- Profilo compose `guest-device-eval`. Esito **controintuitivo**: collassare i device
+  non-TPM su `dev:guest` NON degrada, anzi è un miglioramento di Pareto sulle metriche:
+  - lateral AUC 0.915→0.911 (piatto, −0.003 entro rumore); lateral recall +0.035, AP +0.049
+  - **furto cred. AUC 0.701→0.804 (+0.103)**, recall +0.043 (ma std baseline ±0.078 alta)
+  - agg AUC +0.007, **FPR benigno 0.045→0.037 (−0.007)**, **varianza tra seed crollata**
+  - **cookie-wipe FP eliminati**: n_wiped 651→0 (neutralizzazione confermata)
+- Interpretazione: l'identità per-cookie era rumore (nodi sparsi/freddi); il segnale degli
+  attacchi signal-clean vive su config/source/user, non sulla novità del device.
+- Costo non misurato: perdita di attribuzione per-macchina (forense). Deployable resta a
+  default cookie (`guest_device_fallback=False`).
+- Sezione `\section{...dev:guest}` (label `sec:guestdev`, Tab. `tab:guestdev`) aggiunta al
+  Cap.2 di `docs/latex/report.tex`; compila (pdflatex, 14 pagine, ref risolte).
+
+## Deployable → dev:guest (branch 5-nodes-alpaca)
+- `config.py`: `guest_device_fallback` default ribaltato a **True** (è ora la scelta deployable).
+- Riaddestrato l'artefatto `public/tgn_checkpoint.pt` (200k/15ep/seed42, save=True): agg AUC
+  0.959, lateral AUC 0.918, `wiped-cookie n=0` (flag attivo). Backup del v4-cookie precedente
+  in `backups/public_v4_cookie_20260618/`.
+- Verificato end-to-end: `hp.guest_device_fallback=True`; serving collassa `ck:`→`dev:guest`,
+  mantiene `tpm:` distinto. serve_api applica il flag leggendolo da `hp`.
+
+---
+
 # TODO — Doc + validazione mirata + tuning architetturale nodo config (v4)
 
 ## Contesto

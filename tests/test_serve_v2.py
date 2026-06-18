@@ -97,6 +97,33 @@ def test_key_config_defaults_to_guest():
     assert model.pair_count[(ci, ui)] == 1   # the guest config still binds to the user
 
 
+def test_guest_device_fallback_collapses_non_tpm():
+    # Experiment: with guest_device_fallback, every non-TPM device (ck:/ipdev:/None)
+    # collapses onto the single shared dev:guest node, mirroring conf:guest. A TPM key
+    # keeps its own identity.
+    model, reg = _fresh()
+    score_event(model, reg, 2.0, "alice", "ck:0001-g0", "/api/v1/documents", 100, FEAT,
+                DEVICE, key_source="src:10.0.0.7", update=True,
+                guest_device_fallback=True)
+    score_event(model, reg, 2.0, "bob", "ck:0002-g0", "/api/v1/documents", 110, FEAT,
+                DEVICE, key_source="src:10.0.0.8", update=True,
+                guest_device_fallback=True)
+    score_event(model, reg, 2.0, "carol", None, "/api/v1/documents", 120, FEAT,
+                DEVICE, key_source="src:10.0.0.9", update=True,
+                guest_device_fallback=True)
+    # Distinct cookies and the missing-device case all map to the one guest node.
+    assert reg.get("dev:guest") is not None
+    assert reg.get("ck:0001-g0") is None and reg.get("ck:0002-g0") is None
+    gi = reg.get("dev:guest")
+    # device→user binding fired for each of the three users through the same guest node.
+    assert model.src_count[gi] == 3
+    # A TPM device is never collapsed: it keeps a separate slot.
+    score_event(model, reg, 2.0, "dave", "tpm:0009", "/api/v1/documents", 130, FEAT,
+                DEVICE, key_source="src:10.0.0.10", update=True,
+                guest_device_fallback=True)
+    assert reg.get("tpm:0009") is not None and reg.get("tpm:0009") != gi
+
+
 def test_source_internal_external_feature():
     model, reg = _fresh()
     # Internal RFC1918 source.

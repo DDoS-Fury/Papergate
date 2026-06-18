@@ -156,6 +156,19 @@ services:
     entrypoint: ["python"]
     command: ["/app/tests/ablations/run_config_eval.py"]
 
+  # Esperimento: device senza TPM collassati su un unico nodo dev:guest (mirror di
+  # conf:guest) vs keying per-cookie. Stream theft-rich + save=False (non tocca public/).
+  guest-device-eval:
+    <<: *base
+    profiles: ["guest-device-eval"]
+    container_name: graphagate-guest-device-eval
+    volumes:
+      - ./public:/app/public
+      - ./src:/app/src
+      - ./tests:/app/tests
+    entrypoint: ["python"]
+    command: ["/app/tests/ablations/run_guest_device_eval.py"]
+
   # Sweep architetturale (v4): layer MLP extra, memory_dim, teste di attenzione.
   # save=False (non tocca public/); adozione solo se migliora oltre il rumore multi-seed.
   arch-sweep:

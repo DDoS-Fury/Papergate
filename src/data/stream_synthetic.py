@@ -54,7 +54,7 @@ from dataclasses import dataclass, field
 import numpy as np
 import torch
 
-from graphagate.netclass import ip_is_internal
+from graphagate.netclass import GUEST_DEVICE, ip_is_internal
 
 ROLES = ["guest", "operator", "manager", "admin"]
 CLEARANCES = ["PUBLIC", "INTERNAL", "CONFIDENTIAL", "SECRET", "TOP_SECRET"]
@@ -211,6 +211,7 @@ class ZTAStreamSimulator:
         start_time: int = 0,
         use_resource_risk: bool = True,
         use_source_internal: bool = False,
+        guest_device_fallback: bool = False,
     ):
         if seed is not None:
             np.random.seed(seed)
@@ -227,6 +228,7 @@ class ZTAStreamSimulator:
         self.num_resources = num_resources
         self.num_wipe_slots = num_wipe_slots
         self.num_theft_slots = num_theft_slots
+        self.guest_device_fallback = guest_device_fallback
         self.benign_explore_prob = benign_explore_prob
         self.p_roam = p_roam
         self.p_cookie_wipe = p_cookie_wipe
@@ -358,6 +360,24 @@ class ZTAStreamSimulator:
         self.t = start_time
         self.step_count = 0
         self.machine_slot = {m: self.dev_lo + m for m in range(num_devices)}
+        # Guest device fallback (experiment): every non-TPM machine collapses onto a
+        # single shared guest device node, the mirror of ``conf:guest``. The first
+        # non-TPM machine's slot becomes the canonical guest node; the rest reuse it via
+        # ``machine_slot``. Their now-inert own slots keep a unique placeholder key so
+        # the registry's slot<->key identity mapping (preregister) stays intact.
+        self._guest_dev_slot: int | None = None
+        if self.guest_device_fallback:
+            non_tpm = [m for m in range(num_devices) if self.machine_tiers[m] < 2]
+            if non_tpm:
+                guest = self.dev_lo + non_tpm[0]
+                self._guest_dev_slot = guest
+                self.keys[guest] = GUEST_DEVICE
+                self.node_features[guest, 2] = 0.0  # anonymous device: lowest tier
+                for m in non_tpm:
+                    self.machine_slot[m] = guest
+                    if self.dev_lo + m != guest:
+                        self.keys[self.dev_lo + m] = f"_guest_unused_dev_{m:04d}"
+                        self.node_features[self.dev_lo + m, 2] = 0.0
         self._next_wipe_slot = 0
         self._next_theft_slot = 0
         self._slot_age: dict[int, int] = {}      # events seen by a re-keyed (wiped) slot
@@ -392,7 +412,8 @@ class ZTAStreamSimulator:
     def _maybe_wipe_cookie(self, machine: int) -> None:
         """Re-key a cookie-identified machine onto a fresh (cold) device slot."""
         if (
-            self.machine_tiers[machine] < 2
+            not self.guest_device_fallback  # guest devices have no per-machine cookie
+            and self.machine_tiers[machine] < 2
             and self._next_wipe_slot < self.num_wipe_slots
             and random.random() < self.p_cookie_wipe
         ):
@@ -469,8 +490,14 @@ class ZTAStreamSimulator:
         ):
             k = self._next_theft_slot
             self._next_theft_slot += 1
-            dev_slot = self.dev_lo + self.num_devices + self.num_wipe_slots + k
-            self.keys[dev_slot] = f"ck:atk-{k:03d}"  # attacker gets a fresh cookie
+            if self.guest_device_fallback and self._guest_dev_slot is not None:
+                # Attacker device is TPM-less too, so under the guest-fallback policy it
+                # collapses onto the shared guest node; the never-seen IP / JA3 remain the
+                # only novelty tells (the device-identity tell is intentionally lost).
+                dev_slot = self._guest_dev_slot
+            else:
+                dev_slot = self.dev_lo + self.num_devices + self.num_wipe_slots + k
+                self.keys[dev_slot] = f"ck:atk-{k:03d}"  # attacker gets a fresh cookie
             cfg_slot = self.cfg_lo + self.num_configs + k
             self.keys[cfg_slot] = f"conf:atk-{k:03d}"  # ...and a never-seen JA3
             incident = {
@@ -650,6 +677,7 @@ def generate_streaming_data(
     seed=None,
     use_resource_risk=True,
     use_source_internal=False,
+    guest_device_fallback=False,
 ) -> SyntheticStream:
     """Generate the offline v4 training stream (see the module docstring).
 
@@ -663,6 +691,7 @@ def generate_streaming_data(
         p_roam=p_roam, p_shared_device=p_shared_device, p_cookie_wipe=p_cookie_wipe,
         p_cred_theft=p_cred_theft, admission_horizon=num_events, seed=seed,
         use_resource_risk=use_resource_risk, use_source_internal=use_source_internal,
+        guest_device_fallback=guest_device_fallback,
     )
     events = [sim.step() for _ in range(num_events)]
 

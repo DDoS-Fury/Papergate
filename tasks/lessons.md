@@ -1,5 +1,22 @@
 # Lessons
 
+## Collasso/identità di un nodo: in training i nodi sono SLOT ID, non chiavi-stringa — 2026-06-18
+- **Pattern dell'errore:** per "collassare" più entità su un solo nodo del grafo, ho
+  inizialmente assunto che bastasse dare la stessa chiave-stringa (es. `dev:guest`) a più
+  slot del generatore. SBAGLIATO su due fronti: (1) lo stream di training usa l'indice di
+  slot come node id (`stream_synthetic`: l'evento porta `device=dev_slot` intero, non la
+  stringa); rietichettare `self.keys` non tocca i node id. (2) `NodeRegistry.preregister`
+  assume identity-mapping slot↔chiave e usa `get_or_add`: chiavi duplicate NON consumano un
+  nuovo slot → `_next_idx` disallineato e `_idx_to_key[i]` mancante per gli slot duplicati,
+  corrompendo l'allineamento (e `train_tgn` itera `registry._idx_to_key[i]` per ogni slot).
+- **Regola:** il vero collasso in training si fa instradando `machine_slot[m]` (la mappa
+  entità→slot) su un UNICO slot condiviso; gli slot rimasti inerti devono mantenere chiavi
+  placeholder UNICHE. Il collasso per-stringa via `to_guest_device` vale SOLO al serving,
+  dove le chiavi esterne grezze passano per il registry runtime.
+- **Meta-lezione (CLAUDE.md §1):** appena la realtà del codice ha contraddetto l'assunzione
+  del piano, mi sono fermato, ho riletto `preregister`/`generate_streaming_data` e ho
+  ri-pianificato PRIMA di scrivere altro codice, invece di forzare l'approccio sbagliato.
+
 ## Validazione mirata cred-theft + sweep architetturale v4 — 2026-06-18 (multi-seed [42,7,123])
 - **cred-theft/wiped-cookie n=0 nel test è un artefatto di split, NON un bug del modello.**
   `num_theft_slots=64`/`p_cred_theft=0.0012` → tutti gli incidenti partono entro ~ev.53k

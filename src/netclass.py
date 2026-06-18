@@ -21,6 +21,20 @@ import ipaddress
 
 SOURCE_PREFIX = "src:"
 
+# Shared guest DEVICE node. The mirror of ``conf:guest``: when the experimental
+# ``guest_device_fallback`` is on, every device that is NOT TPM-attested collapses
+# onto this single anonymous, low-trust device node instead of carrying its own
+# per-machine cookie (``ck:``) / weak-IP (``ipdev:``) identity.
+GUEST_DEVICE = "dev:guest"
+
+
+def to_guest_device(key_device):
+    """Collapse any non-TPM device (``ck:`` / ``ipdev:`` / ``None``) onto the shared
+    ``dev:guest`` node. A TPM-attested key (``tpm:<id>``) is returned unchanged."""
+    if isinstance(key_device, str) and key_device.startswith("tpm:"):
+        return key_device
+    return GUEST_DEVICE
+
 # Strict RFC1918 private ranges == "internal corporate network". Note we do NOT use
 # ``ipaddress.is_private`` (it also returns True for loopback, link-local and CGNAT
 # 100.64/10) — for the internal/external feature only these three count as internal.

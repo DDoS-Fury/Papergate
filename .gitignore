@@ -35,4 +35,4 @@ data/
 docs/latex/*.out
 docs/latex/*.log
 docs/latex/*.aux
-
+backups/
