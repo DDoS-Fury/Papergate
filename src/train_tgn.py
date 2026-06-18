@@ -64,15 +64,16 @@ def _pbar(iterable=None, *, total=None, desc=None):
 
 
 def _replay(model, source_nodes, device_nodes, user, dst, t, msg, y, device, *,
-            threshold=None, threshold_dirty=None, gate_by_label=False,
+            config_nodes=None, threshold=None, threshold_dirty=None, gate_by_label=False,
             batch_size=1, desc="replay"):
-    """Streaming replay matching the serving path (v2: up to 3 edges), optionally batched.
+    """Streaming replay matching the serving path (v4: up to 5 edges), optionally batched.
 
-    ``source_nodes`` / ``device_nodes`` may be ``None`` (datasets without a network /
-    hardware entity, e.g. LANL host-to-host auth): the corresponding binding edges are
-    skipped, exactly like :func:`serve_tgn.score_event` with ``key_source=None``. They are
-    dataset-level (every event carries them, or none does), so each block is a set of
-    equally-shaped edge groups.
+    ``source_nodes`` / ``config_nodes`` / ``device_nodes`` may be ``None`` (datasets
+    without a network / config / hardware entity, e.g. LANL host-to-host auth): the
+    corresponding binding edges are skipped, exactly like :func:`serve_tgn.score_event`
+    with the matching key omitted. They are dataset-level (every event carries them, or
+    none does), so each block is a set of equally-shaped edge groups. The causal chain is
+    ``source → config → device → user → resource`` plus ``config → user``.
 
     Memory update gating (who is committed into TGN memory):
       - ``gate_by_label=True``  -> commit on ground-truth benign (calibration replay,
@@ -112,8 +113,10 @@ def _replay(model, source_nodes, device_nodes, user, dst, t, msg, y, device, *,
     u_l, d_l, t_l, y_l = user.tolist(), dst.tolist(), t.tolist(), y.tolist()
     dev_l = device_nodes.tolist() if device_nodes is not None else None
     src_l = source_nodes.tolist() if source_nodes is not None else None
+    cfg_l = config_nodes.tolist() if config_nodes is not None else None
     has_bind = device_nodes is not None
     has_src = has_bind and source_nodes is not None
+    has_config = config_nodes is not None
     msg_dim = msg.shape[1]
     TRUST = 14  # runtime trust slot in node_feat (the only column replay mutates)
 
@@ -140,10 +143,12 @@ def _replay(model, source_nodes, device_nodes, user, dst, t, msg, y, device, *,
             bmsg = msg[start:end].to(device).float()
             bdev = device_nodes[start:end].to(device) if has_bind else None
             bsrc = source_nodes[start:end].to(device) if has_src else None
+            bcfg = config_nodes[start:end].to(device) if has_config else None
             zeros_msg = torch.zeros(B, msg_dim, device=device)
             us, ds, ts = u_l[start:end], d_l[start:end], t_l[start:end]
             devs = dev_l[start:end] if has_bind else None
             srcs = src_l[start:end] if has_src else None
+            cfgs = cfg_l[start:end] if has_config else None
 
             # --- Phase 1: one shared neighbour expansion + GNN forward for the whole block.
             node_parts = [bu, bd]
@@ -151,6 +156,8 @@ def _replay(model, source_nodes, device_nodes, user, dst, t, msg, y, device, *,
                 node_parts.append(bdev)
             if has_src:
                 node_parts.append(bsrc)
+            if has_config:
+                node_parts.append(bcfg)
             nodes = torch.cat(node_parts).unique()
             n_id, edge_index, hist_t, hist_msg = model.neighbor_loader(nodes)
             z = model.embed(n_id, edge_index, hist_t, hist_msg)
@@ -173,9 +180,15 @@ def _replay(model, source_nodes, device_nodes, user, dst, t, msg, y, device, *,
 
             raw = _grp_anom(bu, bd, us, ds, bmsg, devs)  # access edge (aux src = device)
             if has_bind:
-                raw = torch.maximum(raw, _grp_anom(bdev, bu, devs, us, zeros_msg, None))
-            if has_src:
-                raw = torch.maximum(raw, _grp_anom(bsrc, bdev, srcs, devs, zeros_msg, None))
+                raw = torch.maximum(raw, _grp_anom(bdev, bu, devs, us, zeros_msg, None))  # device→user
+            if has_config:
+                raw = torch.maximum(raw, _grp_anom(bcfg, bu, cfgs, us, zeros_msg, None))  # config→user
+                if has_bind:
+                    raw = torch.maximum(raw, _grp_anom(bcfg, bdev, cfgs, devs, zeros_msg, None))  # config→device
+                if has_src:
+                    raw = torch.maximum(raw, _grp_anom(bsrc, bcfg, srcs, cfgs, zeros_msg, None))  # source→config
+            if has_src and not has_config:
+                raw = torch.maximum(raw, _grp_anom(bsrc, bdev, srcs, devs, zeros_msg, None))  # legacy source→device
             raw_np = raw.detach().cpu().numpy()
             bmsg_rows = bmsg.tolist()
 
@@ -217,22 +230,33 @@ def _replay(model, source_nodes, device_nodes, user, dst, t, msg, y, device, *,
                 sel_t = torch.as_tensor(sel, dtype=torch.long, device=device)
                 su, sd, st_, sm = bu[sel_t], bd[sel_t], bt[sel_t], bmsg[sel_t]
                 zb = torch.zeros(int(sel.size), msg_dim, device=device)
-                if has_src:
-                    ssrc, sdev = bsrc[sel_t], bdev[sel_t]
-                    model.memory.update_state(ssrc, sdev, st_, zb)
+
+                def _commit(s_t, d_t, m_t):
+                    model.memory.update_state(s_t, d_t, st_, m_t)
                     model.memory.detach()
-                    model.neighbor_loader.insert(ssrc, sdev, st_, zb)
+                    model.neighbor_loader.insert(s_t, d_t, st_, m_t)
+
+                # Commit order: source→config, config→device, config→user, device→user, user→resource.
+                if has_config and has_src:
+                    _commit(bsrc[sel_t], bcfg[sel_t], zb)
+                if has_config and has_bind:
+                    _commit(bcfg[sel_t], bdev[sel_t], zb)
+                if has_config:
+                    _commit(bcfg[sel_t], su, zb)
+                if has_src and not has_config:
+                    _commit(bsrc[sel_t], bdev[sel_t], zb)
                 if has_bind:
-                    sdev = bdev[sel_t]
-                    model.memory.update_state(sdev, su, st_, zb)
-                    model.memory.detach()
-                    model.neighbor_loader.insert(sdev, su, st_, zb)
-                model.memory.update_state(su, sd, st_, sm)
-                model.memory.detach()
-                model.neighbor_loader.insert(su, sd, st_, sm)
+                    _commit(bdev[sel_t], su, zb)
+                _commit(su, sd, sm)
                 for j in sel.tolist():
                     u, d, tv = us[j], ds[j], ts[j]
-                    if has_src:
+                    if has_config and has_src:
+                        _bump(srcs[j], cfgs[j], tv)
+                    if has_config and has_bind:
+                        _bump(cfgs[j], devs[j], tv)
+                    if has_config:
+                        _bump(cfgs[j], u, tv)
+                    if has_src and not has_config:
                         _bump(srcs[j], devs[j], tv)
                     if has_bind:
                         _bump(devs[j], u, tv)
@@ -331,13 +355,16 @@ class StreamData:
     for the access edge are drawn uniformly from ``[neg_lo, neg_lo + neg_num)`` — the
     resource range for the synthetic stream, the whole computer range for host-to-host auth.
 
-    v2 schema: ``source_nodes`` (client IP) and ``device_nodes`` (hardware id) are
-    optional. ``None`` skips the corresponding binding edge and its training objective —
-    a device-less dataset (LANL) degrades to the single ``user → dst`` edge. The
-    ``usr_lo/usr_num`` / ``dev_lo/dev_num`` ranges drive the binding-edge negative
-    sampling (random users for device→user, random devices for source→device); they are
-    only needed when the corresponding entity tensors are present. ``scenario`` is the
-    benign-context bitmask of the synthetic generator (``None`` skips scenario evals).
+    v4 schema: ``source_nodes`` (client IP), ``config_nodes`` (TLS/JA3 fingerprint) and
+    ``device_nodes`` (hardware id) are optional. ``None`` skips the corresponding binding
+    edge(s) and their training objective — a device-less dataset (LANL) degrades to the
+    single ``user → dst`` edge. The ``usr_lo/usr_num`` / ``dev_lo/dev_num`` /
+    ``cfg_lo/cfg_num`` ranges drive the binding-edge negative sampling (random users for
+    device→user and config→user, random devices for config→device, random configs for
+    source→config); they are only needed when the corresponding entity tensors are
+    present. The causal chain is ``source → config → device → user → dst`` plus the
+    ``config → user`` binding. ``scenario`` is the benign-context bitmask of the synthetic
+    generator (``None`` skips scenario evals).
     """
 
     user: torch.Tensor
@@ -353,11 +380,14 @@ class StreamData:
     neg_num: int
     device_nodes: torch.Tensor | None = None
     source_nodes: torch.Tensor | None = None
+    config_nodes: torch.Tensor | None = None
     scenario: torch.Tensor | None = None
     usr_lo: int = 0
     usr_num: int = 0
     dev_lo: int = 0
     dev_num: int = 0
+    cfg_lo: int = 0
+    cfg_num: int = 0
 
 
 def _synthetic_stream_data(cfg: TGNConfig) -> StreamData:
@@ -372,6 +402,7 @@ def _synthetic_stream_data(cfg: TGNConfig) -> StreamData:
         num_users=cfg.num_users,
         num_devices=cfg.num_devices,
         num_sources=cfg.num_sources,
+        num_configs=cfg.num_configs,
         num_resources=cfg.num_resources,
         num_events=cfg.num_events,
         num_wipe_slots=cfg.num_wipe_slots,
@@ -389,8 +420,10 @@ def _synthetic_stream_data(cfg: TGNConfig) -> StreamData:
         user=s.user, dst=s.dst, t=s.t, msg=s.msg, y=s.y, types=s.types,
         node_features=s.node_features, keys=s.keys, num_nodes=s.num_nodes,
         neg_lo=s.res_lo, neg_num=s.res_num,
-        device_nodes=s.device, source_nodes=s.source, scenario=s.scenario,
+        device_nodes=s.device, source_nodes=s.source, config_nodes=s.config,
+        scenario=s.scenario,
         usr_lo=s.user_lo, usr_num=s.user_num, dev_lo=s.dev_lo, dev_num=s.dev_num,
+        cfg_lo=s.cfg_lo, cfg_num=s.cfg_num,
     )
 
 
@@ -419,6 +452,7 @@ def train_tgn(cfg: TGNConfig = TGNConfig(), *, dataset: "StreamData | None" = No
         data = dataset
     user_arr, dst, t, msg, y, types = data.user, data.dst, data.t, data.msg, data.y, data.types
     device_arr, source_arr, scenario = data.device_nodes, data.source_nodes, data.scenario
+    config_arr = data.config_nodes
     node_features = data.node_features
     total_nodes = data.num_nodes
     capacity = total_nodes + cfg.capacity_headroom
@@ -512,6 +546,7 @@ def train_tgn(cfg: TGNConfig = TGNConfig(), *, dataset: "StreamData | None" = No
             b_y = y[start_idx:end_idx].to(device)
             b_device = device_arr[start_idx:end_idx].to(device) if device_arr is not None else None
             b_source = source_arr[start_idx:end_idx].to(device) if source_arr is not None else None
+            b_config = config_arr[start_idx:end_idx].to(device) if config_arr is not None else None
 
             # NOTE: the trust score (node_feat[:, 14]) is NO LONGER mutated from
             # ground-truth labels here. Doing so coupled the labels into a persistent
@@ -530,6 +565,7 @@ def train_tgn(cfg: TGNConfig = TGNConfig(), *, dataset: "StreamData | None" = No
             p_msg = b_msg[benign_mask]
             p_device = b_device[benign_mask] if b_device is not None else None
             p_source = b_source[benign_mask] if b_source is not None else None
+            p_config = b_config[benign_mask] if b_config is not None else None
 
             # STRUCTURAL NEGATIVES — for each positive, K uniform random alternatives
             # (standard self-supervised temporal link prediction), one set per edge of
@@ -539,9 +575,13 @@ def train_tgn(cfg: TGNConfig = TGNConfig(), *, dataset: "StreamData | None" = No
             #     user habitually reach" (the lateral-movement objective);
             #   * binding device→user:   K random USERS — "which users does this machine
             #     habitually host" (the credential-theft / session-binding objective);
-            #   * binding source→device: K random DEVICES — "which machines live behind
-            #     this IP" (the network-binding objective; roaming positives in the
-            #     stream teach it that a warm device on a new IP is tolerable).
+            #   * binding config→user:   K random USERS — "which clients does this user
+            #     habitually use" (a stolen-credential client differs from the victim's);
+            #   * binding config→device: K random DEVICES — "which machines run this
+            #     config" (a new tool on a known device is lateral movement);
+            #   * binding source→config: K random CONFIGS — "which clients live behind
+            #     this IP" (the network-binding objective; replaces source→device, now
+            #     routed through the config node; roaming positives teach IP tolerance).
             # The binding objectives are NOT optional: with the access edge anchored on
             # the (warm) user, a credential thief touching the victim's habitual
             # resources looks benign there — the anomaly lives only in the bindings.
@@ -553,16 +593,32 @@ def train_tgn(cfg: TGNConfig = TGNConfig(), *, dataset: "StreamData | None" = No
             user_rep = p_user.repeat_interleave(K)
             has_bind = p_device is not None and data.dev_num > 0
             has_src = has_bind and p_source is not None
+            has_config = p_config is not None and data.cfg_num > 0
             if has_bind:
                 neg_usr = _sample_structural_negatives(
                     P * K, data.usr_num, data.usr_lo, device, avoid=user_rep
                 )
                 dev_rep = p_device.repeat_interleave(K)
             if has_src:
+                src_rep = p_source.repeat_interleave(K)
+            if has_config:
+                cfg_rep = p_config.repeat_interleave(K)
+                neg_cusr = _sample_structural_negatives(  # config→user negatives
+                    P * K, data.usr_num, data.usr_lo, device, avoid=user_rep
+                )
+                if has_bind:
+                    neg_cdev = _sample_structural_negatives(  # config→device negatives
+                        P * K, data.dev_num, data.dev_lo, device, avoid=dev_rep
+                    )
+                if has_src:
+                    neg_scfg = _sample_structural_negatives(  # source→config negatives
+                        P * K, data.cfg_num, data.cfg_lo, device, avoid=cfg_rep
+                    )
+            if has_src and not has_config:
+                # legacy source→device binding (no config node to route the chain through)
                 neg_dev = _sample_structural_negatives(
                     P * K, data.dev_num, data.dev_lo, device, avoid=dev_rep
                 )
-                src_rep = p_source.repeat_interleave(K)
 
             # Expand every involved node to its stored temporal neighbourhood and embed
             # once; the heads below differ only in which endpoints / message they score,
@@ -570,7 +626,13 @@ def train_tgn(cfg: TGNConfig = TGNConfig(), *, dataset: "StreamData | None" = No
             parts = [p_user, p_dst, neg_res]
             if has_bind:
                 parts += [p_device, neg_usr]
-            if has_src:
+            if has_config:
+                parts += [p_config, neg_cusr]
+                if has_bind:
+                    parts += [neg_cdev]
+                if has_src:
+                    parts += [p_source, neg_scfg]
+            if has_src and not has_config:
                 parts += [p_source, neg_dev]
             nodes = torch.cat(parts).unique()
             n_id, edge_index, hist_t, hist_msg = model.neighbor_loader(nodes)
@@ -582,6 +644,7 @@ def train_tgn(cfg: TGNConfig = TGNConfig(), *, dataset: "StreamData | None" = No
             tv_l, u_l, dpos_l = p_t.tolist(), p_user.tolist(), p_dst.tolist()
             dev_l = p_device.tolist() if has_bind else None
             src_l = p_source.tolist() if has_src else None
+            cfg_l = p_config.tolist() if has_config else None
             tv_rep = p_t.repeat_interleave(K)
 
             def _edge_logits(src_nodes, dst_nodes, t_nodes, msgs, hist_feats):
@@ -633,24 +696,27 @@ def train_tgn(cfg: TGNConfig = TGNConfig(), *, dataset: "StreamData | None" = No
                 + F.binary_cross_entropy_with_logits(neg_out_ctx, torch.zeros_like(neg_out_ctx))
             )
 
-            if has_bind:
-                hist_du_pos = model.compute_hist_feats(dev_l, u_l, device)
-                hist_du_neg = model.compute_hist_feats(dev_rep.tolist(), neg_usr.tolist(), device)
-                pos_du = _edge_logits(p_device, p_user, p_t, zeros_msg, hist_du_pos)
-                neg_du = _edge_logits(dev_rep, neg_usr, tv_rep, zeros_msg_rep, hist_du_neg).view(P, K)
-                loss = loss + (
-                    F.cross_entropy(torch.cat([pos_du.unsqueeze(1), neg_du], dim=1), target)
-                    + F.binary_cross_entropy_with_logits(pos_du, torch.ones_like(pos_du))
+            def _binding_loss(p_src, p_dst_b, src_rep_b, neg_b, src_list, dst_list):
+                """InfoNCE + positive-BCE for one zero-message binding edge group."""
+                hist_pos = model.compute_hist_feats(src_list, dst_list, device)
+                hist_neg = model.compute_hist_feats(src_rep_b.tolist(), neg_b.tolist(), device)
+                pos = _edge_logits(p_src, p_dst_b, p_t, zeros_msg, hist_pos)
+                neg = _edge_logits(src_rep_b, neg_b, tv_rep, zeros_msg_rep, hist_neg).view(P, K)
+                return (
+                    F.cross_entropy(torch.cat([pos.unsqueeze(1), neg], dim=1), target)
+                    + F.binary_cross_entropy_with_logits(pos, torch.ones_like(pos))
                 )
-            if has_src:
-                hist_sd_pos = model.compute_hist_feats(src_l, dev_l, device)
-                hist_sd_neg = model.compute_hist_feats(src_rep.tolist(), neg_dev.tolist(), device)
-                pos_sd = _edge_logits(p_source, p_device, p_t, zeros_msg, hist_sd_pos)
-                neg_sd = _edge_logits(src_rep, neg_dev, tv_rep, zeros_msg_rep, hist_sd_neg).view(P, K)
-                loss = loss + (
-                    F.cross_entropy(torch.cat([pos_sd.unsqueeze(1), neg_sd], dim=1), target)
-                    + F.binary_cross_entropy_with_logits(pos_sd, torch.ones_like(pos_sd))
-                )
+
+            if has_bind:  # device → user
+                loss = loss + _binding_loss(p_device, p_user, dev_rep, neg_usr, dev_l, u_l)
+            if has_config:
+                loss = loss + _binding_loss(p_config, p_user, cfg_rep, neg_cusr, cfg_l, u_l)  # config → user
+                if has_bind:
+                    loss = loss + _binding_loss(p_config, p_device, cfg_rep, neg_cdev, cfg_l, dev_l)  # config → device
+                if has_src:
+                    loss = loss + _binding_loss(p_source, p_config, src_rep, neg_scfg, src_l, cfg_l)  # source → config
+            if has_src and not has_config:  # legacy source → device
+                loss = loss + _binding_loss(p_source, p_device, src_rep, neg_dev, src_l, dev_l)
 
             loss.backward()
             optimizer.step()
@@ -663,22 +729,34 @@ def train_tgn(cfg: TGNConfig = TGNConfig(), *, dataset: "StreamData | None" = No
             # Predict-then-update: commit benign traffic to memory, neighbour store, the
             # recency cache and the interaction-history counters (benign-only — anomalies
             # never enter the baseline, matching the serving anti-poisoning gate). Edge
-            # order mirrors serving: source→device, device→user, user→resource.
-            if has_src:
-                model.memory.update_state(p_source, p_device, p_t, zeros_msg)
+            # order mirrors serving: source→config, config→device, config→user,
+            # device→user, user→resource.
+            def _commit_edge(p_src, p_dst_e, e_msg):
+                model.memory.update_state(p_src, p_dst_e, p_t, e_msg)
                 model.memory.detach()
-                model.neighbor_loader.insert(p_source, p_device, p_t, zeros_msg)
+                model.neighbor_loader.insert(p_src, p_dst_e, p_t, e_msg)
+
+            if has_config and has_src:
+                _commit_edge(p_source, p_config, zeros_msg)
+            if has_config and has_bind:
+                _commit_edge(p_config, p_device, zeros_msg)
+            if has_config:
+                _commit_edge(p_config, p_user, zeros_msg)
+            if has_src and not has_config:
+                _commit_edge(p_source, p_device, zeros_msg)
             if has_bind:
-                model.memory.update_state(p_device, p_user, p_t, zeros_msg)
-                model.memory.detach()
-                model.neighbor_loader.insert(p_device, p_user, p_t, zeros_msg)
-            model.memory.update_state(p_user, p_dst, p_t, p_msg)
-            model.memory.detach()
-            model.neighbor_loader.insert(p_user, p_dst, p_t, p_msg)
+                _commit_edge(p_device, p_user, zeros_msg)
+            _commit_edge(p_user, p_dst, p_msg)
             for j in range(P):
                 u, d, tv_j = u_l[j], dpos_l[j], tv_l[j]
                 pairs = [(u, d)]
-                if has_src:
+                if has_config and has_src:
+                    pairs.append((src_l[j], cfg_l[j]))
+                if has_config and has_bind:
+                    pairs.append((cfg_l[j], dev_l[j]))
+                if has_config:
+                    pairs.append((cfg_l[j], u))
+                if has_src and not has_config:
                     pairs.append((src_l[j], dev_l[j]))
                 if has_bind:
                     pairs.append((dev_l[j], u))
@@ -705,6 +783,7 @@ def train_tgn(cfg: TGNConfig = TGNConfig(), *, dataset: "StreamData | None" = No
         model, _slice(source_arr, train_end, val_end), _slice(device_arr, train_end, val_end),
         user_arr[train_end:val_end], dst[train_end:val_end], t[train_end:val_end],
         msg[train_end:val_end], y[train_end:val_end], device, gate_by_label=True,
+        config_nodes=_slice(config_arr, train_end, val_end),
         batch_size=cfg.eval_batch_size, desc="Calibrazione (replay val)",
     )
     benign_val_scores = val_scores[val_labels == 0]
@@ -767,7 +846,8 @@ def train_tgn(cfg: TGNConfig = TGNConfig(), *, dataset: "StreamData | None" = No
     test_scores, test_labels = _replay(
         model, _slice(source_arr, val_end, n), _slice(device_arr, val_end, n),
         user_arr[val_end:], dst[val_end:], t[val_end:], msg[val_end:], y[val_end:],
-        device, threshold=threshold, threshold_dirty=threshold_dirty, gate_by_label=False,
+        device, config_nodes=_slice(config_arr, val_end, n),
+        threshold=threshold, threshold_dirty=threshold_dirty, gate_by_label=False,
         batch_size=cfg.eval_batch_size, desc="Inferenza (replay test)",
     )
 

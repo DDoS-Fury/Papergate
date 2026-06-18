@@ -40,6 +40,13 @@ class TGNConfig:
     # MUST equal len(RESOURCE_URIS) in stream_synthetic.py: resource node keys are
     # the exact route URIs the security-orchestrator sends as key_dst.
     num_resources: int = 19
+    # v4 schema: the client CONFIGURATION (TLS/JA3 fingerprint) is a 5th node role,
+    # inserted into the causal chain as ``source → config → device → user → resource``
+    # (plus a ``config → user`` binding). JA3 has limited cardinality (a handful of
+    # browsers / tools share a fingerprint), so a modest pool of habitual configs is
+    # realistic; each machine is assigned 1-2 of them (a never-seen config on a known
+    # device / for a known user is the lateral-movement / credential-theft tell).
+    num_configs: int = 40
     num_events: int = 200000
 
     # Spare device-node slots for the generator's dynamic scenarios: a cookie wipe
@@ -146,13 +153,16 @@ class TGNConfig:
 
     seed: int = 42
 
-    # Event schema version persisted in the checkpoint hyper-parameters. v3 = the
+    # Event schema version persisted in the checkpoint hyper-parameters. v4 = the
+    # 5-node schema: the client CONFIGURATION (JA3) node is inserted into the causal
+    # chain as ``source → config → device → user → resource`` plus a ``config → user``
+    # binding (config keys namespaced ``conf:<ja3>`` / ``conf:guest``). v3 was the
     # 4-node / 3-edge schema with type-namespaced keys (src:/ipdev:/tpm:/ck:) plus two
-    # new static node features — node_feat[*,4]=resource RISK, node_feat[*,5]=source
-    # network internal/external. node_feat index map: [2]=device tier, [3]=resource
-    # priority, [4]=resource risk, [5]=source internal, [14]=trust. Earlier checkpoints
-    # (v1 2-edge, v2 bare-IP keys / no risk-internal feats) are rejected at load time.
-    schema_version: int = 3
+    # static node features — node_feat[*,4]=resource RISK, node_feat[*,5]=source
+    # network internal/external. node_feat index map (unchanged in v4): [2]=device tier,
+    # [3]=resource priority, [4]=resource risk, [5]=source internal, [14]=trust. Earlier
+    # checkpoints (v1/v2/v3) are rejected at load time.
+    schema_version: int = 4
 
     @property
     def total_nodes(self) -> int:
@@ -160,6 +170,7 @@ class TGNConfig:
             self.num_users
             + self.num_devices + self.num_wipe_slots + self.num_theft_slots
             + self.num_sources + self.num_theft_slots
+            + self.num_configs + self.num_theft_slots
             + self.num_resources
         )
 

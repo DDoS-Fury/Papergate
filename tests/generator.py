@@ -48,6 +48,7 @@ async def event_generator(seed=None, warmup_steps=None, cfg: TGNConfig = TGNConf
             "key_user": ev["key_user"],
             "key_device": ev["key_device"],
             "key_source": ev["key_source"],
+            "key_config": ev["key_config"],
             "key_dst": ev["key_dst"],
             "timestamp": int(ev["t"]),
             "features": [float(v) for v in ev["features"]],

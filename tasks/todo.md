@@ -1,40 +1,83 @@
-# TODO — Verifica metriche report.tex (pesi vergini) + re-run ablation + LANL faithful
+# TODO — Aggiunta nodo "configuration" (JA3) al TGN (schema v3 → v4)
 
 ## Contesto
-Verifica empirica delle metriche del report (sospette contraddizioni) con pesi VERGINI per ogni
-test (tutti i run `train_tgn(save=False)` → ri-addestra da zero, `public/` MAI toccato).
-Guard sha256 di `public/` invariato inizio→fine.
+Promuovere la configurazione del client (fingerprint JA3, fallback `conf:guest`) a 5° ruolo
+di nodo. Catena causale: `source → config → device → user → resource` (config sostituisce
+l'edge diretto `source → device`) + binding `config → user`. JA3 bit `features[0]` resta
+come validità TLS (msg_dim=7, node_feat_dim=16 invariati). Architettura invariata per ora.
+Piano completo: /home/gabs/.claude/plans/obiettivo-si-vuole-aggiungere-toasty-rossum.md
 
-## Run eseguiti (2026-06-15)
-- [x] **Run B — sintetico seed 42** (`train_tgn(save=False)`, 200k/15ep/bs=1, solo `src` montato):
-      agg AUC 0.952 | AP 0.896 | agg-recall 70.9% | lat-AUC 0.894 | lat-AP 0.464 |
-      lat-rec@1%FPR(before) 0.141 @FPR 1.3% | routed(after) 0.255 @FPR 4.8%.
-      → Tabella baselines (riga TGN 0.947/0.870/0.900/0.130) CONFERMATA entro rumore single-run.
-- [x] **Run A — ablation multi-seed** (`--profile ablations`, seeds [42,7,123], 40k/12ep):
-      full lat-AUC **0.882±0.012** | agg-AUC 0.947±0.004 (= tabella, esatto).
-      Δ lateral AUC vs full: hist **+0.163** | hashed-id **+0.046** | precursor **+0.013** |
-      struct head **+0.007**.
-- [x] **Run C — LANL faithful** (`eval_lanl.py`, window 500000–1157488, stride 360, 200k ev,
-      265 laterali, picco red-team giorno 7, 2ep, train .25/val .15, **bs=1**):
-      agg/lat AUC **0.776** | lat-rec 15.3% @FPR 2.5% (soglia globale) | routing collassato
-      (val 3 laterali → soglia 0.9992 → recall 0%) | cold-start: warmed AUC 0.74 (151) / cold (110).
+## Edge set per richiesta (5 edge; config sempre presente lato serving)
+- `user → resource` (access, msg) — esistente
+- `device → user` (binding) — esistente
+- `source → config` (binding) — NUOVO
+- `config → device` (binding) — NUOVO
+- `config → user` (binding) — NUOVO
+Ordine commit memoria: source→config, config→device, config→user, device→user, user→resource.
 
-## Contraddizioni trovate e risolte nel report
-1. **lateral AUC "~0.77 multi-seed"** → FALSO. Reale 0.882±0.012 (3 seed), coerente col 0.90
-   single-run. → corretto ovunque (cap.2 caption tab, §4.3, §5.2). [DECISIONE UTENTE: correggi]
-2. **Δ ablation**: hist +0.066→**+0.163**; precursor +0.073→**+0.013** (DEMOTO a marginale, come
-   struct head); struct 0.778/0.770→0.882/0.875. → corretto + precursore declassato. [UTENTE: ok]
-3. **LANL 0.8824/73%/2.18%** = full-span BATCHATO (inaffidabile). Faithful focused = 0.776/15.3%.
-   → **RIMOSSA tutta la sezione LANL** dal report (titolo §4.3 → "Cost-sensitive routing";
-   eliminati i 2 paragrafi LANL+SOTA). [DECISIONE UTENTE: elimina, forse dataset non adatto]
+## Checklist
+- [x] 1. `src/config.py`: `num_configs=40`, slot config in `total_nodes`, `schema_version=4`
+- [x] 2. `src/data/stream_synthetic.py`: range config, config abituali per macchina, conf:guest,
+         config attaccante (theft/lateral new-tool), key_config in eventi, SyntheticStream + layout
+- [x] 3. `src/serve_tgn.py`: SCHEMA_VERSION=4, key_config (default conf:guest), 3 nuovi edge
+- [x] 4. `src/serve_api.py`: `EventIn.key_config`, pass in /infer, /update, /score
+- [x] 5. `src/train_tgn.py`: StreamData config, training loop (3 objective + reroute source→config→device),
+         _replay (config edges), chiamate calibrazione/test
+- [x] 6. `tests/generator.py` + `tests/test_client.py`: key_config + prefix prod_; `tests/test_serve_v2.py` aggiornato a v4
+- [x] 7. Verifica: train breve (checkpoint v4), serve /infer con key_config, test_client
 
-## Non toccato (entro rumore / non richiesto)
-- Tabella baselines sintetica (0.947/0.870/0.900/0.130): confermata multi-seed, lasciata.
-- Numeri routing sintetico §4.3 (13.0→28.6%, FPR 2.3→6.0%, agg 70.3%): single-run come Run B
-  (14.1→25.5%, 1.3→4.8%, 70.9%), entro rumore; non flaggati dall'utente → lasciati.
+## Review
 
-## Verifica finale
-- [x] `public/` sha256 invariato (guard /tmp/public_guard.sha256, `sha256sum -c` OK).
-- [x] Nessun riferimento LANL/0.8824/73%/2.18/SOTA residuo nel report.
-- [x] Ogni numero scritto tracciabile a un output di run (B/A/C) loggato.
-- [~] pdflatex non installato sull'host: struttura/tabella verificate a mano (5 col invariate).
+### Cosa è stato fatto
+- Nodo `configuration` aggiunto come 5° ruolo. Catena: `source → config → device → user → resource`
+  + binding `config → user`. Il vecchio edge diretto `source → device` è stato SOSTITUITO da
+  `source → config` + `config → device` (gated `has_config`; il path legacy resta per dataset
+  senza config, es. LANL). `msg_dim=7` e `node_feat_dim=16` invariati; nessuna modifica a `tgn.py`.
+- Generatore: ogni macchina ha 1-2 config abituali da un pool condiviso; `conf:guest` per client
+  non fingerprinted; furto credenziali alloca `conf:atk-NNN` (mai visto); movimento laterale
+  presenta con prob 0.5 un config "new tool" mai usato da quel device.
+
+### Verifiche eseguite (Docker, immagine graphagate:latest)
+- `py_compile` pulito su tutti i file modificati.
+- Primitive di serving (snippet diretto): schema gate rigetta v1/v2/v3; chain a 5 edge committa
+  i pair_count corretti (source→config, config→device, config→user, device→user, user→resource +
+  aux); default `conf:guest`; fallback `key_source=None` (salta solo source→config). TUTTO OK.
+- Pipeline training completa (20k eventi / 2 epoch / batched): gira end-to-end senza errori,
+  dimensioni coerenti, metriche per-tipo sane (policy AUC 0.95, lateral 0.85). NB: run smoke,
+  NON comparabile ai numeri pubblicati (200k/15ep/bs=1).
+- Live HTTP: serve_api carica un checkpoint v4 (schema_version=4), `/infer` con/senza key_config,
+  `/update`, no-device, dirty-signal → tutti 200 + score validi. `test_client.py` 15s: 1016 eventi,
+  P50 ~10ms, benign specificity 99.7%, nessun errore (recall 0% atteso: modello sotto-addestrato +
+  tutti gli attori cold-start `prod_`).
+
+### Retrain full v4 eseguito (seed 42, 200k/15ep/bs=1, salvato in public/, capacity 50547)
+Confronto con i numeri v3 di riferimento (Run B, stesso seed/config — vedi sopra):
+
+| Metrica | v3 (Run B) | v4 | Δ |
+|---|---|---|---|
+| agg AUC | 0.952 | **0.964** | +0.012 |
+| agg AP | 0.896 | **0.905** | +0.009 |
+| agg recall (routed) | 0.709 | **0.835** | +0.126 |
+| lateral AUC | 0.894 | **0.936** | +0.042 |
+| lateral AP | 0.464 | **0.614** | +0.150 |
+| lateral recall (routed) | 0.255 @4.8%FPR | **0.599** @5.6%FPR | **+0.344** |
+| lateral recall (global @1%FPR) | 0.141 | 0.152 | +0.011 |
+| policy AUC / recall@thr | ~0.95 | 0.967 / 0.941 | ~ |
+| contextual AUC / recall@thr | ~0.99 | 0.990 / 0.970 | ~ |
+
+**Esito:** il nodo config migliora nettamente il movimento laterale (recall routed 0.255→0.599,
+AP +0.150, AUC +0.042) a fronte di un FPR benigno quasi invariato (~5.6% vs 4.8%). Il segnale
+"tool nuovo su device noto" (config→device) + "client che l'utente non usa" (config→user) sono
+esattamente i tell del laterale/furto.
+
+**Caveat (onestà):** (1) single-run — lat-AUC ha rumore GPU ±0.01–0.03, quindi il +0.04 AUC è
+reale ma il segnale robusto è il +0.34 di recall routed; per claim pubblicabili serve multi-seed.
+(2) cred-theft e wiped-cookie hanno **n=0** nello split di test (ultimi 20%): artefatto di split
+(gli slot theft si esauriscono presto nello stream), identico in v3 → non misurabile questa run.
+Il beneficio atteso di config→user sul furto credenziali resta da quantificare con uno split/eval
+che porti gli incidenti theft nel test.
+
+### Follow-up possibili
+- Eval mirata cred-theft (aumentare num_theft_slots o split dedicato) per quantificare config→user.
+- Layer extra al `LinkPredictor` (concordato): valutare solo se serve altra capacità — le metriche
+  attuali sono già migliorate senza, quindi non urgente.

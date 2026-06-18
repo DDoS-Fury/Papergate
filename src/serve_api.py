@@ -145,7 +145,15 @@ class EventIn(BaseModel):
         None,
         description=(
             "Source entity key (client IP / network context). Optional: when omitted "
-            "the source→device edge is skipped (never alias the IP onto key_device)."
+            "the source→config edge is skipped (never alias the IP onto key_device)."
+        ),
+    )
+    key_config: Optional[EntityKey] = Field(
+        None,
+        description=(
+            "Client configuration entity key — the TLS/JA3 fingerprint ('conf:<ja3>'). "
+            "Optional: defaults to the generic 'conf:guest' when the collector cannot "
+            "resolve a fingerprint, so the config node is always present."
         ),
     )
     timestamp: int = Field(..., description="Event time (e.g. Unix epoch, integer).")
@@ -262,7 +270,8 @@ def infer(ev: EventIn, background_tasks: BackgroundTasks) -> ScoreOut:
         score, is_anomaly = score_event(
             STATE.model, STATE.registry, STATE.threshold,
             ev.key_user, ev.key_device, ev.key_dst, ev.timestamp, ev.features, STATE.device,
-            key_source=ev.key_source, threshold_dirty=STATE.threshold_dirty,
+            key_source=ev.key_source, key_config=ev.key_config,
+            threshold_dirty=STATE.threshold_dirty,
             src_feat=ev.src_feat, dst_feat=ev.dst_feat, update=False,
         )
     t1 = time.perf_counter()
@@ -273,6 +282,7 @@ def infer(ev: EventIn, background_tasks: BackgroundTasks) -> ScoreOut:
         "key_user": ev.key_user,
         "key_device": ev.key_device,
         "key_source": ev.key_source,
+        "key_config": ev.key_config,
         "key_dst": ev.key_dst,
         "score": float(score),
         "is_anomaly": bool(is_anomaly),
@@ -291,7 +301,8 @@ def update(ev: EventIn) -> OkOut:
         commit_event(
             STATE.model, STATE.registry,
             ev.key_user, ev.key_device, ev.key_dst, ev.timestamp, ev.features, STATE.device,
-            key_source=ev.key_source, src_feat=ev.src_feat, dst_feat=ev.dst_feat,
+            key_source=ev.key_source, key_config=ev.key_config,
+            src_feat=ev.src_feat, dst_feat=ev.dst_feat,
         )
     return OkOut()
 
@@ -305,7 +316,8 @@ def score(ev: EventIn, background_tasks: BackgroundTasks) -> ScoreOut:
         s, is_anomaly = score_event(
             STATE.model, STATE.registry, STATE.threshold,
             ev.key_user, ev.key_device, ev.key_dst, ev.timestamp, ev.features, STATE.device,
-            key_source=ev.key_source, threshold_dirty=STATE.threshold_dirty,
+            key_source=ev.key_source, key_config=ev.key_config,
+            threshold_dirty=STATE.threshold_dirty,
             src_feat=ev.src_feat, dst_feat=ev.dst_feat, update=True,
         )
     t1 = time.perf_counter()
@@ -316,6 +328,7 @@ def score(ev: EventIn, background_tasks: BackgroundTasks) -> ScoreOut:
         "key_user": ev.key_user,
         "key_device": ev.key_device,
         "key_source": ev.key_source,
+        "key_config": ev.key_config,
         "key_dst": ev.key_dst,
         "score": float(s),
         "is_anomaly": bool(is_anomaly),

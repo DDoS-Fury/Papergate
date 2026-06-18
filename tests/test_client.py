@@ -33,6 +33,8 @@ async def test_client(host="localhost", port=8888, duration_seconds=120, no_devi
                 event["key_device"] = f"prod_{event['key_device']}"
             if event.get("key_source") is not None:
                 event["key_source"] = f"prod_{event['key_source']}"
+            if event.get("key_config") is not None:
+                event["key_config"] = f"prod_{event['key_config']}"
                 
             key_actor = event["key_user"]
             

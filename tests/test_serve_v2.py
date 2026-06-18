@@ -1,11 +1,13 @@
-"""Unit tests for the v2 serving path (4 nodes, 3 edges) — no trained checkpoint needed.
+"""Unit tests for the v4 serving path (5 nodes, up to 5 edges) — no trained checkpoint needed.
 
 Covers:
-  * the schema_version gate (v1 checkpoints are rejected with a clear error);
-  * the full source→device→user→resource chain: key admission, per-edge commits and
-    the auxiliary (device, resource) habituality counter;
-  * the ``key_source=None`` fallback (no client IP): the source→device edge is
-    skipped and no source node is admitted.
+  * the schema_version gate (v1/v2/v3 checkpoints are rejected with a clear error);
+  * the full source→config→device→user→resource chain plus the config→user binding:
+    key admission, per-edge commits and the auxiliary (device, resource) habituality
+    counter;
+  * the ``key_config`` default (``conf:guest`` when omitted);
+  * the ``key_source=None`` fallback (no client IP): the source→config edge is skipped
+    and no source node is admitted.
 
 Run inside the project's Docker image (torch required):
 
@@ -24,7 +26,7 @@ FEAT = [1.0, 0.0, 0.0, 0.0, 0.0, 0.5, 0.5]
 
 def _hp(**overrides):
     hp = {
-        "schema_version": 3,
+        "schema_version": 4,
         "capacity": 64,
         "node_feat_dim": 16,
         "msg_dim": 7,
@@ -48,8 +50,8 @@ def _fresh():
 
 
 def test_schema_version_gate():
-    # Older schemas (v1 2-edge, v2 bare-IP keys) are both incompatible.
-    for stale in (1, 2):
+    # Older schemas (v1 2-edge, v2 bare-IP keys, v3 4-node) are all incompatible.
+    for stale in (1, 2, 3):
         with pytest.raises(RuntimeError, match="schema_version"):
             build_model(_hp(schema_version=stale), DEVICE)
     # A checkpoint without the field at all must also be rejected.
@@ -59,26 +61,40 @@ def test_schema_version_gate():
         build_model(hp, DEVICE)
 
 
-def test_three_edge_chain_commits():
+def test_five_edge_chain_commits():
     model, reg = _fresh()
     score, is_anom = score_event(
         model, reg, 2.0, "alice", "tpm:0001", "/api/v1/documents", 100, FEAT, DEVICE,
-        key_source="src:10.0.0.7", update=True,
+        key_source="src:10.0.0.7", key_config="conf:0001", update=True,
     )
     assert 0.0 <= score <= 1.0 and not is_anom
-    keys = ["alice", "tpm:0001", "/api/v1/documents", "src:10.0.0.7"]
-    ui, di, ri, si = (reg.get(k) for k in keys)
-    assert None not in (ui, di, ri, si)
-    assert model.pair_count[(si, di)] == 1   # source→device binding
+    keys = ["alice", "tpm:0001", "/api/v1/documents", "src:10.0.0.7", "conf:0001"]
+    ui, di, ri, si, ci = (reg.get(k) for k in keys)
+    assert None not in (ui, di, ri, si, ci)
+    assert model.pair_count[(si, ci)] == 1   # source→config binding
+    assert model.pair_count[(ci, di)] == 1   # config→device binding
+    assert model.pair_count[(ci, ui)] == 1   # config→user binding
     assert model.pair_count[(di, ui)] == 1   # device→user binding
     assert model.pair_count[(ui, ri)] == 1   # user→resource access
     assert model.pair_count[(di, ri)] == 1   # aux (device, resource) counter — no edge
     # The aux counter must not inflate the device's activity count (one bump per
     # event, from its binding-edge commit).
     assert model.src_count[di] == 1
+    # config is the src of two edges (config→device, config→user).
+    assert model.src_count[ci] == 2
     assert int(model.memory.last_update[si]) == 100
     # src:10.0.0.7 is RFC1918 → the source node's internal bit (node_feat[*,5]) is set.
     assert model.node_feat[si, 5].item() == 1.0
+
+
+def test_key_config_defaults_to_guest():
+    model, reg = _fresh()
+    score_event(model, reg, 2.0, "alice", "tpm:0001", "/api/v1/documents", 100, FEAT,
+                DEVICE, key_source="src:10.0.0.7", update=True)  # no key_config
+    assert reg.get("conf:guest") is not None
+    ci = reg.get("conf:guest")
+    ui = reg.get("alice")
+    assert model.pair_count[(ci, ui)] == 1   # the guest config still binds to the user
 
 
 def test_source_internal_external_feature():
@@ -99,33 +115,38 @@ def test_source_internal_external_feature():
 def test_key_source_none_skips_source_edge():
     model, reg = _fresh()
     score_event(model, reg, 2.0, "alice", "tpm:0001", "/api/v1/documents", 100, FEAT,
-                DEVICE, key_source="src:10.0.0.7", update=True)
+                DEVICE, key_source="src:10.0.0.7", key_config="conf:0001", update=True)
     si = reg.get("src:10.0.0.7")
-    di = reg.get("tpm:0001")
+    ci = reg.get("conf:0001")
     n_before = len(reg)
 
     score, _ = score_event(
         model, reg, 2.0, "alice", "tpm:0001", "/api/v1/documents", 200, FEAT, DEVICE,
-        update=True,  # no key_source
+        key_config="conf:0001", update=True,  # no key_source
     )
     assert 0.0 <= score <= 1.0
     assert len(reg) == n_before                       # nothing new admitted
-    assert model.pair_count[(si, di)] == 1            # source edge NOT advanced
+    assert model.pair_count[(si, ci)] == 1            # source→config edge NOT advanced
     assert model.pair_count[(reg.get("alice"), reg.get("/api/v1/documents"))] == 2
 
 
 def test_commit_event_full_chain():
     model, reg = _fresh()
     commit_event(model, reg, "bob", "ck:0042-g0", "/api/v1/personnel", 50, FEAT, DEVICE,
-                 key_source="src:100.64.0.9")
-    ui, di, ri, si = (reg.get(k) for k in
-                      ["bob", "ck:0042-g0", "/api/v1/personnel", "src:100.64.0.9"])
-    assert model.pair_count[(si, di)] == 1
+                 key_source="src:100.64.0.9", key_config="conf:0007")
+    ui, di, ri, si, ci = (reg.get(k) for k in
+                          ["bob", "ck:0042-g0", "/api/v1/personnel",
+                           "src:100.64.0.9", "conf:0007"])
+    assert model.pair_count[(si, ci)] == 1
+    assert model.pair_count[(ci, di)] == 1
+    assert model.pair_count[(ci, ui)] == 1
     assert model.pair_count[(di, ui)] == 1
     assert model.pair_count[(ui, ri)] == 1
     assert model.pair_count[(di, ri)] == 1
-    # Without the IP the chain still commits its two remaining edges.
-    commit_event(model, reg, "bob", "ck:0042-g0", "/api/v1/personnel", 60, FEAT, DEVICE)
-    assert model.pair_count[(si, di)] == 1
+    # Without the IP the chain still commits its remaining edges (source→config skipped).
+    commit_event(model, reg, "bob", "ck:0042-g0", "/api/v1/personnel", 60, FEAT, DEVICE,
+                 key_config="conf:0007")
+    assert model.pair_count[(si, ci)] == 1
+    assert model.pair_count[(ci, di)] == 2
     assert model.pair_count[(di, ui)] == 2
     assert model.pair_count[(ui, ri)] == 2
