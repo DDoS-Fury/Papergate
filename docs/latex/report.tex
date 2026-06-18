@@ -251,4 +251,168 @@ Senza l'ausilio delle etichette (unsupervised), il lateral movement non mostra t
 \subsection{Anti-poisoning gate in live stream}
 
 Il design offline del testing replica 1:1 il routing live, prevenendo fenomeni di \textit{data leakage}. Tuttavia, l'ambiente di deployment espone alla minaccia di \textit{data poisoning}. Un aggressore persistente potrebbe infiltrarsi immettendo attacchi lenti per abituare il grafo ai propri comportamenti nocivi, sfalsando lentamente lo scoring e la similarità del coseno. Il problema è mitigato dal gate anti-avvelenamento: sia l'internal state della \texttt{TGNMemory} che le code a scorrimento dei vicini temporali vengono aggiornate e \textit{committate} in RAM solo nel caso in cui lo score della rete si posizioni sotto il limite calcolato per le minacce ($< threshold$). I pacchetti classificati come anomalia, inviati a OPA, vengono ignorati dal sistema di Intelligenza Artificiale, preservando incontaminato lo stato vettoriale del modello.
+
+\chapter{Evoluzione del modello: il nodo \textit{Configuration} (schema v4)}
+\label{ch:v4}
+
+\section{Motivazione}
+
+Il modello descritto nel capitolo precedente (schema v3) modella ogni richiesta come una catena causale a tre archi su quattro ruoli di nodo, \textit{source}$\rightarrow$\textit{device}$\rightarrow$\textit{user}$\rightarrow$\textit{resource}. In quello schema il \textit{fingerprint} TLS del client (JA3) è soltanto un \emph{bit di validità} (\texttt{features[0]}): segnala se l'handshake è regolare, ma non è un'\emph{identità}. Questo lascia scoperti due vettori d'attacco centrali nella ZTA:
+\begin{itemize}
+    \item \textit{Movimento laterale con tooling nuovo}: un dispositivo già noto, compromesso, inizia a parlare con un client/tool mai osservato su quella macchina. La validità TLS resta intatta (il tool usa una libreria regolare), ma il \emph{fingerprint} è nuovo.
+    \item \textit{Furto di credenziali}: un attaccante che riusa le credenziali della vittima da un proprio client presenta un JA3 \emph{diverso} da quello abituale dell'utente, pur con ruolo/clearance leciti (l'attaccante eredita i permessi della vittima).
+\end{itemize}
+Entrambi sono \emph{signal-clean} e \emph{policy-clean}: indistinguibili sintatticamente dal traffico benigno se non per l'\emph{identità della configurazione}. Da qui la promozione della configurazione del client a \textbf{quinto ruolo di nodo}.
+
+\section{Architettura del nodo \textit{Configuration}}
+
+La configurazione è identificata da \texttt{conf:<ja3>} quando il \emph{fingerprint} è disponibile, altrimenti dal generico \texttt{conf:guest} (sempre presente lato serving, default server-side). Il JA3 mantiene quindi un \emph{doppio ruolo}, ortogonale: resta il bit di validità TLS in \texttt{features[0]} (catturato dalla \textit{Feature head}) \emph{e} diventa un'identità di nodo (catturata dalla memoria temporale e dalle \textit{history features}). Per costruzione la dimensione del messaggio (\texttt{msg\_dim}=7) e quella delle feature statiche di nodo (\texttt{node\_feat\_dim}=16) restano invariate: il nodo config, come i \textit{source}, non porta attributi statici dedicati ma solo memoria ricorrente, hashed-identity e slot di trust. Lo schema dell'evento passa a \texttt{schema\_version}=4 (i checkpoint v1/v2/v3 sono rifiutati al caricamento).
+
+\subsection{Topologia: la catena causale a 5 archi}
+
+Il nodo config è \emph{inserito tra source e device} nella catena causale, sostituendo l'arco diretto \textit{source}$\rightarrow$\textit{device} con la coppia \textit{source}$\rightarrow$\textit{config}$\rightarrow$\textit{device}, e aggiungendo un \emph{binding} discriminante \textit{config}$\rightarrow$\textit{user}. Il cammino più lungo è quindi:
+\[
+\textit{source} \;\rightarrow\; \textit{config} \;\rightarrow\; \textit{device} \;\rightarrow\; \textit{user} \;\rightarrow\; \textit{resource}.
+\]
+
+\begin{figure}[ht!]
+\centering
+\begin{tikzpicture}[
+    font=\sffamily\small,
+    nd/.style={draw, rounded corners, align=center, minimum height=0.85cm, minimum width=1.9cm, inner sep=3pt},
+    src/.style={nd, fill=blue!8},
+    cfg/.style={nd, fill=orange!18},
+    dev/.style={nd, fill=blue!8},
+    usr/.style={nd, fill=green!10},
+    res/.style={nd, fill=red!8},
+    ax/.style={->, >=Stealth, thick},
+    bnd/.style={->, >=Stealth, thick, densely dashed},
+    lbl/.style={font=\sffamily\scriptsize\itshape, midway}
+]
+\node[src] (S) {source\\\scriptsize IP};
+\node[cfg, right=1.4cm of S] (C) {config\\\scriptsize JA3};
+\node[dev, right=1.4cm of C] (D) {device\\\scriptsize TPM/cookie};
+\node[usr, right=1.4cm of D] (U) {user};
+\node[res, right=1.4cm of U] (R) {resource};
+
+\draw[bnd] (S) -- (C) node[lbl, above]{bind};
+\draw[bnd] (C) -- (D) node[lbl, above]{bind};
+\draw[bnd] (D) -- (U) node[lbl, above]{bind};
+\draw[ax]  (U) -- (R) node[lbl, above]{access};
+
+% binding aggiuntivo config -> user
+\draw[bnd] (C) to[out=-35, in=-145] node[lbl, below]{bind (furto cred.)} (U);
+\end{tikzpicture}
+\caption{Catena causale dello schema v4. I \textit{binding edge} (tratteggiati) portano messaggio-zero; il solo \textit{access edge} \textit{user}$\rightarrow$\textit{resource} porta il messaggio a 7 dimensioni. Lo score dell'evento è il \emph{massimo} sui suoi archi. L'arco diretto \textit{source}$\rightarrow$\textit{device} di v3 è sostituito da \textit{source}$\rightarrow$\textit{config}$\rightarrow$\textit{device}; il \textit{binding} \textit{config}$\rightarrow$\textit{user} discrimina il furto di credenziali (un client diverso da quello abituale della vittima).}
+\label{fig:v4chain}
+\end{figure}
+
+\begin{table}[ht!]
+\centering
+\renewcommand{\arraystretch}{1.3}
+\begin{tabular}{l l l}
+\hline
+\textbf{Arco} & \textbf{Tipo} & \textbf{Stato} \\
+\hline
+\textit{user} $\rightarrow$ \textit{resource}  & access (msg 7-dim) & esistente \\
+\textit{device} $\rightarrow$ \textit{user}    & binding (msg-zero) & esistente \\
+\textit{source} $\rightarrow$ \textit{config}  & binding (msg-zero) & nuovo (v4) \\
+\textit{config} $\rightarrow$ \textit{device}  & binding (msg-zero) & nuovo (v4) \\
+\textit{config} $\rightarrow$ \textit{user}    & binding (msg-zero) & nuovo (v4) \\
+\hline
+\end{tabular}
+\caption{Edge set per richiesta nello schema v4 (config sempre presente lato serving). Ordine di commit in memoria, identico in training/replay/serving: \textit{source}$\rightarrow$\textit{config}, \textit{config}$\rightarrow$\textit{device}, \textit{config}$\rightarrow$\textit{user}, \textit{device}$\rightarrow$\textit{user}, \textit{user}$\rightarrow$\textit{resource}. Fallback coerenti con la gestione opzionale già esistente: device assente $\Rightarrow$ \textit{config}$\rightarrow$\textit{user} fa da ponte; source assente $\Rightarrow$ si salta solo \textit{source}$\rightarrow$\textit{config}; per dataset senza config (es. LANL) il \textit{gating} \texttt{has\_config} ripristina il percorso legacy \textit{source}$\rightarrow$\textit{device}.}
+\label{tab:v4edges}
+\end{table}
+
+L'architettura core (memoria ricorrente, \textit{GraphAttentionEmbedding} multi-hop, \textit{Dual Head Scorer}) è \emph{invariata}: il modello è agnostico al numero di archi per evento, e i nuovi \textit{binding} riusano la stessa primitiva di scoring degli archi esistenti (con \textit{history features} senza ausiliario, come per \textit{device}$\rightarrow$\textit{user}). Il generatore sintetico è esteso coerentemente: ogni macchina riceve 1--2 configurazioni abituali da un pool condiviso; il movimento laterale presenta con probabilità $0.5$ un \emph{tool} (config) mai usato da quel device; il furto di credenziali alloca al client attaccante un JA3 mai visto (\texttt{conf:atk-NNN}).
+
+% ============================ RISULTATI v4 ============================
+\section{Risultati: il contributo del nodo config}
+\label{sec:v4results}
+
+La valutazione segue lo stesso protocollo del capitolo precedente (replay per-evento attraverso l'esatto codice di serving, split cronologico 70/10/20, soglia cost-sensitive instradata). Si riportano due confronti complementari: (i) il \emph{deployable} v3 vs v4 all'\textit{operating point} pubblicato (singola run, 200\,000 eventi / 15 epoche, \texttt{seed}=42), e (ii) la \emph{validazione mirata} del nodo config — un'ablazione controllata \emph{a parità di dati} su seed multipli.
+
+\subsection{Confronto del modello pubblicato (v3 $\rightarrow$ v4)}
+
+La Tabella~\ref{tab:v3v4} confronta l'artefatto deployabile prima e dopo l'introduzione del nodo config, al medesimo \textit{operating point} (decisione cost-sensitive instradata sul segnale). Il guadagno più rilevante è sul \textbf{movimento laterale}: il \textit{recall} operativo passa da $\sim$25.5\% a $\sim$59.9\% (più che raddoppiato), con AP $0.464\rightarrow0.614$ e AUC $0.894\rightarrow0.936$, a fronte di un FPR benigno quasi invariato ($\sim$4.8\% $\rightarrow$ $\sim$5.6\%). È il comportamento atteso per costruzione: \textit{config}$\rightarrow$\textit{device} cattura il ``tool nuovo su device noto'' e \textit{config}$\rightarrow$\textit{user} il ``client che quell'utente non usa abitualmente'', cioè i \textit{tell} del laterale e del furto di credenziali.
+
+\begin{table}[ht!]
+\centering
+\renewcommand{\arraystretch}{1.4}
+\begin{tabular}{l c c c}
+\hline
+\textbf{Metrica (test set)} & \textbf{v3 (4 nodi)} & \textbf{v4 (nodo config)} & $\Delta$ \\
+\hline
+AUC aggregata                    & 0.952 & \textbf{0.964} & $+0.012$ \\
+AP aggregata                     & 0.896 & \textbf{0.905} & $+0.009$ \\
+Recall aggregata (instradata)    & 0.709 & \textbf{0.835} & $+0.126$ \\
+\hline
+Lateral --- AUC                  & 0.894 & \textbf{0.936} & $+0.042$ \\
+Lateral --- AP                   & 0.464 & \textbf{0.614} & $+0.150$ \\
+Lateral --- Recall (instradata)  & 0.255 & \textbf{0.599} & $+0.344$ \\
+Lateral --- Recall (@1\%FPR)     & 0.141 & 0.152 & $+0.011$ \\
+\hline
+Policy --- AUC / Recall@thr      & $\sim$0.95 / -- & 0.967 / 0.941 & $\sim$ \\
+Contextual --- AUC / Recall@thr  & $\sim$0.99 / -- & 0.990 / 0.970 & $\sim$ \\
+\hline
+FPR benigno (instradato)         & $\sim$0.048 & $\sim$0.056 & $+0.008$ \\
+\hline
+\end{tabular}
+\caption{Confronto del modello \emph{deployabile} v3 vs v4 sul medesimo test set sintetico (replay per-evento, \texttt{num\_events}=200\,000, \texttt{seed}=42, decisione cost-sensitive instradata). \emph{Nota metodologica}: valori da \emph{singola} run (training GPU non-deterministico, $\pm0.01$--$0.03$ per run sul lateral AUC); il segnale robusto è il salto di \textit{recall} operativo del laterale ($+0.344$), ben oltre il rumore single-run. Le classi \textit{policy} (OPA-owned) e \textit{contextual} (rule-trivial) restano invariate per costruzione. Il confronto con le baseline non-relazionali (Tab.~\ref{tab:baselines}) è immutato: nessuna baseline modella il nodo config, quindi il vantaggio di v4 si \emph{somma} a quello già documentato del TGN sul segnale temporale.}
+\label{tab:v3v4}
+\end{table}
+
+\subsection{Validazione mirata: il furto di credenziali}
+
+L'\textit{operating point} pubblicato non permetteva di misurare il furto di credenziali: gli slot attaccante del generatore si esauriscono presto (configurazione di default \texttt{num\_theft\_slots}=64, \texttt{p\_cred\_theft}=0.0012 $\Rightarrow$ tutti gli incidenti partono entro $\sim$l'evento 53k, dentro il 70\% di \emph{train}), lasciando \emph{zero} incidenti di furto e \emph{zero} cookie-wipe nello split di test. Per quantificare il contributo specifico del binding \textit{config}$\rightarrow$\textit{user} si è quindi eseguita una \textbf{validazione mirata} su uno stream \emph{theft-rich} (slot e tasso d'incidente aumentati \emph{solo per questa valutazione}, così che gli incidenti si distribuiscano sull'intero stream incluso il test), confrontando — \emph{a parità di dati}, su 3 \texttt{seed} (media$\pm$dev.std) e con \texttt{save=False} (l'artefatto in \texttt{public/} non viene toccato) — il modello v4 completo contro la sua \emph{ablazione del nodo config} (il modello ricade sul percorso legacy \textit{source}$\rightarrow$\textit{device}, cioè $\approx$v3 sugli stessi dati). I risultati sono in Tabella~\ref{tab:theft}.
+
+\begin{table}[ht!]
+\centering
+\renewcommand{\arraystretch}{1.4}
+\begin{tabular}{l c c c}
+\hline
+\textbf{Metrica (test, theft-rich)} & \textbf{v4 (nodo config)} & \textbf{$\approx$v3 (ablazione)} & $\Delta$ \\
+\hline
+Furto credenziali --- AUC        & $0.729\pm0.088$ & $0.676\pm0.036$ & $+0.053$ \\
+Furto credenziali --- Recall@thr & $\mathbf{0.314}\pm0.107$ & $0.206\pm0.039$ & $+0.108$ \\
+\hline
+Lateral --- AUC                  & $0.919\pm0.018$ & $0.913\pm0.007$ & $+0.006$ \\
+Lateral --- Recall@thr           & $\mathbf{0.469}\pm0.088$ & $0.334\pm0.014$ & $+0.135$ \\
+\hline
+AUC aggregata                    & $0.958\pm0.011$ & $0.956\pm0.005$ & $+0.002$ \\
+FPR benigno (cookie-wipe)        & $0.060\pm0.021$ & $0.038\pm0.033$ & $+0.022$ \\
+\hline
+\end{tabular}
+\caption{Validazione mirata del nodo config (3 \texttt{seed} [42,7,123], 80\,000 eventi / 12 epoche, stream \emph{theft-rich}: slot 400/120, \texttt{p\_theft}=0.002, \texttt{p\_wipe}=0.0008; \texttt{save=False}). Lo split mirato porta finalmente $n=452$ eventi di furto nel test (erano $0$). L'ablazione disattiva il nodo config \emph{a parità di stream} (percorso legacy \textit{source}$\rightarrow$\textit{device}). Il nodo config aumenta il \textit{recall} sul furto credenziali ($+0.108$) e sul laterale ($+0.135$); l'AUC sul furto migliora ($+0.053$) ma con dev.std ampia (conteggi per-seed modesti), quindi il segnale robusto è il \textit{recall} e il fatto che la detection diventi \emph{possibile}. L'aggregata è invariata. Si osserva un lieve aumento del FPR benigno sui cookie-wipe ($+0.022$, entro le bande di dev.std): il binding \textit{config}$\rightarrow$\textit{user} è leggermente più sensibile sui dispositivi re-keyed, trade-off accettabile dato il guadagno sul recall.}
+\label{tab:theft}
+\end{table}
+
+\subsection{Sweep architetturale}
+\label{sec:archsweep}
+
+L'introduzione di un quinto nodo (e di due archi aggiuntivi per richiesta) suggerisce di verificare se al modello serva \emph{più capacità}. Si sono valutate tre direzioni — un layer nascosto aggiuntivo nell'MLP della \textit{Feature head} (\texttt{link\_pred\_hidden\_layers}=3), una memoria ricorrente più ampia (\texttt{memory\_dim}=384) e più teste di attenzione nei \textit{TransformerConv} (\texttt{gnn\_heads}=8) — più la loro combinazione, sempre su 3 \texttt{seed} con \texttt{save=False}. La Tabella~\ref{tab:archsweep} riporta l'esito.
+
+\begin{table}[ht!]
+\centering
+\renewcommand{\arraystretch}{1.4}
+\begin{tabular}{l c c c c}
+\hline
+\textbf{Variante} & \textbf{Lateral AUC} & \textbf{Lateral AP} & \textbf{Lateral Rec@thr} & \textbf{agg AUC} \\
+\hline
+\textbf{baseline v4}     & $0.929\pm0.009$ & $\mathbf{0.645}\pm0.023$ & $\mathbf{0.607}\pm0.060$ & $\mathbf{0.966}\pm0.005$ \\
+$+1$ layer MLP           & $0.931\pm0.004$ & $0.641\pm0.035$ & $0.560\pm0.037$ & $0.965\pm0.005$ \\
+$+$memory (384)          & $0.905\pm0.015$ & $0.543\pm0.051$ & $0.441\pm0.050$ & $0.957\pm0.006$ \\
+$+$heads (8)             & $0.896\pm0.037$ & $0.558\pm0.130$ & $0.459\pm0.161$ & $0.956\pm0.015$ \\
+$+$mem$+$heads$+$layer    & $0.913\pm0.025$ & $0.526\pm0.105$ & $0.443\pm0.111$ & $0.958\pm0.011$ \\
+\hline
+\end{tabular}
+\caption{Sweep architetturale (3 \texttt{seed} [42,7,123], 40\,000 eventi / 12 epoche, \texttt{save=False}). Nessun aumento di capacità migliora la classe \textit{model-owned} (movimento laterale): il layer MLP extra è \emph{neutro} sull'AUC ($+0.002$, entro la dev.std) ma riduce il \textit{recall} operativo; memoria più ampia e più teste \emph{peggiorano} AUC/AP/recall e \emph{aumentano} la varianza tra seed (es. \texttt{gnn\_heads}=8: recall $0.459\pm0.161$). Il collo di bottiglia del laterale non è la capacità parametrica ma il \emph{segnale} (history features + memoria temporale), coerentemente con l'ablation a 3 seed del Cap.~1 (history features $+0.163$ AUC, dominante). \textbf{Decisione}: si mantiene l'architettura corrente; il \textit{deployable} non viene modificato.}
+\label{tab:archsweep}
+\end{table}
+
+\subsection{Sintesi}
+
+Il nodo \textit{configuration} (v4) migliora sostanzialmente il movimento laterale (recall operativo $+0.344$ all'\textit{operating point} pubblicato) e abilita la rilevazione del furto di credenziali (recall $+0.108$ vs l'ablazione a parità di dati), senza costi architetturali: \texttt{msg\_dim} e \texttt{node\_feat\_dim} restano invariati, e lo sweep conferma che la capacità attuale è già adeguata. Il vantaggio si \emph{somma} a quello già documentato del TGN sulle baseline non-relazionali (Tab.~\ref{tab:baselines}), che non modellano la configurazione del client.
+
 \end{document}

@@ -56,6 +56,8 @@ def build_model(hp: dict, device: torch.device) -> ZTATemporalGraphNetwork:
         hash_buckets=int(hp.get("hash_buckets", 10000)),
         hash_dim=int(hp.get("hash_dim", 16)),
         hist_feat_dim=int(hp.get("hist_feat_dim", 6)),
+        gnn_heads=int(hp.get("gnn_heads", 4)),
+        link_pred_hidden_layers=int(hp.get("link_pred_hidden_layers", 2)),
     ).to(device)
     # Kill-chain precursor prior knobs (serving-time; not in the state_dict).
     model.precursor_half_life = float(hp.get("precursor_half_life", 100000.0))

@@ -90,6 +90,12 @@ class TGNConfig:
     time_dim: int = 32
     memory_dim: int = 256
     num_hops: int = 3
+    # Attention heads of each TransformerConv in the GraphAttentionEmbedding. Persisted
+    # in the checkpoint hyper-parameters so serving rebuilds the same architecture.
+    gnn_heads: int = 4
+    # Number of hidden Linear layers in the feature-head MLP (LinkPredictor) before the
+    # output unit. 2 = the historical layout (lin_in + 1 mid + out). Also persisted.
+    link_pred_hidden_layers: int = 2
     hash_buckets: int = 100000
     hash_dim: int = 16
     # Temporal neighbours kept per node in the (bounded, in-memory) neighbour loader.
