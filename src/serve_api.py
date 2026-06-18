@@ -273,6 +273,7 @@ def infer(ev: EventIn, background_tasks: BackgroundTasks) -> ScoreOut:
             key_source=ev.key_source, key_config=ev.key_config,
             threshold_dirty=STATE.threshold_dirty,
             src_feat=ev.src_feat, dst_feat=ev.dst_feat, update=False,
+            guest_device_fallback=bool(STATE.hp.get("guest_device_fallback", False)),
         )
     t1 = time.perf_counter()
     sys_stats = get_sys_stats()
@@ -303,6 +304,7 @@ def update(ev: EventIn) -> OkOut:
             ev.key_user, ev.key_device, ev.key_dst, ev.timestamp, ev.features, STATE.device,
             key_source=ev.key_source, key_config=ev.key_config,
             src_feat=ev.src_feat, dst_feat=ev.dst_feat,
+            guest_device_fallback=bool(STATE.hp.get("guest_device_fallback", False)),
         )
     return OkOut()
 
@@ -319,6 +321,7 @@ def score(ev: EventIn, background_tasks: BackgroundTasks) -> ScoreOut:
             key_source=ev.key_source, key_config=ev.key_config,
             threshold_dirty=STATE.threshold_dirty,
             src_feat=ev.src_feat, dst_feat=ev.dst_feat, update=True,
+            guest_device_fallback=bool(STATE.hp.get("guest_device_fallback", False)),
         )
     t1 = time.perf_counter()
     sys_stats = get_sys_stats()

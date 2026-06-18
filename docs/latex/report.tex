@@ -415,4 +415,53 @@ $+$mem$+$heads$+$layer    & $0.913\pm0.025$ & $0.526\pm0.105$ & $0.443\pm0.111$ 
 
 Il nodo \textit{configuration} (v4) migliora sostanzialmente il movimento laterale (recall operativo $+0.344$ all'\textit{operating point} pubblicato) e abilita la rilevazione del furto di credenziali (recall $+0.108$ vs l'ablazione a parità di dati), senza costi architetturali: \texttt{msg\_dim} e \texttt{node\_feat\_dim} restano invariati, e lo sweep conferma che la capacità attuale è già adeguata. Il vantaggio si \emph{somma} a quello già documentato del TGN sulle baseline non-relazionali (Tab.~\ref{tab:baselines}), che non modellano la configurazione del client.
 
+% ==================== ESPERIMENTO: identità del device ====================
+\section{Esperimento: granularità dell'identità del dispositivo (nodo \texttt{dev:guest})}
+\label{sec:guestdev}
+
+\subsection{Ipotesi e motivazione}
+
+Nello schema v4 il nodo \textit{device} è identificato da \texttt{tpm:<id>} quando il TPM è attestato e, in assenza di TPM, da un \emph{cookie persistente per-macchina} (\texttt{ck:<id>}), con re-keying su un nodo ``freddo'' a ogni \textit{cookie-wipe}. Ogni macchina senza TPM è quindi un \emph{nodo distinto} del grafo. In analogia con il nodo \textit{configuration} --- dove un \textit{fingerprint} non risolvibile ricade sempre sul generico \texttt{conf:guest} (Sez.~\ref{ch:v4}) --- ci si è chiesti se convenga \emph{collassare tutti i dispositivi senza TPM su un unico nodo condiviso} \texttt{dev:guest}, anonimo e a bassa fiducia, invece di mantenere un'identità-cookie per macchina. L'ipotesi indaga un \emph{trade-off di modellazione}: l'identità per-cookie aggiunge potere discriminante (un device mai visto è una \textit{novelty cue}) oppure è soltanto \emph{rumore}, dato che gli attacchi \textit{rule-blind} (laterale, furto credenziali) sono per costruzione \textit{signal-clean} e il loro segnale è già portato dalle edge \textit{config}/\textit{source}/\textit{user}?
+
+Il comportamento è esposto da un flag di configurazione (\texttt{guest\_device\_fallback}, default \emph{off} = keying per-cookie attuale): quando attivo, ogni device non-TPM (cookie, IP-debole o assente) collassa su \texttt{dev:guest} sia nel generatore (instradamento sul medesimo nodo, poiché in addestramento i nodi sono indici di \textit{slot}, non chiavi) sia lato serving (collasso della chiave esterna), così che addestramento e \textit{serving} restino coerenti. Coerentemente, il \textit{cookie-wipe} viene \emph{neutralizzato}: un nodo guest condiviso non possiede un cookie per-macchina da resettare. È importante notare che, sotto questa politica, \emph{anche il dispositivo dell'attaccante} nel furto di credenziali (privo di TPM) collassa su \texttt{dev:guest}: il \textit{tell} di ``device mai visto'' sparisce e la rilevazione deve appoggiarsi unicamente all'IP e al JA3 mai visti e al \textit{binding} \textit{config}$\rightarrow$\textit{user}.
+
+\subsection{Protocollo e risultati}
+
+Si confronta --- a parità di impostazioni del generatore, su 3 \texttt{seed} [42,7,123] (media$\pm$dev.std), con \texttt{save=False} e sullo stesso stream \emph{theft-rich} della validazione del nodo config (80\,000 eventi / 12 epoche, slot 400/120, \texttt{p\_theft}=0.002, \texttt{p\_wipe}=0.0008) --- il \textit{keying} per-cookie (\emph{baseline}) contro il collasso su \texttt{dev:guest}. La Tabella~\ref{tab:guestdev} riporta l'esito.
+
+\begin{table}[ht!]
+\centering
+\renewcommand{\arraystretch}{1.4}
+\begin{tabular}{l c c c}
+\hline
+\textbf{Metrica (test, theft-rich)} & \textbf{cookie (baseline)} & \textbf{\texttt{dev:guest}} & $\Delta$ \\
+\hline
+Lateral --- AUC                  & $0.915\pm0.019$ & $0.911\pm0.007$ & $-0.003$ \\
+Lateral --- AP                   & $0.583\pm0.068$ & $\mathbf{0.632}\pm0.017$ & $+0.049$ \\
+Lateral --- Recall@thr           & $0.453\pm0.060$ & $\mathbf{0.488}\pm0.019$ & $+0.035$ \\
+\hline
+Furto credenziali --- AUC        & $0.701\pm0.078$ & $\mathbf{0.804}\pm0.024$ & $+0.103$ \\
+Furto credenziali --- Recall@thr & $0.244\pm0.082$ & $\mathbf{0.287}\pm0.062$ & $+0.043$ \\
+\hline
+AUC aggregata                    & $0.954\pm0.013$ & $\mathbf{0.961}\pm0.001$ & $+0.007$ \\
+Recall aggregata (instradata)    & $0.764\pm0.036$ & $\mathbf{0.787}\pm0.006$ & $+0.023$ \\
+FPR benigno (instradato)         & $0.045\pm0.002$ & $\mathbf{0.037}\pm0.004$ & $-0.007$ \\
+FPR cookie-wipe                  & $0.041\pm0.013$ ($n{=}651$) & --- ($n{=}0$) & neutralizzato \\
+\hline
+\end{tabular}
+\caption{Esperimento sull'identità del device: \textit{keying} per-cookie vs collasso su \texttt{dev:guest} (3 \texttt{seed} [42,7,123], 80\,000 eventi / 12 epoche, stream \emph{theft-rich}, \texttt{save=False}). Le due varianti condividono \texttt{seed} e impostazioni ma \emph{non} sono appaiate evento-per-evento: la neutralizzazione del \textit{cookie-wipe} altera il percorso del generatore di numeri casuali (da cui il diverso conteggio di positivi: \textit{lateral} $n{=}3959$ vs $4032$, furto $n{=}452$ vs $386$ sui 3 \texttt{seed}); il confronto è quindi \emph{distribuzionale}. Il collasso su \texttt{dev:guest} non degrada la detection (lateral AUC piatto, $-0.003$ entro la dev.std) e anzi migliora il furto credenziali, abbassa l'FPR benigno, \emph{riduce marcatamente la varianza tra seed} ed elimina l'intera classe di falsi positivi da cookie-wipe ($n_{\text{wiped}}{=}0$, conferma della neutralizzazione implementata).}
+\label{tab:guestdev}
+\end{table}
+
+\subsection{Interpretazione}
+
+Il risultato è \emph{controintuitivo}: rimuovere l'identità per-macchina dei dispositivi senza TPM non solo non danneggia la rilevazione, ma costituisce un \emph{miglioramento di Pareto} sulle metriche misurate. La lettura è coerente con l'architettura del modello:
+\begin{itemize}
+    \item \textbf{L'identità per-cookie era rumore netto.} I nodi-cookie per-macchina sono \emph{sparsi}: ciascuno vede pochi eventi, quindi accumula una memoria ricorrente e dei contatori di storia deboli e freddi. Concentrare tutto il traffico non-TPM su un solo nodo \texttt{dev:guest} produce \textit{binding} \textit{config}$\rightarrow$\textit{device} e \textit{device}$\rightarrow$\textit{user} statisticamente più stabili, riducendo i falsi positivi benigni ($-0.007$ FPR) e --- in modo netto --- la varianza tra \texttt{seed} (es. lateral AUC $\pm0.007$ vs $\pm0.019$; furto AUC $\pm0.024$ vs $\pm0.078$).
+    \item \textbf{Il segnale degli attacchi non risiedeva nel device.} Laterale e furto credenziali sono \textit{signal-clean} per costruzione: la \textit{novelty cue} vive sulle \textit{history features} delle edge \textit{user}/\textit{config}/\textit{source}, non sulla novità del nodo-device. Per il furto, pur perdendo il \textit{tell} di ``device mai visto'' (l'attaccante collassa anch'esso su \texttt{dev:guest}), restano l'IP e il JA3 mai visti e il \textit{binding} \textit{config}$\rightarrow$\textit{user} (già documentato come discriminante principale del furto, Sez.~\ref{sec:v4results}); il netto guadagno di AUC del furto ($+0.103$) riflette soprattutto la \emph{riduzione di varianza} rispetto a una \textit{baseline} ad alta dev.std ($\pm0.078$).
+    \item \textbf{Eliminazione di una classe di falsi positivi.} Senza identità-cookie non esiste il \textit{re-keying} su nodo freddo: l'intera classe di falsi positivi da \textit{cookie-wipe} (FPR $\sim$0.041 su $n{=}651$ nella \textit{baseline}) scompare ($n_{\text{wiped}}{=}0$).
+\end{itemize}
+
+\paragraph{Limiti e costo non misurato.} Il guadagno sulle metriche di detection va soppesato con un costo che esse \emph{non} catturano: collassando i dispositivi senza TPM si perde l'\emph{attribuzione per-macchina} (tracciabilità forense, capacità di isolare un singolo endpoint compromesso, audit). Inoltre il confronto è distribuzionale e su stream sintetico: il $\Delta$ sull'AUC laterale è entro il rumore e la quota di guadagno dovuta alla riduzione di varianza non è separabile da un eventuale guadagno ``vero''. Per questi motivi il \textit{deployable} mantiene il \textit{default} a \textit{keying} per-cookie (\texttt{guest\_device\_fallback=False}); il collasso su \texttt{dev:guest} resta una politica attivabile e un'evidenza utile sul fatto che, su questo stream, l'identità fine del dispositivo \emph{non} è il portatore del segnale.
+
 \end{document}

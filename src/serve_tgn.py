@@ -30,7 +30,7 @@ import torch
 
 from graphagate.model.registry import NodeRegistry
 from graphagate.model.tgn import ZTATemporalGraphNetwork, stable_hash
-from graphagate.netclass import ip_is_internal
+from graphagate.netclass import ip_is_internal, to_guest_device
 
 
 SCHEMA_VERSION = 4  # 5-node schema: config (JA3) node — source→config→device→user→resource (+ config→user)
@@ -295,6 +295,7 @@ def score_event(
     src_feat=None,
     dst_feat=None,
     update: bool = True,
+    guest_device_fallback: bool = False,
 ) -> tuple[float, bool]:
     """Score one streaming access event (v4 schema: up to 5 edges per request).
 
@@ -320,6 +321,8 @@ def score_event(
     model.eval()
     if key_config is None:
         key_config = "conf:guest"
+    if guest_device_fallback:
+        key_device = to_guest_device(key_device)
     user_idx = _admit(model, registry, key_user)
     device_idx = None if key_device is None else _admit(model, registry, key_device)
     dst_idx = _admit(model, registry, key_dst)
@@ -406,6 +409,7 @@ def commit_event(
     key_config: Hashable | None = None,
     src_feat=None,
     dst_feat=None,
+    guest_device_fallback: bool = False,
 ) -> None:
     """Commit an event the caller has already judged benign (e.g. OPA returned ALLOW).
 
@@ -421,6 +425,8 @@ def commit_event(
     model.eval()
     if key_config is None:
         key_config = "conf:guest"
+    if guest_device_fallback:
+        key_device = to_guest_device(key_device)
     user_idx = _admit(model, registry, key_user)
     device_idx = None if key_device is None else _admit(model, registry, key_device)
     dst_idx = _admit(model, registry, key_dst)

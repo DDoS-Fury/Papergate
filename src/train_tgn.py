@@ -415,6 +415,7 @@ def _synthetic_stream_data(cfg: TGNConfig) -> StreamData:
         seed=cfg.seed,
         use_resource_risk=cfg.use_resource_risk,
         use_source_internal=cfg.use_source_internal,
+        guest_device_fallback=cfg.guest_device_fallback,
     )
     return StreamData(
         user=s.user, dst=s.dst, t=s.t, msg=s.msg, y=s.y, types=s.types,
@@ -1042,6 +1043,7 @@ def train_tgn(cfg: TGNConfig = TGNConfig(), *, dataset: "StreamData | None" = No
             "precursor_max_boost": cfg.precursor_max_boost,
             "use_resource_risk": cfg.use_resource_risk,
             "use_source_internal": cfg.use_source_internal,
+            "guest_device_fallback": cfg.guest_device_fallback,
         }
         op_new = operating_point(test_scores, test_labels, test_types, threshold)
         save_model(

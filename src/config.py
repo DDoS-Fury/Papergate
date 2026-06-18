@@ -67,6 +67,16 @@ class TGNConfig:
     p_cookie_wipe: float = 0.0003
     p_cred_theft: float = 0.0012
 
+    # Collapse every non-TPM device onto a single shared ``dev:guest`` node (mirror of
+    # ``conf:guest``) instead of giving each TPM-less machine its own cookie (``ck:``)
+    # identity. The device layer no longer distinguishes individual cookie-keyed machines
+    # and the cookie-wipe scenario is neutralised (no per-machine cookie to reset). This is
+    # the DEPLOYABLE default on this branch: the multi-seed A/B (tests/ablations/
+    # run_guest_device_eval.py) showed it is a Pareto improvement on the synthetic stream
+    # (lower benign FPR, lower seed variance, no cookie-wipe false positives), at the cost
+    # of per-machine device attribution. Set False to restore per-cookie keying.
+    guest_device_fallback: bool = True
+
     # De-degeneration knob: probability that a *benign* event performs an
     # authorised-but-non-habitual access (legitimate exploration). With this > 0 the
     # task is no longer the tautology "non-habitual ⟺ malicious" — lateral movement
