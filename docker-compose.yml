@@ -143,6 +143,32 @@ services:
     entrypoint: ["python"]
     command: ["/app/tests/ablations/run_ablations.py"]
 
+  # Validazione mirata del nodo config (v4): stream theft-rich (gli incidenti arrivano
+  # nel test split) + confronto v4 vs ablazione nodo-config (~v3). save=False.
+  config-eval:
+    <<: *base
+    profiles: ["config-eval"]
+    container_name: graphagate-config-eval
+    volumes:
+      - ./public:/app/public
+      - ./src:/app/src
+      - ./tests:/app/tests
+    entrypoint: ["python"]
+    command: ["/app/tests/ablations/run_config_eval.py"]
+
+  # Sweep architetturale (v4): layer MLP extra, memory_dim, teste di attenzione.
+  # save=False (non tocca public/); adozione solo se migliora oltre il rumore multi-seed.
+  arch-sweep:
+    <<: *base
+    profiles: ["arch-sweep"]
+    container_name: graphagate-arch-sweep
+    volumes:
+      - ./public:/app/public
+      - ./src:/app/src
+      - ./tests:/app/tests
+    entrypoint: ["python"]
+    command: ["/app/tests/ablations/run_arch_sweep.py"]
+
   # Ablation study per valutare l'efficacia del modello senza il device edge.
   # Utilizza il test client per inviare stream al serve-tgn omettendo il parametro key_device.
   # Dipende dal serve-tgn che deve essere già in esecuzione (o avviato insieme con i due profili).

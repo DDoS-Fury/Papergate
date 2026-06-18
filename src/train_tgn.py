@@ -429,16 +429,19 @@ def _synthetic_stream_data(cfg: TGNConfig) -> StreamData:
 
 def train_tgn(cfg: TGNConfig = TGNConfig(), *, dataset: "StreamData | None" = None,
               use_struct_head=True, use_hash_identity=True, use_hist_feats=True,
-              use_precursor=True, save=True):
+              use_precursor=True, use_config_node=True, save=True):
     """Train + evaluate the streaming TGN.
 
     The keyword flags drive the ablation study (``tests/ablations``): they toggle the
-    structural-compatibility head and the hashed-identity embedding. ``save=False``
-    skips persisting the deployable artifact (ablation runs must not clobber the
-    full-model checkpoint in ``public/``). ``dataset`` injects an externally-mapped
-    :class:`StreamData` (e.g. LANL auth) instead of the synthetic generator, reusing the
-    whole pipeline for external validity; ``None`` is the default synthetic path. Returns
-    a metrics dict.
+    structural-compatibility head and the hashed-identity embedding. ``use_config_node``
+    (v4) drops the configuration node from training/eval — the stream is unchanged but
+    the model falls back to the legacy ``source→device`` chain, i.e. a ≈v3 run on the
+    same data; the Δ vs the full model isolates the config node's contribution.
+    ``save=False`` skips persisting the deployable artifact (ablation runs must not
+    clobber the full-model checkpoint in ``public/``). ``dataset`` injects an
+    externally-mapped :class:`StreamData` (e.g. LANL auth) instead of the synthetic
+    generator, reusing the whole pipeline for external validity; ``None`` is the default
+    synthetic path. Returns a metrics dict.
     """
     torch.manual_seed(cfg.seed)
     np.random.seed(cfg.seed)
@@ -453,6 +456,11 @@ def train_tgn(cfg: TGNConfig = TGNConfig(), *, dataset: "StreamData | None" = No
     user_arr, dst, t, msg, y, types = data.user, data.dst, data.t, data.msg, data.y, data.types
     device_arr, source_arr, scenario = data.device_nodes, data.source_nodes, data.scenario
     config_arr = data.config_nodes
+    # Config-node ablation (≈v3): drop the configuration node so the whole pipeline
+    # (training loop, both _replay calls, history counters) falls back to the legacy
+    # source→device chain on the SAME stream. Isolates the config node's contribution.
+    if not use_config_node:
+        config_arr = None
     node_features = data.node_features
     total_nodes = data.num_nodes
     capacity = total_nodes + cfg.capacity_headroom
@@ -488,6 +496,8 @@ def train_tgn(cfg: TGNConfig = TGNConfig(), *, dataset: "StreamData | None" = No
         hash_buckets=cfg.hash_buckets,
         hash_dim=cfg.hash_dim,
         hist_feat_dim=cfg.hist_feat_dim,
+        gnn_heads=cfg.gnn_heads,
+        link_pred_hidden_layers=cfg.link_pred_hidden_layers,
     ).to(device)
 
     # Load the static node attributes (role / clearance / tier) into the model's
@@ -1019,6 +1029,8 @@ def train_tgn(cfg: TGNConfig = TGNConfig(), *, dataset: "StreamData | None" = No
             "memory_dim": cfg.memory_dim,
             "time_dim": cfg.time_dim,
             "num_hops": cfg.num_hops,
+            "gnn_heads": cfg.gnn_heads,
+            "link_pred_hidden_layers": cfg.link_pred_hidden_layers,
             "hash_buckets": cfg.hash_buckets,
             "hash_dim": cfg.hash_dim,
             "hist_feat_dim": cfg.hist_feat_dim,
@@ -1060,6 +1072,7 @@ def train_tgn(cfg: TGNConfig = TGNConfig(), *, dataset: "StreamData | None" = No
         "use_hash_identity": use_hash_identity,
         "use_hist_feats": use_hist_feats,
         "use_precursor": use_precursor,
+        "use_config_node": use_config_node,
     }
 
 

@@ -1,5 +1,25 @@
 # Lessons
 
+## Validazione mirata cred-theft + sweep architetturale v4 — 2026-06-18 (multi-seed [42,7,123])
+- **cred-theft/wiped-cookie n=0 nel test è un artefatto di split, NON un bug del modello.**
+  `num_theft_slots=64`/`p_cred_theft=0.0012` → tutti gli incidenti partono entro ~ev.53k
+  (dentro il 70% train). Per misurarli serve uno stream theft-rich SOLO per l'eval
+  (`run_config_eval.py`: slot 400/120, p_theft=0.002, p_wipe=0.0008) → porta n=452 theft
+  nel test. NON cambiare i default in config.py (deployable invariato): usare `save=False`.
+- **Contributo del nodo config (v4 vs ablazione `use_config_node=False`, ≈v3, a parità di
+  dati):** theft recall 0.206→0.314 (+0.108), theft AUC 0.676→0.729 (+0.053, ma std±0.088
+  → segnale robusto = recall), lateral recall 0.334→0.469 (+0.135). Lieve ↑ FPR cookie-wipe
+  (0.038→0.060). Il `config→user` è il binding che discrimina il furto credenziali.
+- **Capacità NON è il collo di bottiglia del laterale.** Sweep 40k/12ep ×3 seed: +1 layer MLP
+  neutro (AUC +0.002 entro rumore, recall ↓); memory_dim=384 e gnn_heads=8 PEGGIORANO
+  (AUC −0.024/−0.033) e aumentano la varianza (heads: recall ±0.161). Coerente con
+  l'ablation: il laterale è signal-bound (history feats +0.163), non parametri. Regola:
+  prima di proporre più capacità, ricontrollare che il limite non sia il segnale.
+- I knob `gnn_heads`/`link_pred_hidden_layers` sono in hp del checkpoint con default
+  (4, 2) = architettura storica; `LinkPredictor.lin_extra` è una ModuleList VUOTA a
+  default → state_dict dei checkpoint v4 esistenti carica senza modifiche (back-compat).
+
+
 ## Testare i pesi senza riaddestrare / senza sovrascriverli
 - `serve_api` (lifespan) RISALVA lo stato in `public/` allo shutdown (SIGTERM del container). Un test
   live via compose che monta `./public` SOVRASCRIVE quindi i pesi puliti ad ogni stop. **Regola:**

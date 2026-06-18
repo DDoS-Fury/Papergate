@@ -26,15 +26,15 @@ def stable_hash(key, buckets: int) -> int:
     return int.from_bytes(digest, "big") % buckets
 
 class GraphAttentionEmbedding(nn.Module):
-    def __init__(self, in_channels, out_channels, msg_dim, time_enc, num_hops=3):
+    def __init__(self, in_channels, out_channels, msg_dim, time_enc, num_hops=3, heads=4):
         super().__init__()
         self.time_enc = time_enc
         self.num_hops = num_hops
         edge_dim = msg_dim + time_enc.out_channels
         self.convs = nn.ModuleList()
-        self.convs.append(TransformerConv(in_channels, out_channels, heads=4, dropout=0.1, edge_dim=edge_dim, concat=False))
+        self.convs.append(TransformerConv(in_channels, out_channels, heads=heads, dropout=0.1, edge_dim=edge_dim, concat=False))
         for _ in range(num_hops - 1):
-            self.convs.append(TransformerConv(out_channels, out_channels, heads=4, dropout=0.1, edge_dim=edge_dim, concat=False))
+            self.convs.append(TransformerConv(out_channels, out_channels, heads=heads, dropout=0.1, edge_dim=edge_dim, concat=False))
         self.norms = nn.ModuleList([nn.LayerNorm(out_channels) for _ in range(num_hops)])
 
     def forward(self, x, last_update, edge_index, t, msg):
@@ -57,7 +57,7 @@ class GraphAttentionEmbedding(nn.Module):
         return x
 
 class LinkPredictor(nn.Module):
-    def __init__(self, in_channels, msg_dim, node_feat_dim, hash_dim, time_dim, hist_feat_dim=0):
+    def __init__(self, in_channels, msg_dim, node_feat_dim, hash_dim, time_dim, hist_feat_dim=0, hidden_layers=2):
         super().__init__()
         # Static node attributes (role / clearance / device tier) are concatenated
         # for both endpoints: they carry the policy-relevant signal that separates a
@@ -70,6 +70,12 @@ class LinkPredictor(nn.Module):
             in_channels,
         )
         self.lin_mid = nn.Linear(in_channels, in_channels)
+        # Extra hidden layers beyond the historical two (lin1 + lin_mid). Empty when
+        # ``hidden_layers<=2`` so the state_dict keys stay identical to older checkpoints
+        # (back-compat); ``hidden_layers=3`` inserts one extra Linear before the output.
+        self.lin_extra = nn.ModuleList(
+            nn.Linear(in_channels, in_channels) for _ in range(max(0, hidden_layers - 2))
+        )
         self.lin2 = nn.Linear(in_channels, 1)
 
     def forward(self, z_src, z_dst, msg, feat_src, feat_dst, recency_enc, src_recency_enc, hist_feats):
@@ -78,10 +84,12 @@ class LinkPredictor(nn.Module):
         )
         h = self.lin1(h).relu()
         h = self.lin_mid(h).relu()
+        for layer in self.lin_extra:
+            h = layer(h).relu()
         return self.lin2(h)
 
 class ZTATemporalGraphNetwork(nn.Module):
-    def __init__(self, num_nodes, node_feat_dim, msg_dim, memory_dim=64, time_dim=32, num_hops=2, hash_buckets=10000, hash_dim=16, hist_feat_dim=6):
+    def __init__(self, num_nodes, node_feat_dim, msg_dim, memory_dim=64, time_dim=32, num_hops=2, hash_buckets=10000, hash_dim=16, hist_feat_dim=6, gnn_heads=4, link_pred_hidden_layers=2):
         super().__init__()
 
         self.num_hops = num_hops
@@ -115,11 +123,12 @@ class ZTATemporalGraphNetwork(nn.Module):
             msg_dim=msg_dim,
             time_enc=self.memory.time_enc,
             num_hops=num_hops,
+            heads=gnn_heads,
         )
 
         self.link_pred = LinkPredictor(
             in_channels=memory_dim, msg_dim=msg_dim, node_feat_dim=node_feat_dim, hash_dim=hash_dim,
-            time_dim=time_dim, hist_feat_dim=hist_feat_dim,
+            time_dim=time_dim, hist_feat_dim=hist_feat_dim, hidden_layers=link_pred_hidden_layers,
         )
 
         # Dedicated structural-compatibility head: projects the (identity-aware)

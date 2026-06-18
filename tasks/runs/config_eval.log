@@ -1,0 +1,442 @@
+
+==============================================================================
+=== CONFIG-EVAL: v4 (config node)  (seed=42, theft-rich) ===
+==============================================================================
+Generating streaming data...
+Using device: cuda
+--- INIZIO ADDESTRAMENTO UNSUPERVISED ---
+--- INIZIO ADDESTRAMENTO UNSUPERVISED ---
+Epoch 01/12 [train]:   0%|          | 0/280 [00:00<?, ?it/s]Epoch 01/12 [train]: 100%|##########| 280/280 [00:10<00:00, 27.96it/s, loss=3.2891]Epoch 01/12 [train]: 100%|##########| 280/280 [00:10<00:00, 27.96it/s, loss=3.2891]
+Epoch 01 | Train Loss: 3.5595
+Epoch 02/12 [train]:   0%|          | 0/280 [00:00<?, ?it/s]Epoch 02/12 [train]: 100%|##########| 280/280 [00:09<00:00, 28.85it/s, loss=2.6317]
+Epoch 02 | Train Loss: 3.2023
+Epoch 03/12 [train]:   0%|          | 0/280 [00:00<?, ?it/s]Epoch 03 | Train Loss: 2.5238
+Epoch 03/12 [train]: 100%|##########| 280/280 [00:09<00:00, 28.68it/s, loss=1.9307]
+Epoch 04/12 [train]:   0%|          | 0/280 [00:00<?, ?it/s]Epoch 04 | Train Loss: 1.7309
+Epoch 04/12 [train]: 100%|##########| 280/280 [00:09<00:00, 29.10it/s, loss=1.5077]
+Epoch 05/12 [train]:   0%|          | 0/280 [00:00<?, ?it/s]Epoch 05 | Train Loss: 1.4959
+Epoch 05/12 [train]: 100%|##########| 280/280 [00:09<00:00, 28.79it/s, loss=1.4945]
+Epoch 06/12 [train]:   0%|          | 0/280 [00:00<?, ?it/s]Epoch 06 | Train Loss: 1.3644
+Epoch 06/12 [train]: 100%|##########| 280/280 [00:09<00:00, 29.13it/s, loss=1.4826]
+Epoch 07/12 [train]:   0%|          | 0/280 [00:00<?, ?it/s]Epoch 07 | Train Loss: 1.3092
+Epoch 07/12 [train]: 100%|##########| 280/280 [00:09<00:00, 28.85it/s, loss=1.2947]
+Epoch 08/12 [train]:   0%|          | 0/280 [00:00<?, ?it/s]Epoch 08/12 [train]: 100%|##########| 280/280 [00:09<00:00, 28.77it/s, loss=1.3306]
+Epoch 08 | Train Loss: 1.2812
+Epoch 09/12 [train]:   0%|          | 0/280 [00:00<?, ?it/s]Epoch 09 | Train Loss: 1.2499
+Epoch 09/12 [train]: 100%|##########| 280/280 [00:09<00:00, 28.93it/s, loss=1.3234]
+Epoch 10/12 [train]:   0%|          | 0/280 [00:00<?, ?it/s]Epoch 10/12 [train]: 100%|##########| 280/280 [00:09<00:00, 28.90it/s, loss=1.3470]
+Epoch 10 | Train Loss: 1.2340
+Epoch 11/12 [train]:   0%|          | 0/280 [00:00<?, ?it/s]Epoch 11 | Train Loss: 1.2243
+Epoch 11/12 [train]: 100%|##########| 280/280 [00:09<00:00, 29.16it/s, loss=1.3778]
+Epoch 12/12 [train]:   0%|          | 0/280 [00:00<?, ?it/s]Epoch 12/12 [train]: 100%|##########| 280/280 [00:09<00:00, 28.78it/s, loss=1.3890]
+Epoch 12 | Train Loss: 1.2047
+
+--- CALIBRAZIONE SOGLIA (su flusso di validazione benigno) ---
+Calibrazione (replay val):   0%|          | 0/8000 [00:00<?, ?it/s]Calibrazione (replay val):  20%|#9        | 1568/8000 [00:10<00:41, 156.79it/s]Calibrazione (replay val):  39%|###9      | 3136/8000 [00:20<00:31, 154.69it/s]Calibrazione (replay val):  59%|#####8    | 4687/8000 [00:30<00:21, 154.86it/s]Calibrazione (replay val):  78%|#######7  | 6238/8000 [00:40<00:11, 154.66it/s]Calibrazione (replay val):  97%|#########7| 7782/8000 [00:50<00:01, 153.97it/s]Calibrazione (replay val): 100%|##########| 8000/8000 [00:51<00:00, 154.33it/s]
+Benign val score: mean=0.0050 p95=0.0115
+threshold_dirty@FPR=0.01: 0.0228 | threshold_clean@cost_ratio=20.0: 0.0115 (clean cal: n_benign=6102 n_lateral=574)
+  clean-stream lateral recall vs benign FPR (reference curve):
+    thr=0.0005 | lateral_recall=1.000 | benign_fpr=1.0000
+    thr=0.0020 | lateral_recall=1.000 | benign_fpr=0.7812
+    thr=0.0025 | lateral_recall=0.998 | benign_fpr=0.5628
+    thr=0.0035 | lateral_recall=0.990 | benign_fpr=0.3445
+    thr=0.0067 | lateral_recall=0.840 | benign_fpr=0.1400
+    thr=1.0000 | lateral_recall=0.002 | benign_fpr=0.0000
+
+--- INIZIO FASE DI INFERENZA / ANOMALY DETECTION (per-evento) ---
+Inferenza (replay test):   0%|          | 0/16000 [00:00<?, ?it/s]Inferenza (replay test):   9%|8         | 1401/16000 [00:10<01:44, 140.01it/s]Inferenza (replay test):  18%|#7        | 2802/16000 [00:20<01:34, 139.92it/s]Inferenza (replay test):  26%|##6       | 4201/16000 [00:30<01:24, 139.34it/s]Inferenza (replay test):  35%|###4      | 5588/16000 [00:40<01:15, 138.75it/s]Inferenza (replay test):  44%|####3     | 6982/16000 [00:50<01:04, 138.98it/s]Inferenza (replay test):  52%|#####2    | 8376/16000 [01:00<00:54, 138.98it/s]Inferenza (replay test):  61%|######1   | 9769/16000 [01:10<00:44, 139.05it/s]Inferenza (replay test):  70%|######9   | 11159/16000 [01:20<00:34, 139.05it/s]Inferenza (replay test):  70%|######9   | 11160/16000 [01:20<00:34, 138.89it/s]Inferenza (replay test):  78%|#######8  | 12546/16000 [01:30<00:24, 138.69it/s]Inferenza (replay test):  87%|########7 | 13929/16000 [01:40<00:14, 138.22it/s]Inferenza (replay test):  96%|#########5| 15301/16000 [01:50<00:05, 137.66it/s]Inferenza (replay test): 100%|##########| 16000/16000 [01:55<00:00, 138.44it/s]
+Test Stream | AUC: 0.9671 | AP: 0.9354
+Routed decision | Precision: 0.8559 | Recall: 0.8257
+
+--- LATERAL RECALL: GLOBAL-FPR THRESHOLD  vs  COST-SENSITIVE ROUTING ---
+  before (global @FPR=0.01): lateral_recall=0.4277 | benign_fpr=0.0100
+  after  (routed cost-sensitive)       : lateral_recall=0.5784 | benign_fpr=0.0458
+
+--- METRICHE PER TIPO DI ANOMALIA ---
+  policy     | OPA-owned   | n=1240 | AUC: 0.9967 | AP: 0.9668 | Recall@thr: 0.9903
+  contextual | rule-trivial | n=1268 | AUC: 0.9945 | AP: 0.9886 | Recall@thr: 0.9819
+  lateral    | rule-blind  | n=1307 | AUC: 0.9398 | AP: 0.6966 | Recall@thr: 0.5784
+  cred-theft | rule-blind  | n= 149 | AUC: 0.7270 | AP: 0.0780 | Recall@thr: 0.2953
+
+--- LATERAL: COLD-START CONDITIONING ---
+  warmed src (has benign history): n=1306 | recall@thr=0.5789 | AUC=0.9398
+  cold   src (no history yet)     : n=   1 | recall@thr=0.0000  (detection not yet possible)
+
+--- SCENARI v2 (goal a/b/c) ---
+  benign FPR  plain=0.0463 | roaming=0.0425 (n=1248) | wiped-cookie=0.0300 (n=100)
+  credential theft: recall@thr=0.2953 | AUC=0.7270 (n=149)
+  lateral su device condivisi: recall@thr=0.5619 (n=210)
+
+--- BASELINE A REGOLE (signal-only) ---
+  Precision: 1.0000 | Recall: 0.3489 | Recall policy: 0.0000 | Recall contextual: 0.9629 | Recall lateral: 0.1239
+  NOTE: the rule baseline catches contextual anomalies almost entirely (edge signals only) but is blind to policy/lateral — that gap is the TGN's value-add.
+
+==============================================================================
+=== CONFIG-EVAL: ~v3 (no config)  (seed=42, theft-rich) ===
+==============================================================================
+Generating streaming data...
+Using device: cuda
+--- INIZIO ADDESTRAMENTO UNSUPERVISED ---
+--- INIZIO ADDESTRAMENTO UNSUPERVISED ---
+Epoch 01/12 [train]:   0%|          | 0/280 [00:00<?, ?it/s]Epoch 01/12 [train]: 100%|##########| 280/280 [00:07<00:00, 39.02it/s, loss=2.8483]
+Epoch 01 | Train Loss: 3.1902
+Epoch 02/12 [train]:   0%|          | 0/280 [00:00<?, ?it/s]Epoch 02 | Train Loss: 2.7526
+Epoch 02/12 [train]: 100%|##########| 280/280 [00:07<00:00, 39.02it/s, loss=1.7386]
+Epoch 03/12 [train]:   0%|          | 0/280 [00:00<?, ?it/s]Epoch 03 | Train Loss: 1.6077
+Epoch 03/12 [train]: 100%|##########| 280/280 [00:07<00:00, 39.00it/s, loss=1.3161]
+Epoch 04/12 [train]:   0%|          | 0/280 [00:00<?, ?it/s]Epoch 04 | Train Loss: 1.2640
+Epoch 04/12 [train]: 100%|##########| 280/280 [00:07<00:00, 39.04it/s, loss=1.2430]
+Epoch 05/12 [train]:   0%|          | 0/280 [00:00<?, ?it/s]Epoch 05 | Train Loss: 1.1362
+Epoch 05/12 [train]: 100%|##########| 280/280 [00:07<00:00, 39.12it/s, loss=1.0585]
+Epoch 06/12 [train]:   0%|          | 0/280 [00:00<?, ?it/s]Epoch 06 | Train Loss: 1.1275
+Epoch 06/12 [train]: 100%|##########| 280/280 [00:07<00:00, 39.48it/s, loss=0.9935]
+Epoch 07/12 [train]:   0%|          | 0/280 [00:00<?, ?it/s]Epoch 07 | Train Loss: 1.0905
+Epoch 07/12 [train]: 100%|##########| 280/280 [00:07<00:00, 39.48it/s, loss=1.0165]
+Epoch 08/12 [train]:   0%|          | 0/280 [00:00<?, ?it/s]Epoch 08/12 [train]: 100%|##########| 280/280 [00:07<00:00, 39.02it/s, loss=1.0553]
+Epoch 08 | Train Loss: 1.0455
+Epoch 09/12 [train]:   0%|          | 0/280 [00:00<?, ?it/s]Epoch 09/12 [train]: 100%|##########| 280/280 [00:07<00:00, 38.86it/s, loss=0.9954]
+Epoch 09 | Train Loss: 1.0449
+Epoch 10/12 [train]:   0%|          | 0/280 [00:00<?, ?it/s]Epoch 10/12 [train]: 100%|##########| 280/280 [00:07<00:00, 39.09it/s, loss=1.0360]
+Epoch 10 | Train Loss: 1.0275
+Epoch 11/12 [train]:   0%|          | 0/280 [00:00<?, ?it/s]Epoch 11 | Train Loss: 1.0009
+Epoch 11/12 [train]: 100%|##########| 280/280 [00:07<00:00, 38.94it/s, loss=1.0974]
+Epoch 12/12 [train]:   0%|          | 0/280 [00:00<?, ?it/s]Epoch 12 | Train Loss: 0.9888
+
+--- CALIBRAZIONE SOGLIA (su flusso di validazione benigno) ---
+Epoch 12/12 [train]: 100%|##########| 280/280 [00:07<00:00, 38.99it/s, loss=1.0365]
+Calibrazione (replay val):   0%|          | 0/8000 [00:00<?, ?it/s]Calibrazione (replay val):  28%|##7       | 2205/8000 [00:10<00:26, 220.46it/s]Calibrazione (replay val):  55%|#####5    | 4410/8000 [00:20<00:16, 219.38it/s]Calibrazione (replay val):  83%|########2 | 6608/8000 [00:30<00:06, 219.55it/s]Calibrazione (replay val): 100%|##########| 8000/8000 [00:36<00:00, 218.98it/s]
+Benign val score: mean=0.0071 p95=0.0233
+threshold_dirty@FPR=0.01: 0.0455 | threshold_clean@cost_ratio=20.0: 0.0235 (clean cal: n_benign=6102 n_lateral=574)
+  clean-stream lateral recall vs benign FPR (reference curve):
+    thr=0.0006 | lateral_recall=1.000 | benign_fpr=1.0000
+    thr=0.0027 | lateral_recall=0.998 | benign_fpr=0.7814
+    thr=0.0035 | lateral_recall=0.998 | benign_fpr=0.5626
+    thr=0.0050 | lateral_recall=0.986 | benign_fpr=0.3450
+    thr=0.0117 | lateral_recall=0.784 | benign_fpr=0.1452
+    thr=0.9529 | lateral_recall=0.002 | benign_fpr=0.0000
+
+--- INIZIO FASE DI INFERENZA / ANOMALY DETECTION (per-evento) ---
+Inferenza (replay test):   0%|          | 0/16000 [00:00<?, ?it/s]Inferenza (replay test):  13%|#2        | 2023/16000 [00:10<01:09, 202.26it/s]Inferenza (replay test):  25%|##5       | 4046/16000 [00:20<00:59, 201.41it/s]Inferenza (replay test):  38%|###7      | 6032/16000 [00:30<00:49, 201.41it/s]Inferenza (replay test):  38%|###7      | 6033/16000 [00:30<00:49, 200.05it/s]Inferenza (replay test):  50%|#####     | 8034/16000 [00:40<00:39, 200.03it/s]Inferenza (replay test):  63%|######2   | 10047/16000 [00:50<00:29, 200.46it/s]Inferenza (replay test):  75%|#######5  | 12060/16000 [01:00<00:19, 200.20it/s]Inferenza (replay test):  88%|########7 | 14057/16000 [01:10<00:09, 199.80it/s]Inferenza (replay test): 100%|##########| 16000/16000 [01:20<00:00, 199.97it/s]
+Test Stream | AUC: 0.9574 | AP: 0.9150
+Routed decision | Precision: 0.8569 | Recall: 0.7477
+
+--- LATERAL RECALL: GLOBAL-FPR THRESHOLD  vs  COST-SENSITIVE ROUTING ---
+  before (global @FPR=0.01): lateral_recall=0.1744 | benign_fpr=0.0103
+  after  (routed cost-sensitive)       : lateral_recall=0.3405 | benign_fpr=0.0411
+
+--- METRICHE PER TIPO DI ANOMALIA ---
+  policy     | OPA-owned   | n=1240 | AUC: 0.9989 | AP: 0.9914 | Recall@thr: 0.9960
+  contextual | rule-trivial | n=1268 | AUC: 0.9947 | AP: 0.9880 | Recall@thr: 0.9819
+  lateral    | rule-blind  | n=1307 | AUC: 0.9145 | AP: 0.5144 | Recall@thr: 0.3405
+  cred-theft | rule-blind  | n= 149 | AUC: 0.6708 | AP: 0.1149 | Recall@thr: 0.2617
+
+--- LATERAL: COLD-START CONDITIONING ---
+  warmed src (has benign history): n=1306 | recall@thr=0.3400 | AUC=0.9144
+  cold   src (no history yet)     : n=   1 | recall@thr=1.0000  (detection not yet possible)
+
+--- SCENARI v2 (goal a/b/c) ---
+  benign FPR  plain=0.0414 | roaming=0.0393 (n=1248) | wiped-cookie=0.0100 (n=100)
+  credential theft: recall@thr=0.2617 | AUC=0.6708 (n=149)
+  lateral su device condivisi: recall@thr=0.3476 (n=210)
+
+--- BASELINE A REGOLE (signal-only) ---
+  Precision: 1.0000 | Recall: 0.3489 | Recall policy: 0.0000 | Recall contextual: 0.9629 | Recall lateral: 0.1239
+  NOTE: the rule baseline catches contextual anomalies almost entirely (edge signals only) but is blind to policy/lateral — that gap is the TGN's value-add.
+
+==============================================================================
+=== CONFIG-EVAL: v4 (config node)  (seed=7, theft-rich) ===
+==============================================================================
+Generating streaming data...
+Using device: cuda
+--- INIZIO ADDESTRAMENTO UNSUPERVISED ---
+--- INIZIO ADDESTRAMENTO UNSUPERVISED ---
+Epoch 01/12 [train]:   0%|          | 0/280 [00:00<?, ?it/s]Epoch 01 | Train Loss: 3.5404
+Epoch 01/12 [train]: 100%|##########| 280/280 [00:09<00:00, 29.36it/s, loss=3.3191]
+Epoch 02/12 [train]:   0%|          | 0/280 [00:00<?, ?it/s]Epoch 02 | Train Loss: 3.0757
+Epoch 02/12 [train]: 100%|##########| 280/280 [00:09<00:00, 29.06it/s, loss=2.3127]
+Epoch 03/12 [train]:   0%|          | 0/280 [00:00<?, ?it/s]Epoch 03 | Train Loss: 1.9651
+Epoch 03/12 [train]: 100%|##########| 280/280 [00:09<00:00, 29.38it/s, loss=1.4961]
+Epoch 04/12 [train]:   0%|          | 0/280 [00:00<?, ?it/s]Epoch 04/12 [train]: 100%|##########| 280/280 [00:09<00:00, 29.04it/s, loss=1.5305]
+Epoch 04 | Train Loss: 1.6173
+Epoch 05/12 [train]:   0%|          | 0/280 [00:00<?, ?it/s]Epoch 05 | Train Loss: 1.4464
+Epoch 05/12 [train]: 100%|##########| 280/280 [00:09<00:00, 29.39it/s, loss=1.4273]
+Epoch 06/12 [train]:   0%|          | 0/280 [00:00<?, ?it/s]Epoch 06 | Train Loss: 1.4272
+Epoch 06/12 [train]: 100%|##########| 280/280 [00:09<00:00, 29.02it/s, loss=1.4007]
+Epoch 07/12 [train]:   0%|          | 0/280 [00:00<?, ?it/s]Epoch 07/12 [train]: 100%|##########| 280/280 [00:09<00:00, 29.21it/s, loss=1.4380]
+Epoch 07 | Train Loss: 1.3397
+Epoch 08/12 [train]:   0%|          | 0/280 [00:00<?, ?it/s]Epoch 08 | Train Loss: 1.3325
+Epoch 08/12 [train]: 100%|##########| 280/280 [00:09<00:00, 29.01it/s, loss=1.4821]
+Epoch 09/12 [train]:   0%|          | 0/280 [00:00<?, ?it/s]Epoch 09 | Train Loss: 1.3637
+Epoch 09/12 [train]: 100%|##########| 280/280 [00:09<00:00, 29.01it/s, loss=1.3282]
+Epoch 10/12 [train]:   0%|          | 0/280 [00:00<?, ?it/s]Epoch 10 | Train Loss: 1.2858
+Epoch 10/12 [train]: 100%|##########| 280/280 [00:09<00:00, 29.36it/s, loss=1.3014]
+Epoch 11/12 [train]:   0%|          | 0/280 [00:00<?, ?it/s]Epoch 11 | Train Loss: 1.3109
+Epoch 11/12 [train]: 100%|##########| 280/280 [00:09<00:00, 29.07it/s, loss=1.4118]
+Epoch 12/12 [train]:   0%|          | 0/280 [00:00<?, ?it/s]Epoch 12 | Train Loss: 1.2613
+
+--- CALIBRAZIONE SOGLIA (su flusso di validazione benigno) ---
+Epoch 12/12 [train]: 100%|##########| 280/280 [00:09<00:00, 29.06it/s, loss=1.3520]
+Calibrazione (replay val):   0%|          | 0/8000 [00:00<?, ?it/s]Calibrazione (replay val):  20%|#9        | 1575/8000 [00:10<00:40, 157.40it/s]Calibrazione (replay val):  39%|###9      | 3158/8000 [00:20<00:30, 157.87it/s]Calibrazione (replay val):  59%|#####9    | 4741/8000 [00:30<00:20, 157.36it/s]Calibrazione (replay val):  79%|#######8  | 6309/8000 [00:40<00:10, 156.76it/s]Calibrazione (replay val):  98%|#########8| 7873/8000 [00:50<00:00, 156.61it/s]Calibrazione (replay val): 100%|##########| 8000/8000 [00:51<00:00, 156.86it/s]
+Benign val score: mean=0.0173 p95=0.0637
+threshold_dirty@FPR=0.01: 0.1662 | threshold_clean@cost_ratio=20.0: 0.0639 (clean cal: n_benign=5927 n_lateral=565)
+  clean-stream lateral recall vs benign FPR (reference curve):
+    thr=0.0007 | lateral_recall=1.000 | benign_fpr=1.0000
+    thr=0.0049 | lateral_recall=1.000 | benign_fpr=0.7808
+    thr=0.0068 | lateral_recall=0.995 | benign_fpr=0.5623
+    thr=0.0105 | lateral_recall=0.984 | benign_fpr=0.3444
+    thr=0.0257 | lateral_recall=0.775 | benign_fpr=0.1453
+    thr=0.6671 | lateral_recall=0.002 | benign_fpr=0.0000
+
+--- INIZIO FASE DI INFERENZA / ANOMALY DETECTION (per-evento) ---
+Inferenza (replay test):   0%|          | 0/16000 [00:00<?, ?it/s]Inferenza (replay test):   9%|8         | 1409/16000 [00:10<01:43, 140.83it/s]Inferenza (replay test):  18%|#7        | 2818/16000 [00:20<01:33, 140.63it/s]Inferenza (replay test):  26%|##6       | 4223/16000 [00:30<01:24, 139.80it/s]Inferenza (replay test):  35%|###5      | 5617/16000 [00:40<01:14, 139.62it/s]Inferenza (replay test):  44%|####3     | 7011/16000 [00:50<01:04, 139.04it/s]Inferenza (replay test):  52%|#####2    | 8398/16000 [01:00<00:54, 138.89it/s]Inferenza (replay test):  61%|######1   | 9785/16000 [01:10<00:44, 138.66it/s]Inferenza (replay test):  70%|######9   | 11167/16000 [01:20<00:34, 138.42it/s]Inferenza (replay test):  78%|#######8  | 12546/16000 [01:30<00:25, 138.00it/s]Inferenza (replay test):  87%|########6 | 13917/16000 [01:40<00:15, 137.56it/s]Inferenza (replay test):  96%|#########5| 15283/16000 [01:50<00:05, 137.17it/s]Inferenza (replay test): 100%|##########| 16000/16000 [01:55<00:00, 138.32it/s]
+Test Stream | AUC: 0.9417 | AP: 0.8895
+Routed decision | Precision: 0.8379 | Recall: 0.7140
+
+--- LATERAL RECALL: GLOBAL-FPR THRESHOLD  vs  COST-SENSITIVE ROUTING ---
+  before (global @FPR=0.01): lateral_recall=0.1672 | benign_fpr=0.0089
+  after  (routed cost-sensitive)       : lateral_recall=0.3636 | benign_fpr=0.0469
+
+--- METRICHE PER TIPO DI ANOMALIA ---
+  policy     | OPA-owned   | n=1314 | AUC: 0.9776 | AP: 0.8894 | Recall@thr: 0.8638
+  contextual | rule-trivial | n=1285 | AUC: 0.9954 | AP: 0.9885 | Recall@thr: 0.9821
+  lateral    | rule-blind  | n=1268 | AUC: 0.8970 | AP: 0.4857 | Recall@thr: 0.3636
+  cred-theft | rule-blind  | n= 186 | AUC: 0.6219 | AP: 0.0413 | Recall@thr: 0.1935
+
+--- LATERAL: COLD-START CONDITIONING ---
+  warmed src (has benign history): n=1265 | recall@thr=0.3628 | AUC=0.8969
+  cold   src (no history yet)     : n=   3 | recall@thr=0.6667  (detection not yet possible)
+
+--- SCENARI v2 (goal a/b/c) ---
+  benign FPR  plain=0.0448 | roaming=0.0550 (n=1181) | wiped-cookie=0.0777 (n=283)
+  credential theft: recall@thr=0.1935 | AUC=0.6219 (n=186)
+  lateral su device condivisi: recall@thr=0.3543 (n=223)
+
+--- BASELINE A REGOLE (signal-only) ---
+  Precision: 1.0000 | Recall: 0.3400 | Recall policy: 0.0000 | Recall contextual: 0.9634 | Recall lateral: 0.1104
+  NOTE: the rule baseline catches contextual anomalies almost entirely (edge signals only) but is blind to policy/lateral — that gap is the TGN's value-add.
+
+==============================================================================
+=== CONFIG-EVAL: ~v3 (no config)  (seed=7, theft-rich) ===
+==============================================================================
+Generating streaming data...
+Using device: cuda
+--- INIZIO ADDESTRAMENTO UNSUPERVISED ---
+--- INIZIO ADDESTRAMENTO UNSUPERVISED ---
+Epoch 01/12 [train]:   0%|          | 0/280 [00:00<?, ?it/s]Epoch 01/12 [train]: 100%|##########| 280/280 [00:07<00:00, 38.94it/s, loss=2.8662]
+Epoch 01 | Train Loss: 3.1903
+Epoch 02/12 [train]:   0%|          | 0/280 [00:00<?, ?it/s]Epoch 02 | Train Loss: 2.5191
+Epoch 02/12 [train]: 100%|##########| 280/280 [00:07<00:00, 39.02it/s, loss=1.5362]
+Epoch 03/12 [train]:   0%|          | 0/280 [00:00<?, ?it/s]Epoch 03 | Train Loss: 1.5403
+Epoch 03/12 [train]: 100%|##########| 280/280 [00:07<00:00, 39.47it/s, loss=1.2086]
+Epoch 04/12 [train]:   0%|          | 0/280 [00:00<?, ?it/s]Epoch 04 | Train Loss: 1.2457
+Epoch 04/12 [train]: 100%|##########| 280/280 [00:07<00:00, 39.44it/s, loss=1.0765]
+Epoch 05/12 [train]:   0%|          | 0/280 [00:00<?, ?it/s]Epoch 05 | Train Loss: 1.1520
+Epoch 05/12 [train]: 100%|##########| 280/280 [00:07<00:00, 39.46it/s, loss=1.1841]
+Epoch 06/12 [train]:   0%|          | 0/280 [00:00<?, ?it/s]Epoch 06 | Train Loss: 1.1266
+Epoch 06/12 [train]: 100%|##########| 280/280 [00:07<00:00, 39.34it/s, loss=0.9928]
+Epoch 07/12 [train]:   0%|          | 0/280 [00:00<?, ?it/s]Epoch 07 | Train Loss: 1.0765
+Epoch 07/12 [train]: 100%|##########| 280/280 [00:07<00:00, 38.81it/s, loss=0.9684]
+Epoch 08/12 [train]:   0%|          | 0/280 [00:00<?, ?it/s]Epoch 08 | Train Loss: 1.0458
+Epoch 08/12 [train]: 100%|##########| 280/280 [00:07<00:00, 38.57it/s, loss=1.0323]
+Epoch 09/12 [train]:   0%|          | 0/280 [00:00<?, ?it/s]Epoch 09/12 [train]: 100%|##########| 280/280 [00:07<00:00, 39.01it/s, loss=1.0199]
+Epoch 09 | Train Loss: 1.0424
+Epoch 10/12 [train]:   0%|          | 0/280 [00:00<?, ?it/s]Epoch 10 | Train Loss: 1.0187
+Epoch 10/12 [train]: 100%|##########| 280/280 [00:07<00:00, 39.05it/s, loss=1.0587]
+Epoch 11/12 [train]:   0%|          | 0/280 [00:00<?, ?it/s]Epoch 11 | Train Loss: 1.0032
+Epoch 11/12 [train]: 100%|##########| 280/280 [00:07<00:00, 39.06it/s, loss=1.0097]
+Epoch 12/12 [train]:   0%|          | 0/280 [00:00<?, ?it/s]Epoch 12/12 [train]: 100%|##########| 280/280 [00:07<00:00, 39.00it/s, loss=0.9481]
+Epoch 12 | Train Loss: 1.0080
+
+--- CALIBRAZIONE SOGLIA (su flusso di validazione benigno) ---
+Calibrazione (replay val):   0%|          | 0/8000 [00:00<?, ?it/s]Calibrazione (replay val):  28%|##7       | 2227/8000 [00:10<00:25, 222.63it/s]Calibrazione (replay val):  56%|#####5    | 4454/8000 [00:20<00:15, 222.45it/s]Calibrazione (replay val):  83%|########3 | 6678/8000 [00:30<00:05, 222.00it/s]Calibrazione (replay val): 100%|##########| 8000/8000 [00:36<00:00, 222.08it/s]
+Benign val score: mean=0.0101 p95=0.0320
+threshold_dirty@FPR=0.01: 0.0805 | threshold_clean@cost_ratio=20.0: 0.0321 (clean cal: n_benign=5927 n_lateral=565)
+  clean-stream lateral recall vs benign FPR (reference curve):
+    thr=0.0009 | lateral_recall=1.000 | benign_fpr=1.0000
+    thr=0.0029 | lateral_recall=0.995 | benign_fpr=0.7813
+    thr=0.0039 | lateral_recall=0.995 | benign_fpr=0.5623
+    thr=0.0054 | lateral_recall=0.989 | benign_fpr=0.3439
+    thr=0.0155 | lateral_recall=0.809 | benign_fpr=0.1421
+    thr=0.9999 | lateral_recall=0.000 | benign_fpr=0.0002
+
+--- INIZIO FASE DI INFERENZA / ANOMALY DETECTION (per-evento) ---
+Inferenza (replay test):   0%|          | 0/16000 [00:00<?, ?it/s]Inferenza (replay test):  13%|#2        | 2029/16000 [00:10<01:08, 202.87it/s]Inferenza (replay test):  25%|##5       | 4058/16000 [00:20<00:59, 202.33it/s]Inferenza (replay test):  38%|###7      | 6078/16000 [00:30<00:49, 201.54it/s]Inferenza (replay test):  51%|#####     | 8090/16000 [00:40<00:39, 201.37it/s]Inferenza (replay test):  63%|######3   | 10102/16000 [00:50<00:29, 201.19it/s]Inferenza (replay test):  76%|#######5  | 12113/16000 [01:00<00:19, 201.13it/s]Inferenza (replay test):  88%|########8 | 14124/16000 [01:10<00:09, 200.46it/s]Inferenza (replay test): 100%|##########| 16000/16000 [01:19<00:00, 200.82it/s]
+Test Stream | AUC: 0.9493 | AP: 0.9005
+Routed decision | Precision: 0.8310 | Recall: 0.7365
+
+--- LATERAL RECALL: GLOBAL-FPR THRESHOLD  vs  COST-SENSITIVE ROUTING ---
+  before (global @FPR=0.01): lateral_recall=0.1325 | benign_fpr=0.0130
+  after  (routed cost-sensitive)       : lateral_recall=0.3139 | benign_fpr=0.0508
+
+--- METRICHE PER TIPO DI ANOMALIA ---
+  policy     | OPA-owned   | n=1314 | AUC: 0.9946 | AP: 0.9519 | Recall@thr: 0.9833
+  contextual | rule-trivial | n=1285 | AUC: 0.9938 | AP: 0.9884 | Recall@thr: 0.9821
+  lateral    | rule-blind  | n=1268 | AUC: 0.9033 | AP: 0.4485 | Recall@thr: 0.3139
+  cred-theft | rule-blind  | n= 186 | AUC: 0.6347 | AP: 0.0529 | Recall@thr: 0.1774
+
+--- LATERAL: COLD-START CONDITIONING ---
+  warmed src (has benign history): n=1265 | recall@thr=0.3146 | AUC=0.9037
+  cold   src (no history yet)     : n=   3 | recall@thr=0.0000  (detection not yet possible)
+
+--- SCENARI v2 (goal a/b/c) ---
+  benign FPR  plain=0.0458 | roaming=0.0533 (n=1181) | wiped-cookie=0.0848 (n=283)
+  credential theft: recall@thr=0.1774 | AUC=0.6347 (n=186)
+  lateral su device condivisi: recall@thr=0.2825 (n=223)
+
+--- BASELINE A REGOLE (signal-only) ---
+  Precision: 1.0000 | Recall: 0.3400 | Recall policy: 0.0000 | Recall contextual: 0.9634 | Recall lateral: 0.1104
+  NOTE: the rule baseline catches contextual anomalies almost entirely (edge signals only) but is blind to policy/lateral — that gap is the TGN's value-add.
+
+==============================================================================
+=== CONFIG-EVAL: v4 (config node)  (seed=123, theft-rich) ===
+==============================================================================
+Generating streaming data...
+Using device: cuda
+--- INIZIO ADDESTRAMENTO UNSUPERVISED ---
+--- INIZIO ADDESTRAMENTO UNSUPERVISED ---
+Epoch 01/12 [train]:   0%|          | 0/280 [00:00<?, ?it/s]Epoch 01/12 [train]: 100%|##########| 280/280 [00:09<00:00, 29.33it/s, loss=3.2397]
+Epoch 01 | Train Loss: 3.5115
+Epoch 02/12 [train]:   0%|          | 0/280 [00:00<?, ?it/s]Epoch 02 | Train Loss: 2.5872
+Epoch 02/12 [train]: 100%|##########| 280/280 [00:09<00:00, 29.60it/s, loss=1.7048]
+Epoch 03/12 [train]:   0%|          | 0/280 [00:00<?, ?it/s]Epoch 03 | Train Loss: 1.8530
+Epoch 03/12 [train]: 100%|##########| 280/280 [00:09<00:00, 29.28it/s, loss=1.4523]
+Epoch 04/12 [train]:   0%|          | 0/280 [00:00<?, ?it/s]Epoch 04/12 [train]: 100%|##########| 280/280 [00:09<00:00, 29.77it/s, loss=1.4582]
+Epoch 04 | Train Loss: 1.6359
+Epoch 05/12 [train]:   0%|          | 0/280 [00:00<?, ?it/s]Epoch 05/12 [train]: 100%|##########| 280/280 [00:09<00:00, 29.25it/s, loss=1.3726]
+Epoch 05 | Train Loss: 1.5181
+Epoch 06/12 [train]:   0%|          | 0/280 [00:00<?, ?it/s]Epoch 06/12 [train]: 100%|##########| 280/280 [00:09<00:00, 29.21it/s, loss=1.5229]
+Epoch 06 | Train Loss: 1.4234
+Epoch 07/12 [train]:   0%|          | 0/280 [00:00<?, ?it/s]Epoch 07 | Train Loss: 1.3150
+Epoch 07/12 [train]: 100%|##########| 280/280 [00:09<00:00, 29.22it/s, loss=1.3520]
+Epoch 08/12 [train]:   0%|          | 0/280 [00:00<?, ?it/s]Epoch 08 | Train Loss: 1.3117
+Epoch 08/12 [train]: 100%|##########| 280/280 [00:09<00:00, 29.41it/s, loss=1.3624]
+Epoch 09/12 [train]:   0%|          | 0/280 [00:00<?, ?it/s]Epoch 09 | Train Loss: 1.2620
+Epoch 09/12 [train]: 100%|##########| 280/280 [00:09<00:00, 29.22it/s, loss=1.3018]
+Epoch 10/12 [train]:   0%|          | 0/280 [00:00<?, ?it/s]Epoch 10 | Train Loss: 1.2840
+Epoch 10/12 [train]: 100%|##########| 280/280 [00:09<00:00, 29.23it/s, loss=1.3701]
+Epoch 11/12 [train]:   0%|          | 0/280 [00:00<?, ?it/s]Epoch 11 | Train Loss: 1.2557
+Epoch 11/12 [train]: 100%|##########| 280/280 [00:09<00:00, 29.61it/s, loss=1.3091]
+Epoch 12/12 [train]:   0%|          | 0/280 [00:00<?, ?it/s]Epoch 12/12 [train]: 100%|##########| 280/280 [00:09<00:00, 29.22it/s, loss=1.3651]
+Epoch 12 | Train Loss: 1.2344
+
+--- CALIBRAZIONE SOGLIA (su flusso di validazione benigno) ---
+Calibrazione (replay val):   0%|          | 0/8000 [00:00<?, ?it/s]Calibrazione (replay val):  20%|#9        | 1576/8000 [00:10<00:40, 157.60it/s]Calibrazione (replay val):  39%|###9      | 3152/8000 [00:20<00:30, 157.43it/s]Calibrazione (replay val):  59%|#####9    | 4726/8000 [00:30<00:20, 156.62it/s]Calibrazione (replay val):  79%|#######8  | 6283/8000 [00:40<00:11, 155.17it/s]Calibrazione (replay val):  98%|#########7| 7828/8000 [00:50<00:01, 154.90it/s]Calibrazione (replay val): 100%|##########| 8000/8000 [00:51<00:00, 155.56it/s]
+Benign val score: mean=0.0064 p95=0.0200
+threshold_dirty@FPR=0.01: 0.0396 | threshold_clean@cost_ratio=20.0: 0.0201 (clean cal: n_benign=6079 n_lateral=541)
+  clean-stream lateral recall vs benign FPR (reference curve):
+    thr=0.0010 | lateral_recall=1.000 | benign_fpr=1.0000
+    thr=0.0028 | lateral_recall=1.000 | benign_fpr=0.7822
+    thr=0.0036 | lateral_recall=0.998 | benign_fpr=0.5646
+    thr=0.0048 | lateral_recall=0.980 | benign_fpr=0.3484
+    thr=0.0094 | lateral_recall=0.852 | benign_fpr=0.1420
+    thr=0.3895 | lateral_recall=0.002 | benign_fpr=0.0000
+
+--- INIZIO FASE DI INFERENZA / ANOMALY DETECTION (per-evento) ---
+Inferenza (replay test):   0%|          | 0/16000 [00:00<?, ?it/s]Inferenza (replay test):   9%|8         | 1410/16000 [00:10<01:43, 140.96it/s]Inferenza (replay test):  18%|#7        | 2825/16000 [00:20<01:33, 141.27it/s]Inferenza (replay test):  26%|##6       | 4240/16000 [00:30<01:23, 140.66it/s]Inferenza (replay test):  35%|###5      | 5640/16000 [00:40<01:13, 140.26it/s]Inferenza (replay test):  44%|####3     | 7037/16000 [00:50<01:04, 139.53it/s]Inferenza (replay test):  53%|#####2    | 8420/16000 [01:00<00:54, 138.74it/s]Inferenza (replay test):  61%|######1   | 9794/16000 [01:10<00:44, 138.27it/s]Inferenza (replay test):  70%|######9   | 11168/16000 [01:20<00:35, 137.65it/s]Inferenza (replay test):  78%|#######8  | 12535/16000 [01:30<00:25, 137.33it/s]Inferenza (replay test):  87%|########6 | 13904/16000 [01:40<00:15, 137.19it/s]Inferenza (replay test):  95%|#########5| 15273/16000 [01:50<00:05, 136.83it/s]Inferenza (replay test): 100%|##########| 16000/16000 [01:55<00:00, 138.18it/s]
+Test Stream | AUC: 0.9644 | AP: 0.9309
+Routed decision | Precision: 0.8656 | Recall: 0.7908
+
+--- LATERAL RECALL: GLOBAL-FPR THRESHOLD  vs  COST-SENSITIVE ROUTING ---
+  before (global @FPR=0.01): lateral_recall=0.2601 | benign_fpr=0.0121
+  after  (routed cost-sensitive)       : lateral_recall=0.4653 | benign_fpr=0.0440
+
+--- METRICHE PER TIPO DI ANOMALIA ---
+  policy     | OPA-owned   | n=1351 | AUC: 0.9954 | AP: 0.9678 | Recall@thr: 0.9689
+  contextual | rule-trivial | n=1365 | AUC: 0.9881 | AP: 0.9821 | Recall@thr: 0.9736
+  lateral    | rule-blind  | n=1384 | AUC: 0.9213 | AP: 0.6010 | Recall@thr: 0.4653
+  cred-theft | rule-blind  | n= 117 | AUC: 0.8385 | AP: 0.1209 | Recall@thr: 0.4530
+
+--- LATERAL: COLD-START CONDITIONING ---
+  warmed src (has benign history): n=1380 | recall@thr=0.4667 | AUC=0.9214
+  cold   src (no history yet)     : n=   4 | recall@thr=0.0000  (detection not yet possible)
+
+--- SCENARI v2 (goal a/b/c) ---
+  benign FPR  plain=0.0414 | roaming=0.0354 (n=1131) | wiped-cookie=0.0709 (n=268)
+  credential theft: recall@thr=0.4530 | AUC=0.8385 (n=117)
+  lateral su device condivisi: recall@thr=0.4171 (n=199)
+
+--- BASELINE A REGOLE (signal-only) ---
+  Precision: 1.0000 | Recall: 0.3533 | Recall policy: 0.0000 | Recall contextual: 0.9619 | Recall lateral: 0.1279
+  NOTE: the rule baseline catches contextual anomalies almost entirely (edge signals only) but is blind to policy/lateral — that gap is the TGN's value-add.
+
+==============================================================================
+=== CONFIG-EVAL: ~v3 (no config)  (seed=123, theft-rich) ===
+==============================================================================
+Generating streaming data...
+Using device: cuda
+--- INIZIO ADDESTRAMENTO UNSUPERVISED ---
+--- INIZIO ADDESTRAMENTO UNSUPERVISED ---
+Epoch 01/12 [train]:   0%|          | 0/280 [00:00<?, ?it/s]Epoch 01/12 [train]: 100%|##########| 280/280 [00:07<00:00, 39.09it/s, loss=2.8726]
+Epoch 01 | Train Loss: 3.1694
+Epoch 02/12 [train]:   0%|          | 0/280 [00:00<?, ?it/s]Epoch 02 | Train Loss: 2.5372
+Epoch 02/12 [train]: 100%|##########| 280/280 [00:07<00:00, 38.49it/s, loss=1.6894]
+Epoch 03/12 [train]:   0%|          | 0/280 [00:00<?, ?it/s]Epoch 03 | Train Loss: 1.6152
+Epoch 03/12 [train]: 100%|##########| 280/280 [00:07<00:00, 39.42it/s, loss=1.1082]
+Epoch 04/12 [train]:   0%|          | 0/280 [00:00<?, ?it/s]Epoch 04/12 [train]: 100%|##########| 280/280 [00:07<00:00, 39.40it/s, loss=1.0930]
+Epoch 04 | Train Loss: 1.2444
+Epoch 05/12 [train]:   0%|          | 0/280 [00:00<?, ?it/s]Epoch 05 | Train Loss: 1.1689
+Epoch 05/12 [train]: 100%|##########| 280/280 [00:07<00:00, 39.55it/s, loss=1.1126]
+Epoch 06/12 [train]:   0%|          | 0/280 [00:00<?, ?it/s]Epoch 06 | Train Loss: 1.1182
+Epoch 06/12 [train]: 100%|##########| 280/280 [00:07<00:00, 39.50it/s, loss=1.0114]
+Epoch 07/12 [train]:   0%|          | 0/280 [00:00<?, ?it/s]Epoch 07 | Train Loss: 1.1085
+Epoch 07/12 [train]: 100%|##########| 280/280 [00:07<00:00, 39.52it/s, loss=0.9905]
+Epoch 08/12 [train]:   0%|          | 0/280 [00:00<?, ?it/s]Epoch 08/12 [train]: 100%|##########| 280/280 [00:07<00:00, 39.53it/s, loss=1.0136]
+Epoch 08 | Train Loss: 1.0539
+Epoch 09/12 [train]:   0%|          | 0/280 [00:00<?, ?it/s]Epoch 09/12 [train]: 100%|##########| 280/280 [00:07<00:00, 38.88it/s, loss=1.1541]
+Epoch 09 | Train Loss: 1.0437
+Epoch 10/12 [train]:   0%|          | 0/280 [00:00<?, ?it/s]Epoch 10/12 [train]: 100%|##########| 280/280 [00:07<00:00, 38.86it/s, loss=0.9901]
+Epoch 10 | Train Loss: 1.0130
+Epoch 11/12 [train]:   0%|          | 0/280 [00:00<?, ?it/s]Epoch 11/12 [train]: 100%|##########| 280/280 [00:07<00:00, 39.51it/s, loss=0.9293]
+Epoch 11 | Train Loss: 0.9983
+Epoch 12/12 [train]:   0%|          | 0/280 [00:00<?, ?it/s]Epoch 12 | Train Loss: 1.0379
+
+--- CALIBRAZIONE SOGLIA (su flusso di validazione benigno) ---
+Epoch 12/12 [train]: 100%|##########| 280/280 [00:07<00:00, 39.43it/s, loss=0.9235]
+Calibrazione (replay val):   0%|          | 0/8000 [00:00<?, ?it/s]Calibrazione (replay val):  28%|##7       | 2221/8000 [00:10<00:26, 222.04it/s]Calibrazione (replay val):  56%|#####5    | 4442/8000 [00:20<00:16, 221.74it/s]Calibrazione (replay val):  83%|########3 | 6658/8000 [00:30<00:06, 219.40it/s]Calibrazione (replay val): 100%|##########| 8000/8000 [00:36<00:00, 220.25it/s]
+Benign val score: mean=0.0105 p95=0.0367
+threshold_dirty@FPR=0.01: 0.0888 | threshold_clean@cost_ratio=20.0: 0.0367 (clean cal: n_benign=6079 n_lateral=541)
+  clean-stream lateral recall vs benign FPR (reference curve):
+    thr=0.0011 | lateral_recall=1.000 | benign_fpr=1.0000
+    thr=0.0034 | lateral_recall=0.996 | benign_fpr=0.7825
+    thr=0.0045 | lateral_recall=0.994 | benign_fpr=0.5649
+    thr=0.0065 | lateral_recall=0.985 | benign_fpr=0.3479
+    thr=0.0152 | lateral_recall=0.845 | benign_fpr=0.1426
+    thr=0.4355 | lateral_recall=0.000 | benign_fpr=0.0002
+
+--- INIZIO FASE DI INFERENZA / ANOMALY DETECTION (per-evento) ---
+Inferenza (replay test):   0%|          | 0/16000 [00:00<?, ?it/s]Inferenza (replay test):  13%|#2        | 2037/16000 [00:10<01:08, 203.67it/s]Inferenza (replay test):  26%|##5       | 4085/16000 [00:20<00:58, 204.33it/s]Inferenza (replay test):  38%|###8      | 6133/16000 [00:30<00:48, 203.01it/s]Inferenza (replay test):  51%|#####     | 8148/16000 [00:40<00:38, 201.58it/s]Inferenza (replay test):  63%|######3   | 10149/16000 [00:50<00:29, 201.04it/s]Inferenza (replay test):  76%|#######5  | 12150/16000 [01:00<00:19, 200.44it/s]Inferenza (replay test):  88%|########8 | 14143/16000 [01:10<00:09, 199.82it/s]Inferenza (replay test): 100%|##########| 16000/16000 [01:19<00:00, 200.82it/s]
+Test Stream | AUC: 0.9617 | AP: 0.9241
+Routed decision | Precision: 0.8674 | Recall: 0.7479
+
+--- LATERAL RECALL: GLOBAL-FPR THRESHOLD  vs  COST-SENSITIVE ROUTING ---
+  before (global @FPR=0.01): lateral_recall=0.1655 | benign_fpr=0.0071
+  after  (routed cost-sensitive)       : lateral_recall=0.3468 | benign_fpr=0.0409
+
+--- METRICHE PER TIPO DI ANOMALIA ---
+  policy     | OPA-owned   | n=1351 | AUC: 0.9966 | AP: 0.9786 | Recall@thr: 0.9785
+  contextual | rule-trivial | n=1365 | AUC: 0.9901 | AP: 0.9837 | Recall@thr: 0.9751
+  lateral    | rule-blind  | n=1384 | AUC: 0.9199 | AP: 0.5473 | Recall@thr: 0.3468
+  cred-theft | rule-blind  | n= 117 | AUC: 0.7221 | AP: 0.0292 | Recall@thr: 0.1795
+
+--- LATERAL: COLD-START CONDITIONING ---
+  warmed src (has benign history): n=1380 | recall@thr=0.3478 | AUC=0.9201
+  cold   src (no history yet)     : n=   4 | recall@thr=0.0000  (detection not yet possible)
+
+--- SCENARI v2 (goal a/b/c) ---
+  benign FPR  plain=0.0420 | roaming=0.0309 (n=1131) | wiped-cookie=0.0187 (n=268)
+  credential theft: recall@thr=0.1795 | AUC=0.7221 (n=117)
+  lateral su device condivisi: recall@thr=0.3719 (n=199)
+
+--- BASELINE A REGOLE (signal-only) ---
+  Precision: 1.0000 | Recall: 0.3533 | Recall policy: 0.0000 | Recall contextual: 0.9619 | Recall lateral: 0.1279
+  NOTE: the rule baseline catches contextual anomalies almost entirely (edge signals only) but is blind to policy/lateral — that gap is the TGN's value-add.
+
+================================================================================================
+CONFIG-NODE TARGETED VALIDATION — 3 seeds [42, 7, 123], 80000 events / 12 epochs, theft-rich (slots 400/120, p_theft=0.002, p_wipe=0.0008)
+================================================================================================
+variant            |     theft AUC |     theft Rec |  theft n |       lat AUC |       lat Rec |       agg AUC |     FPR wiped
+-----------------------------------------------------------------------------------------------------------------------------
+v4 (config node)   |   0.729±0.088 |   0.314±0.107 |      452 |   0.919±0.018 |   0.469±0.088 |   0.958±0.011 |   0.060±0.021 (n=651)
+~v3 (no config)    |   0.676±0.036 |   0.206±0.039 |      452 |   0.913±0.007 |   0.334±0.014 |   0.956±0.005 |   0.038±0.033 (n=651)
+
+Δ config node (v4 − ~v3) on credential theft: AUC +0.053 | recall +0.108. Positive Δ ⇒ the config node (config→user / source→config) adds detection power on stolen-credential clients. theft_n>0 here confirms the targeted split exposes the incidents the default 64-slot config hid in the train window.
