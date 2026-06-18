@@ -33,7 +33,7 @@ from graphagate.model.tgn import ZTATemporalGraphNetwork, stable_hash
 from graphagate.netclass import ip_is_internal
 
 
-SCHEMA_VERSION = 3  # 4-node / 3-edge schema, namespaced keys + resource-risk / source-internal feats
+SCHEMA_VERSION = 4  # 5-node schema: config (JA3) node — source→config→device→user→resource (+ config→user)
 
 
 def build_model(hp: dict, device: torch.device) -> ZTATemporalGraphNetwork:
@@ -42,8 +42,8 @@ def build_model(hp: dict, device: torch.device) -> ZTATemporalGraphNetwork:
     if found != SCHEMA_VERSION:
         raise RuntimeError(
             f"checkpoint schema_version={found} is incompatible with this code "
-            f"(expected {SCHEMA_VERSION}: 4-node schema with namespaced keys + "
-            "resource-risk / source-internal node features). "
+            f"(expected {SCHEMA_VERSION}: 5-node schema with the config/JA3 node — "
+            "source→config→device→user→resource plus a config→user binding). "
             "Retrain with `graphagate.train_tgn` to regenerate the artifact."
         )
     model = ZTATemporalGraphNetwork(
@@ -288,21 +288,24 @@ def score_event(
     device,
     *,
     key_source: Hashable | None = None,
+    key_config: Hashable | None = None,
     threshold_dirty=None,
     src_feat=None,
     dst_feat=None,
     update: bool = True,
 ) -> tuple[float, bool]:
-    """Score one streaming access event (v2 schema: up to 3 edges per request).
+    """Score one streaming access event (v4 schema: up to 5 edges per request).
 
     Maps the (possibly unseen) entity keys through ``registry`` and scores the causal
-    chain ``key_source -> key_device -> key_user -> key_dst``: the two binding edges
-    carry zero messages, the access edge carries ``features``; the anomaly score is the
-    max over the edges. ``key_source`` (the client IP) is optional — when the
-    orchestrator cannot supply it the source→device edge is skipped entirely (a key is
-    never aliased onto two roles). When ``update`` is set the event is written into
-    memory **only if it is classified benign** (``score < threshold``), keeping the
-    baseline free of attacker-controlled events.
+    chain ``key_source -> key_config -> key_device -> key_user -> key_dst`` plus the
+    ``key_config -> key_user`` binding: the four binding edges carry zero messages, the
+    access edge carries ``features``; the anomaly score is the max over the edges.
+    ``key_source`` (the client IP) and ``key_device`` are optional — a missing one skips
+    only its own binding edges (a key is never aliased onto two roles). ``key_config``
+    (the client's TLS/JA3 fingerprint) defaults to the generic ``"conf:guest"`` when the
+    collector cannot resolve it, so the config node is always present. When ``update`` is
+    set the event is written into memory **only if it is classified benign**
+    (``score < threshold``), keeping the baseline free of attacker-controlled events.
 
     ``src_feat`` / ``dst_feat`` are the endpoints' static attributes (role /
     clearance / device tier). In a ZTA deployment the orchestrator/OPA already
@@ -313,10 +316,13 @@ def score_event(
     Returns ``(anomaly_score, is_anomaly)``.
     """
     model.eval()
+    if key_config is None:
+        key_config = "conf:guest"
     user_idx = _admit(model, registry, key_user)
     device_idx = None if key_device is None else _admit(model, registry, key_device)
     dst_idx = _admit(model, registry, key_dst)
     source_idx = None if key_source is None else _admit(model, registry, key_source)
+    config_idx = _admit(model, registry, key_config)
 
     if src_feat is not None:
         _set_node_features(model, user_idx, src_feat, device)
@@ -328,24 +334,26 @@ def score_event(
         _set_source_network_feature(model, source_idx, key_source)
 
     features_bind = [0.0] * len(features)
+    # Causal chain source → config → device → user → resource, plus config → user.
+    # The config node is always present; device / source bindings are skipped if absent
+    # (config → user then bridges the chain when the device is missing).
     edge_scores = [
         infer_score(model, user_idx, dst_idx, timestamp, features, device,
                     aux_src_idx=device_idx),
+        infer_score(model, config_idx, user_idx, timestamp, features_bind, device),
     ]
     if device_idx is not None:
         edge_scores.append(
+            infer_score(model, config_idx, device_idx, timestamp, features_bind, device)
+        )
+        edge_scores.append(
             infer_score(model, device_idx, user_idx, timestamp, features_bind, device)
         )
-        if source_idx is not None:
-            edge_scores.append(
-                infer_score(model, source_idx, device_idx, timestamp, features_bind, device)
-            )
-    elif source_idx is not None:
-        # If device is missing, source connects directly to user
+    if source_idx is not None:
         edge_scores.append(
-            infer_score(model, source_idx, user_idx, timestamp, features_bind, device)
+            infer_score(model, source_idx, config_idx, timestamp, features_bind, device)
         )
-        
+
     raw_score = max(edge_scores)
     # Kill-chain precursor prior — keyed on the DEVICE node (if present), else on USER
     boost_idx = device_idx if device_idx is not None else user_idx
@@ -367,17 +375,17 @@ def score_event(
         model.node_feat[user_idx, 14] = min(1.0, model.node_feat[user_idx, 14].item() + 0.01)
 
     if update and not is_anomaly:
+        # Commit order mirrors the causal chain: source→config, config→device,
+        # config→user, device→user, user→resource.
+        if source_idx is not None:
+            update_memory(model, source_idx, config_idx, timestamp, features_bind, device)
         if device_idx is not None:
-            if source_idx is not None:
-                update_memory(model, source_idx, device_idx, timestamp, features_bind, device)
+            update_memory(model, config_idx, device_idx, timestamp, features_bind, device)
+        update_memory(model, config_idx, user_idx, timestamp, features_bind, device)
+        if device_idx is not None:
             update_memory(model, device_idx, user_idx, timestamp, features_bind, device)
-            update_memory(model, user_idx, dst_idx, timestamp, features, device,
-                          aux_pair=(device_idx, dst_idx))
-        else:
-            if source_idx is not None:
-                update_memory(model, source_idx, user_idx, timestamp, features_bind, device)
-            update_memory(model, user_idx, dst_idx, timestamp, features, device,
-                          aux_pair=None)
+        update_memory(model, user_idx, dst_idx, timestamp, features, device,
+                      aux_pair=(device_idx, dst_idx) if device_idx is not None else None)
 
     return score, is_anomaly
 
@@ -393,6 +401,7 @@ def commit_event(
     device,
     *,
     key_source: Hashable | None = None,
+    key_config: Hashable | None = None,
     src_feat=None,
     dst_feat=None,
 ) -> None:
@@ -401,16 +410,20 @@ def commit_event(
     This is the *unconditional* counterpart of :func:`score_event`: it maps the entity
     keys through ``registry`` (admitting unseen entities, evicting LRU on overflow),
     optionally refreshes their static attributes, and advances both the TGN memory and
-    the neighbour history along the same up-to-3-edge chain. Use it for the two-step
-    anti-poisoning flow where the benign/anomalous decision is made *outside* the model
-    (score with :func:`infer_score` / :func:`score_event` ``update=False`` first, then
-    commit here only on approval).
+    the neighbour history along the same up-to-5-edge chain (``key_config`` defaults to
+    ``"conf:guest"`` when omitted). Use it for the two-step anti-poisoning flow where the
+    benign/anomalous decision is made *outside* the model (score with
+    :func:`infer_score` / :func:`score_event` ``update=False`` first, then commit here
+    only on approval).
     """
     model.eval()
+    if key_config is None:
+        key_config = "conf:guest"
     user_idx = _admit(model, registry, key_user)
     device_idx = None if key_device is None else _admit(model, registry, key_device)
     dst_idx = _admit(model, registry, key_dst)
     source_idx = None if key_source is None else _admit(model, registry, key_source)
+    config_idx = _admit(model, registry, key_config)
 
     if src_feat is not None:
         _set_node_features(model, user_idx, src_feat, device)
@@ -422,17 +435,16 @@ def commit_event(
         _set_source_network_feature(model, source_idx, key_source)
 
     features_bind = [0.0] * len(features)
+    # Commit order: source→config, config→device, config→user, device→user, user→resource.
+    if source_idx is not None:
+        update_memory(model, source_idx, config_idx, timestamp, features_bind, device)
     if device_idx is not None:
-        if source_idx is not None:
-            update_memory(model, source_idx, device_idx, timestamp, features_bind, device)
+        update_memory(model, config_idx, device_idx, timestamp, features_bind, device)
+    update_memory(model, config_idx, user_idx, timestamp, features_bind, device)
+    if device_idx is not None:
         update_memory(model, device_idx, user_idx, timestamp, features_bind, device)
-        update_memory(model, user_idx, dst_idx, timestamp, features, device,
-                      aux_pair=(device_idx, dst_idx))
-    else:
-        if source_idx is not None:
-            update_memory(model, source_idx, user_idx, timestamp, features_bind, device)
-        update_memory(model, user_idx, dst_idx, timestamp, features, device,
-                      aux_pair=None)
+    update_memory(model, user_idx, dst_idx, timestamp, features, device,
+                  aux_pair=(device_idx, dst_idx) if device_idx is not None else None)
 
 
 def save_model(model, registry: NodeRegistry, threshold: float, hp: dict,

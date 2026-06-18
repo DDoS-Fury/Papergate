@@ -1,15 +1,25 @@
-"""Synthetic ZTA access stream — v2 schema: 4 node roles, 3 edges per request.
+"""Synthetic ZTA access stream — v4 schema: 5 node roles, 5 edges per request.
 
-Every HTTP request involves four entities, mapped to a single node index space:
+Every HTTP request involves five entities, mapped to a single node index space:
 
-    [0, U)                -> Users      (identity context: user id / credentials)
-    [U, U+D)              -> Devices    (hardware context: TPM id or device cookie)
-    [U+D, U+D+S)          -> Sources    (network context: client IP)
-    [U+D+S, U+D+S+R)      -> Resources  (data context: route URI)
+    [0, U)                    -> Users      (identity context: user id / credentials)
+    [U, U+D)                  -> Devices    (hardware context: TPM id or device cookie)
+    [U+D, U+D+S)              -> Sources    (network context: client IP)
+    [U+D+S, U+D+S+C)          -> Configs    (client context: TLS/JA3 fingerprint)
+    [U+D+S+C, U+D+S+C+R)      -> Resources  (data context: route URI)
 
-and unrolls into the causal 3-edge chain ``source_ip -> device -> user -> resource``
-(the access edge ``user -> resource`` carries the request message; the two binding
-edges carry zero messages).
+and unrolls into the causal chain ``source_ip -> config -> device -> user -> resource``
+(the configuration / JA3 fingerprint of the client is inserted between the network
+source and the hardware device), **plus** a ``config -> user`` binding. The access edge
+``user -> resource`` carries the request message; the four binding edges carry zero
+messages.
+
+The CONFIG node is the client's software identity (``conf:<ja3>``, or the generic
+``conf:guest`` for an unfingerprinted client). A device habitually presents a small set
+of configs, so a never-seen config on a known device (lateral movement with a new tool)
+or for a known user (a credential thief whose client differs from the victim's) is an
+extra structural tell — independent of the JA3 *validity* bit still carried in the edge
+message (``features[0]``).
 
 The split of the old single "IP/device" entity into SOURCE and DEVICE is what the
 generator's dynamics exercise:
@@ -22,9 +32,9 @@ generator's dynamics exercise:
   * **cookie wipe** (``p_cookie_wipe``): a non-TPM machine loses its cookie and is
     re-keyed as a cold device node (benign; the cost of cookie-based identity).
   * **credential theft** (``p_cred_theft``, etype 4): a never-seen attacker IP +
-    never-seen attacker device suddenly issue requests as an existing victim user.
-    Policy-clean and signal-clean — only the broken ``ip -> device -> user`` binding
-    pattern exposes it.
+    never-seen attacker device + never-seen attacker config suddenly issue requests as
+    an existing victim user. Policy-clean and signal-clean — only the broken
+    ``ip -> config -> device -> user`` binding pattern exposes it.
 
 Anomaly types (``types``): 0=benign, 1=policy violation (OPA-owned), 2=contextual,
 3=lateral movement, 4=credential theft. ``scenario`` is a per-event bitmask of
@@ -162,6 +172,16 @@ SCEN_SHARED = 4    # the device is shared by multiple users
 # A wiped device node is considered "cold" for this many events on the new slot.
 _WIPE_COLD_EVENTS = 25
 
+# Per-event chance a benign request comes from an unfingerprinted client (``conf:guest``)
+# rather than one of the machine's habitual configs (e.g. a fresh browser profile / a
+# client whose JA3 the collector could not resolve). A low-information default, like a
+# shared NAT IP — must not by itself look anomalous.
+_P_GUEST_CONFIG = 0.05
+# Per-(lateral)-event chance the compromised machine presents a config it has never used
+# (a globally-known fingerprint, but a new *tool* on this device) — the lateral-movement
+# config tell. Otherwise the lateral event keeps the machine's habitual config (stealth).
+_P_LATERAL_NEW_CONFIG = 0.5
+
 
 class ZTAStreamSimulator:
     """Stateful per-event simulator behind both the offline tensor stream
@@ -177,6 +197,7 @@ class ZTAStreamSimulator:
         num_users: int = 50,
         num_devices: int = 80,
         num_sources: int = 150,
+        num_configs: int = 40,
         num_resources: int = 19,
         num_wipe_slots: int = 16,
         num_theft_slots: int = 64,
@@ -202,6 +223,7 @@ class ZTAStreamSimulator:
         self.num_users = num_users
         self.num_devices = num_devices
         self.num_sources = num_sources
+        self.num_configs = num_configs
         self.num_resources = num_resources
         self.num_wipe_slots = num_wipe_slots
         self.num_theft_slots = num_theft_slots
@@ -211,13 +233,17 @@ class ZTAStreamSimulator:
         self.p_cred_theft = p_cred_theft
         self.admission_horizon = admission_horizon
 
-        # --- node index layout: [users][device slots][source slots][resources] ----
+        # --- node index layout: [users][device slots][source slots][config slots][resources] ----
         self.user_lo = 0
         self.dev_lo = num_users
         self.dev_slots = num_devices + num_wipe_slots + num_theft_slots
         self.src_lo = self.dev_lo + self.dev_slots
         self.src_slots = num_sources + num_theft_slots
-        self.res_lo = self.src_lo + self.src_slots
+        self.cfg_lo = self.src_lo + self.src_slots
+        # Config slot 0 is the generic ``conf:guest``; [1, num_configs) are habitual
+        # fingerprints; the trailing num_theft_slots hold never-seen attacker configs.
+        self.cfg_slots = num_configs + num_theft_slots
+        self.res_lo = self.cfg_lo + self.cfg_slots
         self.num_nodes = self.res_lo + num_resources
 
         # --- users -----------------------------------------------------------------
@@ -253,6 +279,18 @@ class ZTAStreamSimulator:
                 home.add(int(np.random.randint(num_office, num_sources)))
             self.machine_home_ips.append(home)
 
+        # --- habitual client configs (TLS/JA3) per machine --------------------------
+        # Config 0 is the generic ``conf:guest``; the habitual pool is [1, num_configs).
+        # Each machine runs 1-2 of those (browsers/tools share fingerprints across
+        # machines, so the pool is small and overlapping). A config outside a machine's
+        # habitual set is a new tool on that device (lateral tell).
+        cfg_pool = list(range(1, num_configs)) if num_configs > 1 else [0]
+        self.machine_configs: list[list[int]] = []
+        for m in range(num_devices):
+            k = min(int(np.random.randint(1, 3)), len(cfg_pool))
+            cfgs = np.random.choice(cfg_pool, size=k, replace=False)
+            self.machine_configs.append([int(c) for c in cfgs])
+
         # --- external keys per node slot ---------------------------------------------
         self.keys: list = [None] * self.num_nodes
         for u in range(num_users):
@@ -274,6 +312,13 @@ class ZTAStreamSimulator:
             )
         for k in range(num_theft_slots):
             self.keys[self.src_lo + num_sources + k] = f"src:203.0.113.{k}"
+        # Config keys: slot 0 = generic guest, [1, num_configs) = habitual JA3
+        # fingerprints, trailing slots = never-seen attacker configs (credential theft).
+        self.keys[self.cfg_lo] = "conf:guest"
+        for c in range(1, num_configs):
+            self.keys[self.cfg_lo + c] = f"conf:{c:04d}"
+        for k in range(num_theft_slots):
+            self.keys[self.cfg_lo + num_configs + k] = f"_spare_cfg_{k}"
         for r in range(num_resources):
             self.keys[self.res_lo + r] = RESOURCE_URIS[r]
 
@@ -359,8 +404,25 @@ class ZTAStreamSimulator:
             self.machine_slot[machine] = slot
             self._slot_age[slot] = 0
 
+    def _habitual_config(self, machine: int) -> int:
+        """Global slot of a benign client config for ``machine`` (its habitual JA3, or
+        occasionally the generic ``conf:guest``)."""
+        if random.random() < _P_GUEST_CONFIG:
+            return self.cfg_lo  # conf:guest
+        return self.cfg_lo + int(random.choice(self.machine_configs[machine]))
+
+    def _new_tool_config(self, machine: int) -> int:
+        """Global slot of a config ``machine`` has never used (a new tool on a known
+        device — the lateral-movement config tell). Falls back to the habitual config
+        when the pool offers no alternative."""
+        habit = set(self.machine_configs[machine])
+        others = [c for c in range(1, self.num_configs) if c not in habit]
+        if not others:
+            return self._habitual_config(machine)
+        return self.cfg_lo + int(random.choice(others))
+
     def _emit_theft_event(self, incident: dict) -> dict:
-        """One credential-theft request: attacker IP + attacker device, victim identity."""
+        """One credential-theft request: attacker IP + config + device, victim identity."""
         u = incident["victim"]
         role, clr = self.user_roles[u], self.user_clearances[u]
         # The attacker holds the victim's credentials: OPA's role/clearance/category
@@ -374,19 +436,21 @@ class ZTAStreamSimulator:
         if incident["remaining"] <= 0:
             self._active_thefts.remove(incident)
         return self._event(
-            source=incident["src_slot"], device=incident["dev_slot"], user=u,
+            source=incident["src_slot"], config=incident["cfg_slot"],
+            device=incident["dev_slot"], user=u,
             res_idx=res_idx, feat=feat, label=1, etype=4, scenario=0,
         )
 
-    def _event(self, *, source, device, user, res_idx, feat, label, etype, scenario):
+    def _event(self, *, source, config, device, user, res_idx, feat, label, etype, scenario):
         if device in self._slot_age:
             self._slot_age[device] += 1
         dst = self.res_lo + res_idx
         return {
-            "source": source, "device": device, "user": user, "dst": dst,
+            "source": source, "config": config, "device": device, "user": user, "dst": dst,
             "t": self.t, "features": feat, "label": label, "etype": etype,
             "scenario": scenario,
-            "key_source": self.keys[source], "key_device": self.keys[device],
+            "key_source": self.keys[source], "key_config": self.keys[config],
+            "key_device": self.keys[device],
             "key_user": self.keys[user], "key_dst": self.keys[dst],
         }
 
@@ -407,10 +471,13 @@ class ZTAStreamSimulator:
             self._next_theft_slot += 1
             dev_slot = self.dev_lo + self.num_devices + self.num_wipe_slots + k
             self.keys[dev_slot] = f"ck:atk-{k:03d}"  # attacker gets a fresh cookie
+            cfg_slot = self.cfg_lo + self.num_configs + k
+            self.keys[cfg_slot] = f"conf:atk-{k:03d}"  # ...and a never-seen JA3
             incident = {
                 "victim": int(np.random.randint(0, self.num_users)),
                 "dev_slot": dev_slot,
                 "src_slot": self.src_lo + self.num_sources + k,
+                "cfg_slot": cfg_slot,
                 "remaining": int(np.random.randint(3, 7)),
             }
             self._active_thefts.append(incident)
@@ -445,6 +512,11 @@ class ZTAStreamSimulator:
         else:
             src_local = random.choice(sorted(home))
         source = self.src_lo + src_local
+
+        # Client config (TLS/JA3): the machine's habitual fingerprint by default. It is a
+        # software identity, so roaming (a network change) does NOT change it; lateral
+        # movement may swap in a new tool (see below).
+        config = self._habitual_config(machine)
 
         # --- APT kill chain on the physical machine (recon -> lateral -> exfil) ----
         if np.random.rand() < 0.005 and machine not in self.compromised_state:
@@ -495,6 +567,9 @@ class ZTAStreamSimulator:
                     if random.random() < 0.5:  # stolen identity inside the message
                         u_role = random.choice([r for r in ROLES if r != u_role])
                         u_clearance = ROLE_CLEARANCE[u_role]  # spoofed role's clearance
+                    if random.random() < _P_LATERAL_NEW_CONFIG:
+                        # a new tool on this device: a config it has never presented
+                        config = self._new_tool_config(machine)
                 else:
                     anomaly_type = "policy"
 
@@ -523,15 +598,17 @@ class ZTAStreamSimulator:
 
         feat = [ja3, float(s1), float(s2), float(s3), float(method),
                 ROLES.index(u_role) / (len(ROLES) - 1), u_clearance / 4.0]
-        return self._event(source=source, device=dev_slot, user=user, res_idx=res_idx,
-                           feat=feat, label=label, etype=etype, scenario=scenario)
+        return self._event(source=source, config=config, device=dev_slot, user=user,
+                           res_idx=res_idx, feat=feat, label=label, etype=etype,
+                           scenario=scenario)
 
 
 @dataclass
 class SyntheticStream:
-    """Tensorised v2 stream plus the node-space layout the training pipeline needs."""
+    """Tensorised v4 stream plus the node-space layout the training pipeline needs."""
 
     source: torch.Tensor        # [N] global source (IP) node ids
+    config: torch.Tensor        # [N] global config (JA3) node ids
     device: torch.Tensor        # [N] global device node ids
     user: torch.Tensor          # [N] global user node ids
     dst: torch.Tensor           # [N] global resource node ids
@@ -549,6 +626,8 @@ class SyntheticStream:
     dev_num: int = 0
     src_lo: int = 0
     src_num: int = 0
+    cfg_lo: int = 0
+    cfg_num: int = 0
     res_lo: int = 0
     res_num: int = 0
 
@@ -557,6 +636,7 @@ def generate_streaming_data(
     num_users=50,
     num_devices=80,
     num_sources=150,
+    num_configs=40,
     num_resources=19,
     num_events=5000,
     *,
@@ -571,14 +651,14 @@ def generate_streaming_data(
     use_resource_risk=True,
     use_source_internal=False,
 ) -> SyntheticStream:
-    """Generate the offline v2 training stream (see the module docstring).
+    """Generate the offline v4 training stream (see the module docstring).
 
     ``seed`` seeds both ``numpy`` and the stdlib ``random`` module so the stream is
     fully reproducible — ``random.choice`` is used alongside ``np.random``.
     """
     sim = ZTAStreamSimulator(
         num_users=num_users, num_devices=num_devices, num_sources=num_sources,
-        num_resources=num_resources, num_wipe_slots=num_wipe_slots,
+        num_configs=num_configs, num_resources=num_resources, num_wipe_slots=num_wipe_slots,
         num_theft_slots=num_theft_slots, benign_explore_prob=benign_explore_prob,
         p_roam=p_roam, p_shared_device=p_shared_device, p_cookie_wipe=p_cookie_wipe,
         p_cred_theft=p_cred_theft, admission_horizon=num_events, seed=seed,
@@ -592,7 +672,8 @@ def generate_streaming_data(
     # Spare slots never touched by the run keep placeholder keys; that is fine — the
     # registry just preregisters them and serving re-keys slots dynamically anyway.
     return SyntheticStream(
-        source=col("source"), device=col("device"), user=col("user"), dst=col("dst"),
+        source=col("source"), config=col("config"), device=col("device"),
+        user=col("user"), dst=col("dst"),
         t=col("t"),
         msg=torch.tensor([e["features"] for e in events], dtype=torch.float),
         y=col("label"), types=col("etype"), scenario=col("scenario"),
@@ -601,5 +682,6 @@ def generate_streaming_data(
         user_lo=sim.user_lo, user_num=sim.num_users,
         dev_lo=sim.dev_lo, dev_num=sim.dev_slots,
         src_lo=sim.src_lo, src_num=sim.src_slots,
+        cfg_lo=sim.cfg_lo, cfg_num=sim.cfg_slots,
         res_lo=sim.res_lo, res_num=sim.num_resources,
     )
