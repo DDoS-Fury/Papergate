@@ -2,6 +2,7 @@
 \usepackage[utf8]{inputenc}
 \usepackage[italian]{babel}
 \usepackage{amsmath}
+\usepackage{booktabs}
 \usepackage{graphicx}
 \usepackage{hyperref}
 \usepackage{geometry}
@@ -325,7 +326,7 @@ Il nodo config è \emph{inserito tra source e device} nella catena causale, sost
 \label{tab:v4edges}
 \end{table}
 
-L'architettura core (memoria ricorrente, \textit{GraphAttentionEmbedding} multi-hop, \textit{Dual Head Scorer}) è \emph{invariata}: il modello è agnostico al numero di archi per evento, e i nuovi \textit{binding} riusano la stessa primitiva di scoring degli archi esistenti (con \textit{history features} senza ausiliario, come per \textit{device}$\rightarrow$\textit{user}). Il generatore sintetico è esteso coerentemente: ogni macchina riceve 1--2 configurazioni abituali da un pool condiviso; il movimento laterale presenta con probabilità $0.5$ un \emph{tool} (config) mai usato da quel device; il furto di credenziali alloca al client attaccante un JA3 mai visto (\texttt{conf:atk-NNN}).
+L'architettura core (memoria ricorrente, \textit{GraphAttentionEmbedding} multi-hop, \textit{Dual Head Scorer}) è \emph{invariata}: il modello è agnostico al numero di archi per evento, e i nuovi \textit{binding} riusano la stessa primitiva di scoring degli archi esistenti (con \textit{history features} senza ausiliario, come per \textit{device}$\rightarrow$\textit{user}). Il generatore sintetico è esteso coerentemente: ogni macchina riceve 1--2 configurazioni abituali da un pool condiviso; il movimento laterale presenta con probabilità $0.5$ un \emph{tool} (config) mai usato da quel device; il furto di credenziali alloca al client attaccante un JA3 mai visto (\texttt{conf:atk-NNN}). \emph{Inoltre, per supportare rotte pubbliche (es. \texttt{/login}) che non richiedono un JWT e prevenire falsi positivi da cold-start, lo stream inietta regolarmente accessi a tali risorse usando lo slot utente \texttt{anonymous} combinato al fallback \texttt{dev:guest}, insegnando al modello la normalità del traffico non autenticato.}
 
 % ============================ RISULTATI v4 ============================
 \section{Risultati: il contributo del nodo config}
@@ -463,5 +464,45 @@ Il risultato è \emph{controintuitivo}: rimuovere l'identità per-macchina dei d
 \end{itemize}
 
 \paragraph{Limiti e costo non misurato.} Il guadagno sulle metriche di detection va soppesato con un costo che esse \emph{non} catturano: collassando i dispositivi senza TPM si perde l'\emph{attribuzione per-macchina} (tracciabilità forense, capacità di isolare un singolo endpoint compromesso, audit). Inoltre il confronto è distribuzionale e su stream sintetico: il $\Delta$ sull'AUC laterale è entro il rumore e la quota di guadagno dovuta alla riduzione di varianza non è separabile da un eventuale guadagno ``vero''. Per questi motivi il \textit{deployable} mantiene il \textit{default} a \textit{keying} per-cookie (\texttt{guest\_device\_fallback=False}); il collasso su \texttt{dev:guest} resta una politica attivabile e un'evidenza utile sul fatto che, su questo stream, l'identità fine del dispositivo \emph{non} è il portatore del segnale.
+
+% ==================== QUADRO RIEPILOGATIVO ====================
+\clearpage
+\section{Quadro riepilogativo: confronto di tutti i modelli}
+\label{sec:summary}
+
+Le valutazioni discusse nei due capitoli sono state condotte sotto protocolli diversi (stream sintetico standard vs \emph{theft-rich}, valutazione single-run vs multi-seed, soglia globale all'1\% FPR vs decisione cost-sensitive instradata) e non sono quindi confrontabili \emph{tra} di loro in valore assoluto. La Tabella~\ref{tab:summary} le consolida in un unico quadro, organizzato in tre pannelli \emph{per protocollo}: \textbf{sono validi solo i confronti all'interno dello stesso pannello}. Lo scopo è dare una lettura d'insieme della progressione --- dalle baseline non relazionali al TGN, e dal modello a 4 nodi (v3) a quello con nodo \textit{configuration} (v4) --- senza dover ricomporre i numeri sparsi nelle Tabelle~\ref{tab:baselines},~\ref{tab:v3v4},~\ref{tab:theft} e~\ref{tab:guestdev}.
+
+\begin{table}[ht!]
+\centering
+\footnotesize
+\renewcommand{\arraystretch}{1.3}
+\setlength{\tabcolsep}{5pt}
+\begin{tabular}{l c c c c c}
+\toprule
+\textbf{Modello / variante} & \textbf{AUC agg} & \textbf{AP agg} & \textbf{Lat.\ AUC} & \textbf{Lat.\ AP} & \textbf{Lat.\ Recall} \\
+\midrule
+\multicolumn{6}{l}{\textit{Pannello A — stream standard, single run (200k ev., seed 42), soglia globale 1\% FPR}} \\
+\addlinespace[2pt]
+\textbf{TGN} (v3, deployable)            & \textbf{0.947} & \textbf{0.870} & \textbf{0.900} & ---   & 0.130 \\
+GNN non temporale (ablation)             & 0.574 & 0.569 & 0.468 & ---   & 0.139$^{\dagger}$ \\
+One-Class SVM                            & 0.845 & 0.793 & 0.632 & ---   & 0.047 \\
+Isolation Forest                         & 0.775 & 0.628 & 0.639 & ---   & 0.010 \\
+XGBoost (supervisionato)$^{\ddagger}$    & 0.977 & ---   & 0.942 & ---   & ---   \\
+\midrule
+\multicolumn{6}{l}{\textit{Pannello B — stream standard, single run, decisione cost-sensitive instradata}} \\
+\addlinespace[2pt]
+v3 (4 nodi)                              & 0.952 & 0.896 & 0.894 & 0.464 & 0.255 \\
+\textbf{v4} (nodo config)                & \textbf{0.964} & \textbf{0.905} & \textbf{0.936} & \textbf{0.614} & \textbf{0.599} \\
+\midrule
+\multicolumn{6}{l}{\textit{Pannello C — stream theft-rich, 3 seed (media), ablazioni controllate (\texttt{save=False})}} \\
+\addlinespace[2pt]
+v4 (nodo config)                         & 0.958 & ---   & 0.919 & ---   & 0.469 \\
+$\approx$v3 (ablazione config)           & 0.956 & ---   & 0.913 & ---   & 0.334 \\
+v4 $+$ \texttt{dev:guest}                & 0.961 & ---   & 0.911 & 0.632 & 0.488 \\
+\bottomrule
+\end{tabular}
+\caption{Quadro riepilogativo delle prestazioni di tutti i modelli e varianti osservati. \textbf{Solo i confronti intra-pannello sono validi} (protocolli di valutazione diversi). \textit{Lat.\ Recall} è a soglia globale 1\% FPR nel Pannello~A e a decisione instradata nei Pannelli~B e~C. Nel Pannello~A il \textbf{TGN} coincide col \textit{deployable} v3: i valori differiscono lievemente da quelli del Pannello~B per la diversa regola di decisione (soglia globale vs instradata) e per la varianza single-run. I valori di Pannello~C sono medie su 3 \texttt{seed} su uno stream \emph{theft-rich} (incidenti più frequenti, non appaiati evento-per-evento), perciò non comparabili in assoluto con i Pannelli~A/B. $^{\dagger}$ Il recall della GNN statica è \emph{spurio} (AUC$\approx$caso a soglia permissiva, non segnale reale). $^{\ddagger}$ XGBoost è \emph{supervisionato} (vede le etichette): upper-bound di riferimento, fuori dal paradigma non supervisionato del TGN. Lo \textit{sweep} architetturale (Tab.~\ref{tab:archsweep}) conferma inoltre che nessun aumento di capacità migliora il movimento laterale. Sorgenti: Tab.~\ref{tab:baselines} (A), Tab.~\ref{tab:v3v4} (B), Tab.~\ref{tab:theft} e~\ref{tab:guestdev} (C).}
+\label{tab:summary}
+\end{table}
 
 \end{document}

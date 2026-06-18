@@ -152,13 +152,14 @@ realEdgesGeometry.setAttribute('position', new THREE.Float32BufferAttribute([], 
 const realEdgesLines = new THREE.LineSegments(realEdgesGeometry, lineMat);
 realGnnGroup.add(realEdgesLines);
 
-// Schema v2: catena causale source(IP) → device(TPM/cookie) → user → resource.
-// Un ruolo per colonna, colore per ruolo; gli archi sono i 3 hop della catena.
+// Schema v4: catena causale source(IP) → config(JA3) → device(TPM) → user → resource.
+// Un ruolo per colonna, colore per ruolo; gli archi sono gli hop della catena.
 const NODE_ROLES = {
-    source:   { x: -27, color: 0x00aaff, label: 'Source (IP / network context)' },
-    device:   { x: -9,  color: 0xff3366, label: 'Device (tpm:<id> / ck:<cookie>)' },
-    user:     { x: 9,   color: 0x00ffcc, label: 'User identity' },
-    resource: { x: 27,  color: 0xffaa00, label: 'Resource (URI)' },
+    source:   { x: -32, color: 0x00aaff, label: 'Source (IP / network context)' },
+    config:   { x: -16, color: 0xaa00ff, label: 'Config (JA3 fingerprint)' },
+    device:   { x: 0,   color: 0xff3366, label: 'Device (tpm:<id>)' },
+    user:     { x: 16,  color: 0x00ffcc, label: 'User identity' },
+    resource: { x: 32,  color: 0xffaa00, label: 'Resource (URI)' },
 };
 
 function getOrCreateRealNode(key, role) {
@@ -187,12 +188,24 @@ function getOrCreateRealNode(key, role) {
     return mesh;
 }
 
-// Estrae la catena [role, key] dall'evento. key_source e' opzionale: quando
-// manca (fallback legacy senza id hardware) l'arco source→device non esiste.
+// Estrae la catena [role, key] dall'evento.
 function chainFromEvent(data) {
     const chain = [];
-    if (data.key_source !== undefined && data.key_source !== null) chain.push(['source', data.key_source]);
-    chain.push(['device', data.key_device], ['user', data.key_user], ['resource', data.key_dst]);
+    if (data.key_source !== undefined && data.key_source !== null) {
+        chain.push(['source', data.key_source]);
+    }
+    
+    if (data.key_config !== undefined && data.key_config !== null) {
+        chain.push(['config', data.key_config]);
+    } else {
+        chain.push(['config', 'conf:guest']);
+    }
+
+    if (data.key_device !== undefined && data.key_device !== null) {
+        chain.push(['device', data.key_device]);
+    }
+
+    chain.push(['user', data.key_user], ['resource', data.key_dst]);
     return chain;
 }
 
@@ -571,23 +584,23 @@ function startSimulation() {
 
     if (simInterval) clearInterval(simInterval);
     simInterval = setInterval(() => {
-        // Mock v2 events: full source → device → user → resource chain, with
-        // the occasional legacy event without key_source (no hardware id).
+        // Mock v4 events: full source → config → device → user → resource chain
         const fakeUser = 'user_' + Math.floor(Math.random() * 12);
-        // v3: keys namespaced by type. ~5% are the legacy fallback (no hardware id):
-        // device keyed by the IP itself ("ipdev:<ip>") and NO key_source.
-        const legacy = Math.random() < 0.05;
         const fakeIP = (Math.random() > 0.25 ? '10.0.0.' : '100.64.0.') + Math.floor(Math.random() * 50);
-        const fakeDevice = legacy
-            ? 'ipdev:' + fakeIP
-            : (Math.random() > 0.4 ? 'tpm:' : 'ck:') + String(Math.floor(Math.random() * 24)).padStart(4, '0');
-        const fakeSource = legacy ? null : 'src:' + fakeIP;
+        const fakeSource = 'src:' + fakeIP;
+        
+        const hasJA3 = Math.random() > 0.1;
+        const fakeConfig = hasJA3 ? 'conf:d41d8cd98f00b204e9800998ecf8427e' : 'conf:guest';
+
+        const hasTPM = Math.random() > 0.3;
+        const fakeDevice = hasTPM ? 'tpm:' + String(Math.floor(Math.random() * 24)).padStart(4, '0') : null;
+        
         const fakeDst = '/api/v1/resource_' + Math.floor(Math.random() * 8);
         const isAnomaly = Math.random() > 0.95;
         const score = isAnomaly ? 0.85 + Math.random() * 0.15 : Math.random() * 0.3;
         handleStreamEvent({
             is_anomaly: isAnomaly,
-            key_user: fakeUser, key_device: fakeDevice, key_source: fakeSource, key_dst: fakeDst,
+            key_user: fakeUser, key_device: fakeDevice, key_config: fakeConfig, key_source: fakeSource, key_dst: fakeDst,
             score: score
         });
     }, 800);

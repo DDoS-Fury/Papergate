@@ -221,7 +221,7 @@ class ZTAStreamSimulator:
             f"num_resources ({num_resources}) must equal len(RESOURCE_URIS) "
             f"({len(RESOURCE_URIS)}): set TGNConfig.num_resources accordingly"
         )
-        self.num_users = num_users
+        self.num_users = num_users + 1  # +1 per lo slot "anonymous"
         self.num_devices = num_devices
         self.num_sources = num_sources
         self.num_configs = num_configs
@@ -237,7 +237,7 @@ class ZTAStreamSimulator:
 
         # --- node index layout: [users][device slots][source slots][config slots][resources] ----
         self.user_lo = 0
-        self.dev_lo = num_users
+        self.dev_lo = self.num_users
         self.dev_slots = num_devices + num_wipe_slots + num_theft_slots
         self.src_lo = self.dev_lo + self.dev_slots
         self.src_slots = num_sources + num_theft_slots
@@ -253,6 +253,7 @@ class ZTAStreamSimulator:
         # (ruoli_to_blp), so the role/clearance pair in every benign message is exactly
         # what the JWT would carry in production.
         self.user_roles = [str(np.random.choice(ROLES)) for _ in range(num_users)]
+        self.user_roles.append("guest")
         self.user_clearances = [ROLE_CLEARANCE[r] for r in self.user_roles]
 
         # --- physical machines (stable across cookie wipes) -------------------------
@@ -294,9 +295,10 @@ class ZTAStreamSimulator:
             self.machine_configs.append([int(c) for c in cfgs])
 
         # --- external keys per node slot ---------------------------------------------
-        self.keys: list = [None] * self.num_nodes
+        self.keys: list[str | None] = [None] * self.num_nodes
         for u in range(num_users):
-            self.keys[u] = u
+            self.keys[self.user_lo + u] = f"user_{u:04d}"
+        self.keys[self.user_lo + num_users] = "anonymous"  # Slot fisso per l'utente anonimo
         for m in range(num_devices):
             tier = self.machine_tiers[m]
             self.keys[self.dev_lo + m] = (
@@ -552,20 +554,31 @@ class ZTAStreamSimulator:
             machine in self.compromised_state and np.random.rand() < 0.3
         )  # compromised machines blend in 70% of the time
 
+        is_anonymous = not is_anomalous and random.random() < 0.10
+
         if not is_anomalous:
-            valid = self._policy_valid_actions(u_role)
-            habit = [a for a in valid if a in self.user_habitual[user]]
-            non_habit = [a for a in valid if a not in self.user_habitual[user]]
-            # Benign exploration: an authorised-but-non-habitual access (policy-clean,
-            # signal-clean, label=0) — novelty alone is not an anomaly cue.
-            if non_habit and random.random() < self.benign_explore_prob:
-                res_idx, method = random.choice(non_habit)
-            elif habit:
-                res_idx, method = random.choice(habit)
-            elif valid:
-                res_idx, method = random.choice(valid)
+            if is_anonymous:
+                user = self.num_users - 1  # anonymous user
+                u_role, u_clearance = "guest", 0
+                config = self.cfg_lo  # conf:guest
+                dev_slot = self._guest_dev_slot if self._guest_dev_slot is not None else self.dev_lo + machine
+                valid_anon = [(r, m) for r, uri in enumerate(RESOURCE_URIS) if uri not in SECURITY_MATRIX for m in ROUTE_METHODS[uri]]
+                res_idx, method = random.choice(valid_anon)
             else:
-                res_idx, method = 0, 0  # public-path fallback
+                valid = self._policy_valid_actions(u_role)
+                habit = [a for a in valid if a in self.user_habitual[user]]
+                non_habit = [a for a in valid if a not in self.user_habitual[user]]
+                # Benign exploration: an authorised-but-non-habitual access (policy-clean,
+                # signal-clean, label=0) — novelty alone is not an anomaly cue.
+                if non_habit and random.random() < self.benign_explore_prob:
+                    res_idx, method = random.choice(non_habit)
+                elif habit:
+                    res_idx, method = random.choice(habit)
+                elif valid:
+                    res_idx, method = random.choice(valid)
+                else:
+                    res_idx, method = 0, 0  # public-path fallback
+            
             ja3, s1, s2, s3 = 1.0, 0.0, 0.0, 0.0
             label, etype = 0, 0
         else:
