@@ -54,7 +54,7 @@ compatibilità strutturale — che insieme coprono le tre classi di anomalia.
 
 ```mermaid
 flowchart TD
-    EV["Access event — schema v3, catena a 3 archi (chiavi namespaced per tipo)<br/>key_source(src:ip) → key_device(tpm:/ck:/ipdev:) → key_user → key_dst<br/>(t, edge_msg sull'arco di accesso) + static attrs: role / clearance / tier / resource-risk / source-internal"]
+    EV["Access event — schema v4, catena a 5 archi (chiavi namespaced per tipo)<br/>key_source(src:ip) → key_config(conf:ja3) → key_device(tpm:/ck:/ipdev:) → key_user → key_dst<br/>(+ binding config→user)<br/>(t, edge_msg sull'arco di accesso) + static attrs: role / clearance / tier / resource-risk / source-internal"]
     REG["NodeRegistry<br/>entity key → memory slot<br/>dynamic admission · LRU eviction"]
     NL["MessageNeighborLoader<br/>bounded ring-buffer [num_nodes, K]<br/>last K temporal neighbours (+ t, + msg)"]
     EV --> REG --> NL
@@ -62,10 +62,12 @@ flowchart TD
     subgraph EMB["embed() — identity- & history-aware node embeddings"]
         MEM["TGNMemory<br/>recurrent per-node state (GRU)<br/>z_mem + last_update (memory_dim=256)"]
         ID["Hashed Identity<br/>hash(key) % buckets → nn.Embedding [hash_buckets, hash_dim]"]
-        CAT["concat → x = [ z_mem ‖ id ]"]
+        STAT["Static Node Features<br/>tier / risk / internal [16]"]
+        CAT["concat → x = [ z_mem ‖ node_feat ‖ id ]"]
         GNN["GraphAttentionEmbedding<br/>TransformerConv (4 heads, num_hops=3, + residual)<br/>edge_attr = [ time_enc(Δt) ‖ hist_msg ]"]
         MEM --> CAT
         ID --> CAT
+        STAT --> CAT
         CAT --> GNN
     end
     NL -->|"n_id, edge_index, hist_t, hist_msg"| MEM
@@ -82,7 +84,8 @@ flowchart TD
     GNN -->|"z — per-node embedding"| FEAT
     GNN --> STR
     SUM --> SCO["anomaly score = 1 − σ(logit)"]
-    SCO --> GATE{"score &lt; threshold ?<br/>(cost-sensitive routing)"}
+    SCO --> PREC["score = min(1, score × precursor_boost)"]
+    PREC --> GATE{"score < threshold ?<br/>(cost-sensitive routing)"}
     GATE -->|benign| UPD["update TGNMemory<br/>+ neighbor_loader.insert<br/>(anti-poisoning gate)"]
     GATE -->|anomaly| REP["report anomaly<br/>memory NOT updated"]
     UPD -.->|writes back history| NL
@@ -110,10 +113,10 @@ Il "buffer" della memoria storica e del vicinato (`MessageNeighborLoader`) non c
 
 ### Flusso per evento (serving)
 
-1. `NodeRegistry` mappa `key_user`/`key_device`/`key_source`/`key_dst` → slot di memoria
-   (ammette entità nuove). La richiesta è la catena a 3 archi `IP → device → utente →
-   risorsa`; se `key_source` manca, l'arco IP→device viene saltato. Lo score finale è il
-   **max sugli archi presenti**.
+1. `NodeRegistry` mappa `key_user`/`key_device`/`key_source`/`key_dst`/`key_config` → slot di memoria
+   (ammette entità nuove). La richiesta è la catena a 5 archi: `source → config`, `config → device`,
+   `config → user`, `device → user` e l'accesso `user → resource`. Se una chiave manca, l'arco
+   relativo viene gestito via fallback. Lo score finale è il **max sugli archi presenti**.
 2. Il neighbour loader espande i nodi al loro **vicinato temporale storico**
    (`n_id, edge_index, hist_t, hist_msg`).
 3. `embed()`: legge la memoria, vi concatena l'identità di nodo e fa girare la GNN sui
@@ -143,7 +146,7 @@ etichette binarie `y`, un vettore `types` per la valutazione per-classe e un bit
 | 1 | policy | ruolo/clearance/tier insufficienti | **di OPA** (bloccato a monte); non valore aggiunto del modello |
 | 2 | contextual | JA3 rotto / alert Snort / sensori | **banale**: presa al ~97% dalla rule baseline |
 | 3 | lateral | autorizzato ma **non-abituale** | **target ML genuino**: storia + memoria temporale + precursor kill-chain |
-| 4 | credential theft | IP **e** device mai visti che si agganciano a un utente noto | **target ML genuino del v2**: visibile solo sugli archi di binding (policy-clean, signal-clean) |
+| 4 | credential theft | Un client/tool (config/JA3) diverso da quello abituale che riusa credenziali di un utente noto | **target ML genuino (schema v4)**: visibile in particolare sul binding `config → user` (policy-clean, signal-clean) |
 
 > **De-degenerazione.** Il benigno ora compie a volte accessi autorizzati-non-abituali
 > *legittimi*, quindi il lateral è feature-identico a un benigno non-abituale: l'unico
@@ -166,24 +169,21 @@ temporale-relazionale**, non dei contatori.
 | Isolation Forest | 0.775 | 0.628 | 0.639 | 1.0% |
 | **TGN (full)** | **0.947** | **0.870** | **0.900** | **13.0%** |
 
-> **Risultati schema v3 (4 nodi / 3 archi, chiavi namespaced + feature resource-risk,
-> run pieno 50k/15ep, seed 42).** Lateral AUC **0.837** (v2: 0.818; v1: 0.760), AUC aggregata
-> 0.930, cred-theft AUC **0.922** con recall **0.863** alla soglia instradata; FPR roaming ≈
-> FPR benigna (0.094 vs 0.094 — il cambio di rete non è un falso positivo). La feature
-> *source-internal* (`node_feat[*,5]`, bit RFC1918 della rete sorgente) è **disabilitata di
-> default** (`use_source_internal=False`): se attivata alza la lateral AUC a ~0.90 ma
-> **maschera il credential theft** (AUC 0.92→0.66, recall 0.86→0.49), perché il roaming
-> benigno esterno normalizza i binding esterno→device su cui vive il segnale del furto di
-> credenziali — un trade-off lateral↔cred-theft ablabile, non un free lunch.
+> **Risultati schema v4 (5 nodi / 5 archi, nodo config/JA3, run 200k/15ep, seed 42).**
+> Il nodo *Configuration* raddoppia il recall operativo sul **lateral movement** (dal ~25.5% del v3
+> al **~59.9%**), con Lateral AUC **0.936** e Agg AUC **0.964**. Migliora nettamente anche la
+> rilevazione del **credential theft** (Recall +0.108 rispetto all'ablazione senza nodo config).
+> Il FPR benigno resta controllato (~5.6%). Questo vantaggio si somma a quello già documentato del TGN.
 >
-> **[storico] Risultati schema v2.** Lateral AUC 0.818, AUC aggregata 0.919, cred-theft AUC
-> 0.969 / recall 1.00. Nota di confronto onesto: nel v2 è stato corretto il bug di
-> `signal_dirty`/rule-baseline che trattava il metodo HTTP come un sensore (ogni POST finiva
-> sulla soglia conservativa), quindi precision/recall alla soglia NON sono confrontabili 1:1
-> con la riga v1; il punto operativo si regola con `cost_ratio` / `clean_fpr_cap`. I numeri
-> in tabella (TGN **e** baseline) sono del run de-circolarizzato corrente (200k/seed 42, profili
-> Compose `baseline-*`), coerenti con la relazione tecnica; i blocchi v2/v3 qui sopra sono
-> snapshot storici di run più piccoli (50k) e quindi su scala diversa.
+> **[storico] Risultati schema v3.** Lateral AUC 0.894, AUC aggregata 0.952 (stesso setup v4). Lo schema a 4 nodi
+> usava il fingerprint JA3 solo come bit di validità, mascherando attacchi con tool nuovi su device noti
+> o furti di credenziali da client differenti. La feature *source-internal* disabilitata di default mitigava in parte il problema.
+>
+> **[storico] Risultati schema v2.** Lateral AUC 0.818, AUC aggregata 0.919. Nota di confronto onesto: nel v2
+> è stato corretto il bug di `signal_dirty`/rule-baseline che trattava il metodo HTTP come un sensore (ogni POST finiva
+> sulla soglia conservativa); il punto operativo si regola con `cost_ratio` / `clean_fpr_cap`. I numeri
+> in tabella (TGN **e** baseline) sono del run de-circolarizzato corrente (200k/seed 42), coerenti
+> con la relazione tecnica.
 
 - **Lo Static GNN — stessi contatori + precursor, stessa struttura di grafo, ma senza la
   macchina temporale — sta a caso sul lateral (0.47).** Il TGN arriva a **0.90** (single-run;
