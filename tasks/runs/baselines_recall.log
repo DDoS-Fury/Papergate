@@ -1,0 +1,97 @@
+############################## baseline-iforest ##############################
+ Network ai-inference_default Creating 
+ Network ai-inference_default Created 
+ Container ai-inference-baseline-iforest-run-d84c6a9f276c Creating 
+ Container ai-inference-baseline-iforest-run-d84c6a9f276c Created 
+Generating synthetic streaming data (same params as TGN)...
+--- INIZIO ADDESTRAMENTO E TUNING UNSUPERVISED (Isolation Forest) ---
+Train benigni: 100815 / 140000 eventi
+Avvio ricerca randomizzata su 10 combinazioni con n_jobs=18...
+Iter  1/10 - Val AUC: 0.7736 - Params: {'n_estimators': 200, 'max_samples': 1024, 'max_features': 0.5, 'contamination': 'auto'}
+Iter  2/10 - Val AUC: 0.7666 - Params: {'n_estimators': 100, 'max_samples': 512, 'max_features': 0.5, 'contamination': 0.05}
+Iter  3/10 - Val AUC: 0.7819 - Params: {'n_estimators': 100, 'max_samples': 1024, 'max_features': 0.8, 'contamination': 0.01}
+Iter  4/10 - Val AUC: 0.7779 - Params: {'n_estimators': 400, 'max_samples': 1024, 'max_features': 0.5, 'contamination': 0.05}
+Iter  5/10 - Val AUC: 0.7773 - Params: {'n_estimators': 200, 'max_samples': 'auto', 'max_features': 0.8, 'contamination': 0.05}
+Iter  6/10 - Val AUC: 0.7598 - Params: {'n_estimators': 200, 'max_samples': 'auto', 'max_features': 0.5, 'contamination': 0.1}
+Iter  7/10 - Val AUC: 0.7774 - Params: {'n_estimators': 400, 'max_samples': 1024, 'max_features': 1.0, 'contamination': 'auto'}
+Iter  8/10 - Val AUC: 0.7716 - Params: {'n_estimators': 300, 'max_samples': 'auto', 'max_features': 0.8, 'contamination': 'auto'}
+Iter  9/10 - Val AUC: 0.7694 - Params: {'n_estimators': 100, 'max_samples': 'auto', 'max_features': 0.8, 'contamination': 'auto'}
+Iter 10/10 - Val AUC: 0.7742 - Params: {'n_estimators': 200, 'max_samples': 512, 'max_features': 1.0, 'contamination': 'auto'}
+
+Migliori parametri trovati (Val AUC=0.7819): {'n_estimators': 100, 'max_samples': 1024, 'max_features': 0.8, 'contamination': 0.01}
+
+--- CALIBRAZIONE SOGLIA (su flusso di validazione benigno) ---
+Benign val score: mean=0.5010 p95=0.5928 | threshold@FPR=0.01: 0.6478
+
+--- INIZIO FASE DI INFERENZA / ANOMALY DETECTION ---
+Test Stream | AUC: 0.7818 | AP: 0.5944
+At threshold 0.6478 | Precision: 0.8532 | Recall: 0.1410
+
+--- METRICHE PER TIPO DI ANOMALIA ---
+  policy     | n=3658 | AUC: 0.9496 | AP: 0.6689 | Recall@thr: 0.3218
+  contextual | n=3804 | AUC: 0.7304 | AP: 0.2772 | Recall@thr: 0.1007
+  lateral    | n=3868 | AUC: 0.6738 | AP: 0.1673 | Recall@thr: 0.0098
+
+############################## baseline-ocsvm ##############################
+ Container ai-inference-baseline-ocsvm-run-8ec09559068c Creating 
+ Container ai-inference-baseline-ocsvm-run-8ec09559068c Created 
+Generating synthetic streaming data (same params as TGN)...
+--- INIZIO ADDESTRAMENTO UNSUPERVISED (One-Class SVM) ---
+Train benigni: fit su 5000 / 100815 eventi benigni
+
+--- CALIBRAZIONE SOGLIA (su flusso di validazione benigno) ---
+Benign val score: mean=-22.5550 p95=-18.3742 | threshold@FPR=0.01: -16.4639
+
+--- INIZIO FASE DI INFERENZA / ANOMALY DETECTION ---
+Test Stream | AUC: 0.8032 | AP: 0.7406
+At threshold -16.4639 | Precision: 0.9498 | Recall: 0.4793
+
+--- METRICHE PER TIPO DI ANOMALIA ---
+  policy     | n=3658 | AUC: 0.8809 | AP: 0.7547 | Recall@thr: 0.6990
+  contextual | n=3804 | AUC: 0.9372 | AP: 0.8101 | Recall@thr: 0.6840
+  lateral    | n=3868 | AUC: 0.5978 | AP: 0.1960 | Recall@thr: 0.0701
+
+############################## baseline-xgboost ##############################
+ Container ai-inference-baseline-xgboost-run-bddb76d4afbb Creating 
+ Container ai-inference-baseline-xgboost-run-bddb76d4afbb Created 
+Traceback (most recent call last):
+  File "/app/tests/baselines/xgboost/xgboost_baseline.py", line 11, in <module>
+    from xgboost import XGBClassifier
+ModuleNotFoundError: No module named 'xgboost'
+
+
+############################## baseline-gnn ##############################
+ Container ai-inference-baseline-gnn-run-69c63392412a Creating 
+ Container ai-inference-baseline-gnn-run-69c63392412a Created 
+Generating synthetic streaming data (TGN params)...
+Using device: cuda
+--- INIZIO ADDESTRAMENTO UNSUPERVISED (GNN non temporale) ---
+Epoch 01 | Train Loss: 1.4526
+Epoch 02 | Train Loss: 1.1479
+Epoch 03 | Train Loss: 0.4350
+Epoch 04 | Train Loss: 0.1578
+Epoch 05 | Train Loss: 0.0883
+Epoch 06 | Train Loss: 0.0591
+Epoch 07 | Train Loss: 0.0431
+Epoch 08 | Train Loss: 0.0333
+Epoch 09 | Train Loss: 0.0275
+Epoch 10 | Train Loss: 0.0228
+Epoch 11 | Train Loss: 0.0190
+Epoch 12 | Train Loss: 0.0164
+Epoch 13 | Train Loss: 0.0145
+Epoch 14 | Train Loss: 0.0132
+Epoch 15 | Train Loss: 0.0120
+
+--- CALIBRAZIONE SOGLIA (su flusso di validazione benigno) ---
+Benign val score: mean=0.0231 p95=0.1771 | threshold@FPR=0.01: 0.3396
+
+--- INIZIO FASE DI INFERENZA / ANOMALY DETECTION ---
+Test Stream | AUC: 0.5791 | AP: 0.5732
+At threshold 0.3396 | Precision: 0.9353 | Recall: 0.3673
+
+--- METRICHE PER TIPO DI ANOMALIA ---
+  policy     | n=3658 | AUC: 0.2752 | AP: 0.0758 | Recall@thr: 0.0107
+  contextual | n=3804 | AUC: 0.9745 | AP: 0.9662 | Recall@thr: 0.9564
+  lateral    | n=3868 | AUC: 0.4775 | AP: 0.2349 | Recall@thr: 0.1251
+
+ALL_BASELINES_DONE
