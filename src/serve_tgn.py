@@ -292,7 +292,8 @@ def score_event(
     key_source: Hashable | None = None,
     key_config: Hashable | None = None,
     threshold_dirty=None,
-    src_feat=None,
+    user_feat=None,
+    device_feat=None,
     dst_feat=None,
     update: bool = True,
     guest_device_fallback: bool = False,
@@ -310,11 +311,17 @@ def score_event(
     set the event is written into memory **only if it is classified benign**
     (``score < threshold``), keeping the baseline free of attacker-controlled events.
 
-    ``src_feat`` / ``dst_feat`` are the endpoints' static attributes (role /
-    clearance / device tier). In a ZTA deployment the orchestrator/OPA already
-    holds these for every request, so they are supplied per event — no extra data
-    store is required. When omitted, the slot keeps whatever features it already
-    has (e.g. those learned for preregistered entities at train time).
+    ``user_feat`` / ``device_feat`` / ``dst_feat`` are the per-node static
+    attributes, written into the matching node slot. They are kept **separate by
+    node type** because the training feature contract is type-specific: the device
+    tier lives in ``node_feat[2]`` of DEVICE nodes only, while user nodes carry no
+    static attributes (role / clearance travel in the edge message, never the node
+    features). Collapsing them onto a single ``src_feat`` applied to both endpoints
+    pushes the user node out of distribution — the train/serve skew that this split
+    fixes. In a ZTA deployment the orchestrator/OPA already holds these per request,
+    so they are supplied per event — no extra data store is required. When a vector
+    is omitted, that slot keeps whatever features it already has (e.g. those learned
+    for preregistered entities at train time).
 
     Returns ``(anomaly_score, is_anomaly)``.
     """
@@ -329,10 +336,10 @@ def score_event(
     source_idx = None if key_source is None else _admit(model, registry, key_source)
     config_idx = _admit(model, registry, key_config)
 
-    if src_feat is not None:
-        _set_node_features(model, user_idx, src_feat, device)
-        if device_idx is not None:
-            _set_node_features(model, device_idx, src_feat, device)
+    if user_feat is not None:
+        _set_node_features(model, user_idx, user_feat, device)
+    if device_feat is not None and device_idx is not None:
+        _set_node_features(model, device_idx, device_feat, device)
     if dst_feat is not None:
         _set_node_features(model, dst_idx, dst_feat, device)
     if source_idx is not None:
@@ -408,7 +415,8 @@ def commit_event(
     *,
     key_source: Hashable | None = None,
     key_config: Hashable | None = None,
-    src_feat=None,
+    user_feat=None,
+    device_feat=None,
     dst_feat=None,
     guest_device_fallback: bool = False,
 ) -> None:
@@ -434,10 +442,10 @@ def commit_event(
     source_idx = None if key_source is None else _admit(model, registry, key_source)
     config_idx = _admit(model, registry, key_config)
 
-    if src_feat is not None:
-        _set_node_features(model, user_idx, src_feat, device)
-        if device_idx is not None:
-            _set_node_features(model, device_idx, src_feat, device)
+    if user_feat is not None:
+        _set_node_features(model, user_idx, user_feat, device)
+    if device_feat is not None and device_idx is not None:
+        _set_node_features(model, device_idx, device_feat, device)
     if dst_feat is not None:
         _set_node_features(model, dst_idx, dst_feat, device)
     if source_idx is not None:
