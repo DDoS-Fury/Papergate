@@ -889,6 +889,11 @@ def train_tgn(cfg: TGNConfig = TGNConfig(), *, dataset: "StreamData | None" = No
     print("\n--- LATERAL RECALL: GLOBAL-FPR THRESHOLD  vs  COST-SENSITIVE ROUTING ---")
     print(f"  before (global @FPR={cfg.target_fpr}): lateral_recall={old_lat_recall:.4f} | benign_fpr={old_fpr:.4f}")
     print(f"  after  (routed cost-sensitive)       : lateral_recall={new_lat_recall:.4f} | benign_fpr={new_fpr:.4f}")
+    # Aggregate recall (all anomaly types) at the SAME global 1% FPR threshold the
+    # baselines report, so the baselines-comparison panel is apples-to-apples.
+    pos_test = test_labels == 1
+    old_agg_recall = float(old_preds[pos_test].mean()) if pos_test.any() else float("nan")
+    print(f"  aggregate recall (global @FPR={cfg.target_fpr}): {old_agg_recall:.4f}")
 
     # --- PER-ANOMALY-TYPE BREAKDOWN ------------------------------------------
     # Per-type AUC/AP are benign (type 0) vs that type, so an aggregate cannot mask a

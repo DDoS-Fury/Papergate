@@ -1,0 +1,76 @@
+ Container ai-inference-train-tgn-run-e325c850cccb Creating 
+ Container ai-inference-train-tgn-run-e325c850cccb Created 
+Generating streaming data...
+Using device: cuda
+--- INIZIO ADDESTRAMENTO UNSUPERVISED ---
+--- INIZIO ADDESTRAMENTO UNSUPERVISED ---
+Epoch 01/15 [train]:   0%|          | 0/700 [00:00<?, ?it/s]Epoch 01/15 [train]:  48%|####8     | 336/700 [00:10<00:10, 33.54it/s, loss=3.2669]Epoch 01/15 [train]:  96%|#########6| 672/700 [00:23<00:01, 27.98it/s, loss=1.9591]Epoch 01 | Train Loss: 2.9890
+Epoch 01/15 [train]: 100%|##########| 700/700 [00:24<00:00, 28.49it/s, loss=1.7804]
+Epoch 02/15 [train]:   0%|          | 0/700 [00:00<?, ?it/s]Epoch 02/15 [train]:  50%|####9     | 349/700 [00:10<00:10, 34.87it/s, loss=1.5148]Epoch 02/15 [train]: 100%|#########9| 698/700 [00:23<00:00, 29.09it/s, loss=1.6950]Epoch 02 | Train Loss: 1.6941
+Epoch 02/15 [train]: 100%|##########| 700/700 [00:23<00:00, 29.81it/s, loss=1.5596]
+Epoch 03/15 [train]:   0%|          | 0/700 [00:00<?, ?it/s]Epoch 03/15 [train]:  50%|#####     | 352/700 [00:10<00:09, 35.18it/s, loss=1.5972]Epoch 03/15 [train]:  50%|#####     | 352/700 [00:21<00:09, 35.18it/s, loss=1.5013]Epoch 03/15 [train]:  95%|#########5| 667/700 [00:21<00:01, 29.80it/s, loss=1.6928]Epoch 03/15 [train]: 100%|##########| 700/700 [00:23<00:00, 30.19it/s, loss=1.5353]
+Epoch 03 | Train Loss: 1.5410
+Epoch 04/15 [train]:   0%|          | 0/700 [00:00<?, ?it/s]Epoch 04/15 [train]:  50%|#####     | 353/700 [00:10<00:09, 35.25it/s, loss=1.3808]Epoch 04/15 [train]: 100%|##########| 700/700 [00:23<00:00, 30.15it/s, loss=1.5096]
+Epoch 04 | Train Loss: 1.4782
+Epoch 05/15 [train]:   0%|          | 0/700 [00:00<?, ?it/s]Epoch 05/15 [train]:  50%|#####     | 352/700 [00:10<00:09, 35.13it/s, loss=1.4352]Epoch 05/15 [train]: 100%|##########| 700/700 [00:23<00:00, 30.10it/s, loss=1.3915]
+Epoch 05 | Train Loss: 1.4243
+Epoch 06/15 [train]:   0%|          | 0/700 [00:00<?, ?it/s]Epoch 06/15 [train]:  51%|#####     | 355/700 [00:10<00:09, 35.40it/s, loss=1.2824]Epoch 06/15 [train]:  51%|#####     | 355/700 [00:21<00:09, 35.40it/s, loss=1.5384]Epoch 06/15 [train]:  95%|#########5| 667/700 [00:21<00:01, 29.78it/s, loss=1.5357]Epoch 06/15 [train]: 100%|##########| 700/700 [00:23<00:00, 30.20it/s, loss=1.5256]
+Epoch 06 | Train Loss: 1.4065
+Epoch 07/15 [train]:   0%|          | 0/700 [00:00<?, ?it/s]Epoch 07/15 [train]:  50%|#####     | 352/700 [00:10<00:09, 35.14it/s, loss=1.4606]Epoch 07/15 [train]: 100%|##########| 700/700 [00:23<00:00, 30.09it/s, loss=1.4070]
+Epoch 07 | Train Loss: 1.3860
+Epoch 08/15 [train]:   0%|          | 0/700 [00:00<?, ?it/s]Epoch 08/15 [train]:  50%|#####     | 352/700 [00:10<00:09, 35.17it/s, loss=1.5264]Epoch 08/15 [train]: 100%|##########| 700/700 [00:23<00:00, 30.12it/s, loss=1.3828]
+Epoch 08 | Train Loss: 1.3728
+Epoch 09/15 [train]:   0%|          | 0/700 [00:00<?, ?it/s]Epoch 09/15 [train]:  50%|#####     | 352/700 [00:10<00:09, 35.12it/s, loss=1.4170]Epoch 09/15 [train]:  50%|#####     | 352/700 [00:21<00:09, 35.12it/s, loss=1.5085]Epoch 09/15 [train]:  95%|#########5| 667/700 [00:21<00:01, 29.72it/s, loss=1.6207]Epoch 09/15 [train]: 100%|##########| 700/700 [00:23<00:00, 30.12it/s, loss=1.4520]
+Epoch 09 | Train Loss: 1.3574
+Epoch 10/15 [train]:   0%|          | 0/700 [00:00<?, ?it/s]Epoch 10/15 [train]:  50%|#####     | 352/700 [00:10<00:09, 35.14it/s, loss=1.3378]Epoch 10 | Train Loss: 1.3471
+Epoch 10/15 [train]: 100%|##########| 700/700 [00:23<00:00, 30.15it/s, loss=1.3687]
+Epoch 11/15 [train]:   0%|          | 0/700 [00:00<?, ?it/s]Epoch 11/15 [train]:  50%|#####     | 352/700 [00:10<00:09, 35.14it/s, loss=1.5499]Epoch 11/15 [train]: 100%|##########| 700/700 [00:23<00:00, 30.14it/s, loss=1.5153]
+Epoch 11 | Train Loss: 1.3542
+Epoch 12/15 [train]:   0%|          | 0/700 [00:00<?, ?it/s]Epoch 12/15 [train]:  51%|#####     | 354/700 [00:10<00:09, 35.29it/s, loss=1.3197]Epoch 12/15 [train]:  51%|#####     | 354/700 [00:21<00:09, 35.29it/s, loss=1.4976]Epoch 12/15 [train]:  96%|#########5| 671/700 [00:21<00:00, 29.83it/s, loss=1.4976]Epoch 12 | Train Loss: 1.3422
+Epoch 12/15 [train]: 100%|##########| 700/700 [00:23<00:00, 30.28it/s, loss=1.3879]
+Epoch 13/15 [train]:   0%|          | 0/700 [00:00<?, ?it/s]Epoch 13/15 [train]:  51%|#####     | 355/700 [00:10<00:09, 35.47it/s, loss=1.2960]Epoch 13 | Train Loss: 1.3551
+Epoch 13/15 [train]: 100%|##########| 700/700 [00:23<00:00, 30.40it/s, loss=1.3747]
+Epoch 14/15 [train]:   0%|          | 0/700 [00:00<?, ?it/s]Epoch 14/15 [train]:  51%|#####     | 355/700 [00:10<00:09, 35.46it/s, loss=1.3104]Epoch 14 | Train Loss: 1.3434
+Epoch 14/15 [train]: 100%|##########| 700/700 [00:23<00:00, 30.37it/s, loss=1.4506]
+Epoch 15/15 [train]:   0%|          | 0/700 [00:00<?, ?it/s]Epoch 15/15 [train]:  50%|#####     | 352/700 [00:10<00:09, 35.14it/s, loss=1.3177]Epoch 15/15 [train]:  50%|#####     | 352/700 [00:22<00:09, 35.14it/s, loss=1.5366]Epoch 15/15 [train]:  97%|#########7| 679/700 [00:22<00:00, 29.57it/s, loss=1.5139]Epoch 15/15 [train]: 100%|##########| 700/700 [00:23<00:00, 30.10it/s, loss=1.3584]
+Epoch 15 | Train Loss: 1.3282
+
+--- CALIBRAZIONE SOGLIA (su flusso di validazione benigno) ---
+Calibrazione (replay val):   0%|          | 0/20000 [00:00<?, ?it/s]Calibrazione (replay val):   8%|7         | 1571/20000 [00:10<01:57, 157.04it/s]Calibrazione (replay val):  16%|#5        | 3144/20000 [00:20<01:47, 157.15it/s]Calibrazione (replay val):  24%|##3       | 4746/20000 [00:30<01:36, 158.53it/s]Calibrazione (replay val):  32%|###1      | 6348/20000 [00:40<01:25, 159.14it/s]Calibrazione (replay val):  40%|###9      | 7949/20000 [00:50<01:15, 159.01it/s]Calibrazione (replay val):  48%|####7     | 9537/20000 [01:00<01:05, 158.89it/s]Calibrazione (replay val):  56%|#####5    | 11142/20000 [01:10<00:55, 159.38it/s]Calibrazione (replay val):  64%|######3   | 12746/20000 [01:20<00:45, 158.96it/s]Calibrazione (replay val):  72%|#######1  | 14327/20000 [01:30<00:35, 158.23it/s]Calibrazione (replay val):  80%|#######9  | 15915/20000 [01:40<00:25, 158.37it/s]Calibrazione (replay val):  88%|########7 | 17502/20000 [01:50<00:15, 158.46it/s]Calibrazione (replay val):  95%|#########5| 19089/20000 [02:00<00:05, 158.50it/s]Calibrazione (replay val): 100%|##########| 20000/20000 [02:06<00:00, 158.57it/s]
+Benign val score: mean=0.0137 p95=0.0107
+threshold_dirty@FPR=0.01: 0.8974 | threshold_clean@cost_ratio=20.0: 0.0108 (clean cal: n_benign=14555 n_lateral=1569)
+  clean-stream lateral recall vs benign FPR (reference curve):
+    thr=0.0001 | lateral_recall=1.000 | benign_fpr=1.0000
+    thr=0.0012 | lateral_recall=1.000 | benign_fpr=0.7786
+    thr=0.0014 | lateral_recall=1.000 | benign_fpr=0.5569
+    thr=0.0018 | lateral_recall=0.999 | benign_fpr=0.3354
+    thr=0.0067 | lateral_recall=0.918 | benign_fpr=0.1226
+    thr=1.0000 | lateral_recall=0.016 | benign_fpr=0.0023
+
+--- INIZIO FASE DI INFERENZA / ANOMALY DETECTION (per-evento) ---
+Inferenza (replay test):   0%|          | 0/40000 [00:00<?, ?it/s]Inferenza (replay test):   4%|3         | 1433/40000 [00:10<04:29, 143.30it/s]Inferenza (replay test):   7%|7         | 2866/40000 [00:20<04:22, 141.51it/s]Inferenza (replay test):  11%|#         | 4282/40000 [00:30<04:12, 141.54it/s]Inferenza (replay test):  14%|#4        | 5698/40000 [00:40<04:03, 141.07it/s]Inferenza (replay test):  18%|#7        | 7107/40000 [00:50<03:53, 141.00it/s]Inferenza (replay test):  21%|##1       | 8522/40000 [01:00<03:42, 141.16it/s]Inferenza (replay test):  25%|##4       | 9937/40000 [01:10<03:33, 140.62it/s]Inferenza (replay test):  28%|##8       | 11342/40000 [01:20<03:23, 140.56it/s]Inferenza (replay test):  32%|###1      | 12747/40000 [01:30<03:13, 140.54it/s]Inferenza (replay test):  35%|###5      | 14152/40000 [01:40<03:04, 140.33it/s]Inferenza (replay test):  39%|###8      | 15551/40000 [01:50<02:54, 140.04it/s]Inferenza (replay test):  42%|####2     | 16946/40000 [02:00<02:44, 139.80it/s]Inferenza (replay test):  46%|####5     | 18339/40000 [02:10<02:35, 139.47it/s]Inferenza (replay test):  49%|####9     | 19727/40000 [02:20<02:25, 139.18it/s]Inferenza (replay test):  53%|#####2    | 21127/40000 [02:30<02:15, 139.40it/s]Inferenza (replay test):  56%|#####6    | 22528/40000 [02:40<02:05, 139.59it/s]Inferenza (replay test):  60%|#####9    | 23929/40000 [02:50<01:55, 139.17it/s]Inferenza (replay test):  63%|######3   | 25311/40000 [03:00<01:45, 138.77it/s]Inferenza (replay test):  67%|######6   | 26700/40000 [03:10<01:35, 138.78it/s]Inferenza (replay test):  70%|#######   | 28089/40000 [03:20<01:25, 138.60it/s]Inferenza (replay test):  74%|#######3  | 29480/40000 [03:30<01:15, 138.73it/s]Inferenza (replay test):  77%|#######7  | 30871/40000 [03:40<01:05, 138.59it/s]Inferenza (replay test):  81%|########  | 32254/40000 [03:50<00:55, 138.48it/s]Inferenza (replay test):  84%|########4 | 33639/40000 [04:00<00:45, 138.48it/s]Inferenza (replay test):  88%|########7 | 35024/40000 [04:10<00:35, 138.44it/s]Inferenza (replay test):  91%|#########1| 36408/40000 [04:20<00:25, 138.42it/s]Inferenza (replay test):  94%|#########4| 37792/40000 [04:31<00:15, 138.06it/s]Inferenza (replay test):  98%|#########7| 39173/40000 [04:41<00:05, 138.05it/s]Inferenza (replay test): 100%|##########| 40000/40000 [04:47<00:00, 139.36it/s]
+Test Stream | AUC: 0.9648 | AP: 0.8863
+Routed decision | Precision: 0.8387 | Recall: 0.8671
+
+--- LATERAL RECALL: GLOBAL-FPR THRESHOLD  vs  COST-SENSITIVE ROUTING ---
+  before (global @FPR=0.01): lateral_recall=0.1634 | benign_fpr=0.0278
+  after  (routed cost-sensitive)       : lateral_recall=0.6329 | benign_fpr=0.0659
+  aggregate recall (global @FPR=0.01): 0.4902
+
+--- METRICHE PER TIPO DI ANOMALIA ---
+  policy     | OPA-owned   | n=3658 | AUC: 0.9705 | AP: 0.6234 | Recall@thr: 0.9984
+  contextual | rule-trivial | n=3804 | AUC: 0.9885 | AP: 0.9149 | Recall@thr: 0.9790
+  lateral    | rule-blind  | n=3868 | AUC: 0.9363 | AP: 0.5492 | Recall@thr: 0.6329
+
+--- LATERAL: COLD-START CONDITIONING ---
+  warmed src (has benign history): n=3868 | recall@thr=0.6329 | AUC=0.9363
+  cold   src (no history yet)     : n=   0 | recall@thr=nan  (detection not yet possible)
+
+--- SCENARI v2 (goal a/b/c) ---
+  benign FPR  plain=0.0729 | roaming=0.0663 (n=2835) | wiped-cookie=nan (n=0)
+  lateral su device condivisi: recall@thr=0.6405 (n=598)
+
+--- BASELINE A REGOLE (signal-only) ---
+  Precision: 1.0000 | Recall: 0.3620 | Recall policy: 0.0000 | Recall contextual: 0.9550 | Recall lateral: 0.1213
+  NOTE: the rule baseline catches contextual anomalies almost entirely (edge signals only) but is blind to policy/lateral — that gap is the TGN's value-add.
+TGN_V4_PERCOOKIE_DONE
