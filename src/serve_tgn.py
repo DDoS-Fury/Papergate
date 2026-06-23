@@ -369,15 +369,16 @@ def score_event(
     is_anomaly = score >= eff_threshold
 
     snort_alert = features[1] > 0.5
-    if is_anomaly or snort_alert:
-        record_alert(model, boost_idx, timestamp)
-        if device_idx is not None:
-            model.node_feat[device_idx, 14] = max(0.0, model.node_feat[device_idx, 14].item() - 0.5)
-        model.node_feat[user_idx, 14] = max(0.0, model.node_feat[user_idx, 14].item() - 0.5)
-    else:
-        if device_idx is not None:
-            model.node_feat[device_idx, 14] = min(1.0, model.node_feat[device_idx, 14].item() + 0.01)
-        model.node_feat[user_idx, 14] = min(1.0, model.node_feat[user_idx, 14].item() + 0.01)
+    if update:
+        if is_anomaly or snort_alert:
+            record_alert(model, boost_idx, timestamp)
+            if device_idx is not None:
+                model.node_feat[device_idx, 14] = max(0.0, model.node_feat[device_idx, 14].item() - 0.5)
+            model.node_feat[user_idx, 14] = max(0.0, model.node_feat[user_idx, 14].item() - 0.5)
+        else:
+            if device_idx is not None:
+                model.node_feat[device_idx, 14] = min(1.0, model.node_feat[device_idx, 14].item() + 0.01)
+            model.node_feat[user_idx, 14] = min(1.0, model.node_feat[user_idx, 14].item() + 0.01)
 
     if update and not is_anomaly:
         # Commit order mirrors the causal chain: source→config, config→device,
