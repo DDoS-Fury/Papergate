@@ -158,8 +158,11 @@ class EventIn(BaseModel):
     )
     timestamp: int = Field(..., description="Event time (e.g. Unix epoch, integer).")
     features: list[float] = Field(..., description="Edge message (Zero-Trust signals).")
-    src_feat: Optional[list[float]] = Field(
-        None, description="User/Device static attributes (role / clearance / tier)."
+    user_feat: Optional[list[float]] = Field(
+        None, description="User node static attributes (training contract: all zeros — role/clearance ride the edge message)."
+    )
+    device_feat: Optional[list[float]] = Field(
+        None, description="Device node static attributes (tier in node_feat[2])."
     )
     dst_feat: Optional[list[float]] = Field(
         None, description="Destination static attributes."
@@ -188,7 +191,7 @@ def _validate_dims(ev: EventIn) -> None:
     feat_dim = int(STATE.hp["node_feat_dim"])
     if len(ev.features) != msg_dim:
         raise HTTPException(422, f"features must have length {msg_dim}, got {len(ev.features)}")
-    for name, vec in (("src_feat", ev.src_feat), ("dst_feat", ev.dst_feat)):
+    for name, vec in (("user_feat", ev.user_feat), ("device_feat", ev.device_feat), ("dst_feat", ev.dst_feat)):
         if vec is not None and len(vec) != feat_dim:
             raise HTTPException(422, f"{name} must have length {feat_dim}, got {len(vec)}")
 
@@ -272,7 +275,7 @@ def infer(ev: EventIn, background_tasks: BackgroundTasks) -> ScoreOut:
             ev.key_user, ev.key_device, ev.key_dst, ev.timestamp, ev.features, STATE.device,
             key_source=ev.key_source, key_config=ev.key_config,
             threshold_dirty=STATE.threshold_dirty,
-            src_feat=ev.src_feat, dst_feat=ev.dst_feat, update=False,
+            user_feat=ev.user_feat, device_feat=ev.device_feat, dst_feat=ev.dst_feat, update=False,
             guest_device_fallback=bool(STATE.hp.get("guest_device_fallback", False)),
         )
     t1 = time.perf_counter()
@@ -303,7 +306,7 @@ def update(ev: EventIn) -> OkOut:
             STATE.model, STATE.registry,
             ev.key_user, ev.key_device, ev.key_dst, ev.timestamp, ev.features, STATE.device,
             key_source=ev.key_source, key_config=ev.key_config,
-            src_feat=ev.src_feat, dst_feat=ev.dst_feat,
+            user_feat=ev.user_feat, device_feat=ev.device_feat, dst_feat=ev.dst_feat,
             guest_device_fallback=bool(STATE.hp.get("guest_device_fallback", False)),
         )
     return OkOut()
@@ -320,7 +323,7 @@ def score(ev: EventIn, background_tasks: BackgroundTasks) -> ScoreOut:
             ev.key_user, ev.key_device, ev.key_dst, ev.timestamp, ev.features, STATE.device,
             key_source=ev.key_source, key_config=ev.key_config,
             threshold_dirty=STATE.threshold_dirty,
-            src_feat=ev.src_feat, dst_feat=ev.dst_feat, update=True,
+            user_feat=ev.user_feat, device_feat=ev.device_feat, dst_feat=ev.dst_feat, update=True,
             guest_device_fallback=bool(STATE.hp.get("guest_device_fallback", False)),
         )
     t1 = time.perf_counter()
