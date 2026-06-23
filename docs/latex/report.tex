@@ -173,7 +173,7 @@ Il TGN non emette una classificazione netta ma uno score continuo confrontato co
 
 \begin{itemize}
     \item \textit{Soglia signal-dirty} (eventi il cui segnale già scatta): il classico quantile al Target FPR dell'1\% sugli score benigni. Questi eventi sono già intercettati dalla cheap rule baseline, quindi si mantiene la soglia conservativa.
-    \item \textit{Soglia signal-clean} (dove il laterale è indistinguibile dal benigno se non per il pattern temporale): soglia \emph{cost-sensitive} che minimizza $\text{cost\_ratio}\cdot\text{FN} + \text{FP}$ (default \texttt{cost\_ratio}=20: un laterale mancato costa molto più di un falso allarme ri-sfidabile dall'orchestrator). Un \emph{cap} esplicito sull'FPR del flusso clean (\texttt{clean\_fpr\_cap}=0.05) impedisce che la spinta sul recall faccia esplodere i falsi positivi --- necessario perché anche con lateral AUC$\sim$0.90 (singola run) il trade-off recall/FPR sul flusso clean resta ripido (a recall laterale $\sim$79\% corrisponde un FPR benigno $\sim$13\%).
+    \item \textit{Soglia signal-clean} (dove il laterale è indistinguibile dal benigno se non per il pattern temporale): soglia \emph{cost-sensitive} che minimizza $\text{cost\_ratio}\cdot\text{FN} + \text{FP}$ (default \texttt{cost\_ratio}=20: un laterale mancato costa molto più di un falso allarme ri-sfidabile dall'orchestrator). Un \emph{cap} esplicito sull'FPR del flusso clean (\texttt{clean\_fpr\_cap}=0.05) impedisce che la spinta sul recall faccia esplodere i falsi positivi --- necessario perché anche con lateral AUC$\sim$0.93 (singola run) il trade-off recall/FPR sul flusso clean resta ripido (a recall laterale $\sim$79\% corrisponde un FPR benigno $\sim$13\%).
 \end{itemize}
 
 A inferenza la decisione è instradata per-evento: \texttt{signal\_dirty} $\Rightarrow$ soglia dirty, altrimenti soglia clean (cost-sensitive). Entrambe le soglie sono persistite ed esposte da \texttt{serve\_api} (anche su \texttt{/health}). OPA resta il decisore finale allow/deny.
@@ -194,10 +194,10 @@ In fase di valutazione o in ambiente live, l'architettura rileva 3 macro-categor
 La valutazione è condotta sullo split di test (20\% finale dello stream sintetico, \texttt{seed}=42) tramite replay per-evento attraverso l'esatto codice di serving (\texttt{num\_events}=200\,000, di cui il 20\% finale $=40\,000$ eventi di test). Per quantificare il contributo \emph{effettivo} della componente temporale, il TGN è confrontato con tre baseline non supervisionate addestrate sullo \emph{stesso} traffico benigno, con identico split cronologico, identici segnali tabellari (contatori di storia + prior precursore), soglia calibrata all'1\% di FPR e protocollo di valutazione (codice in \texttt{tests/baselines/}); una quarta baseline \emph{supervisionata} (XGBoost) è riportata solo come upper-bound di riferimento:
 
 \begin{itemize}
-    \item \textit{Isolation Forest}: detector non relazionale sulle sole feature statiche per-evento (nessuna struttura di grafo) --- rappresenta il ``pavimento'' privo di informazione strutturale (lateral AUC 0.639).
-    \item \textit{One-Class SVM}: controparte kernel non relazionale dell'Isolation Forest (sole feature per-evento). Pur con AUC aggregata competitiva (0.845), sul \textit{lateral} resta a 0.632, confermando che il segnale temporale non è catturabile dalle sole feature statiche.
-    \item \textit{GNN non temporale}: ablation del TGN su grafo statico aggregato, con lo \emph{stesso} curriculum di negative sampling de-circolarizzato (InfoNCE su destinazioni casuali + rumore contestuale) e gli \emph{stessi} contatori tabellari di storia, ma priva di memoria ricorrente e vicinato temporale. Isola la sola componente temporale (lateral AUC 0.468, $\approx$ caso).
-    \item \textit{XGBoost} (\emph{supervisionato}, fuori categoria): addestrato con le etichette, raggiunge lateral AUC 0.942. Non è un confronto equo col paradigma non supervisionato del TGN; è incluso solo per delimitare l'upper-bound raggiungibile avendo accesso alle label (assenti per costruzione nel nostro setting).
+    \item \textit{Isolation Forest}: detector non relazionale sulle sole feature statiche per-evento (nessuna struttura di grafo) --- rappresenta il ``pavimento'' privo di informazione strutturale (lateral AUC 0.674).
+    \item \textit{One-Class SVM}: controparte kernel non relazionale dell'Isolation Forest (sole feature per-evento). Pur con AUC aggregata competitiva (0.803), sul \textit{lateral} resta a 0.598, confermando che il segnale temporale non è catturabile dalle sole feature statiche.
+    \item \textit{GNN non temporale}: ablation del TGN su grafo statico aggregato, con lo \emph{stesso} curriculum di negative sampling de-circolarizzato (InfoNCE su destinazioni casuali + rumore contestuale) e gli \emph{stessi} contatori tabellari di storia, ma priva di memoria ricorrente e vicinato temporale. Isola la sola componente temporale (lateral AUC 0.478, $\approx$ caso).
+    \item \textit{XGBoost} (\emph{supervisionato}, fuori categoria): addestrato con le etichette, raggiunge lateral AUC 0.928. Non è un confronto equo col paradigma non supervisionato del TGN; è incluso solo per delimitare l'upper-bound raggiungibile avendo accesso alle label (assenti per costruzione nel nostro setting).
 \end{itemize}
 
 I risultati del confronto sono riportati nella Tabella~\ref{tab:baselines}.
@@ -209,20 +209,21 @@ I risultati del confronto sono riportati nella Tabella~\ref{tab:baselines}.
 \hline
 \textbf{Metrica (test set)} & \textbf{TGN} & \textbf{GNN non temp.} & \textbf{One-Class SVM} & \textbf{Isol. Forest} \\
 \hline
-AUC aggregata                  & \textbf{0.947} & 0.574 & 0.845 & 0.775 \\
-AP aggregata                   & \textbf{0.870} & 0.569 & 0.793 & 0.628 \\
+AUC aggregata                  & \textbf{0.973} & 0.579 & 0.803 & 0.782 \\
+AP aggregata                   & \textbf{0.936} & 0.573 & 0.741 & 0.594 \\
 \hline
-Lateral --- AUC                & \textbf{0.900} & 0.468 & 0.632 & 0.639 \\
-Lateral --- Recall @1\%FPR     & 0.130 & 0.139 & 0.047 & 0.010 \\
+Lateral --- AUC                & \textbf{0.932} & 0.478 & 0.598 & 0.674 \\
+Lateral --- Recall @1\%FPR     & 0.217 & 0.125 & 0.070 & 0.010 \\
+Recall aggregata @1\%FPR       & \textbf{0.713} & 0.367 & 0.479 & 0.141 \\
 \hline
 \end{tabular}
-\caption{Confronto sul test set sintetico (replay per-evento de-circolarizzato, \texttt{num\_events}=200\,000, \texttt{seed}=42, soglia globale all'1\% FPR; valori da \emph{singola} run). Il vantaggio del TGN sul \textit{lateral movement} emerge isolando il segnale temporale: la GNN statica, priva di memoria ricorrente ma provvista degli stessi contatori tabellari, resta a livello di caso (AUC 0.468), contro l'AUC 0.900 del TGN. Il recall laterale a soglia globale resta basso (13.0\%) e l'apparente 13.9\% della GNN è \emph{spurio} (AUC$\approx$caso con soglia permissiva, non un segnale reale); la sua conversione in recall operativo è affidata alla calibrazione cost-sensitive instradata (Sez.~4.3). \emph{Nota metodologica}: il lateral AUC headline è da singola run (training GPU non-deterministico, $\pm0.01$--$0.03$ per run); la conferma \emph{multi-seed} (3 seed, media $\pm$ dev.std) dà lateral AUC $0.882\pm0.012$, coerente con l'headline a singola run. XGBoost \emph{supervisionato} (vede le etichette, fuori categoria) raggiunge AUC 0.977 / lateral 0.942: è un upper-bound di riferimento, non una baseline non supervisionata comparabile.}
+\caption{Confronto sul test set sintetico (replay per-evento de-circolarizzato, \texttt{num\_events}=200\,000, \texttt{seed}=42, soglia globale all'1\% FPR; valori da \emph{singola} run, rimisurati). Il vantaggio del TGN sul \textit{lateral movement} emerge isolando il segnale temporale: la GNN statica, priva di memoria ricorrente ma provvista degli stessi contatori tabellari, resta a livello di caso (AUC 0.478), contro l'AUC 0.932 del TGN. Il recall laterale a soglia globale resta basso (21.7\%) e l'apparente 12.5\% della GNN è \emph{spurio} (AUC$\approx$caso con soglia permissiva, non un segnale reale); la sua conversione in recall operativo è affidata alla calibrazione cost-sensitive instradata (Sez.~4.3). \emph{Nota metodologica}: il lateral AUC headline è da singola run (training GPU non-deterministico, $\pm0.01$--$0.03$ per run); la conferma \emph{multi-seed} su \emph{configurazione ridotta} (3 seed, media $\pm$ dev.std) dà lateral AUC $0.882\pm0.012$ (la singola run a piena capacità è più alta). XGBoost \emph{supervisionato} (vede le etichette, fuori categoria) raggiunge AUC 0.974 / lateral 0.928: è un upper-bound di riferimento, non una baseline non supervisionata comparabile. \emph{Provenienza}: riga TGN da run \emph{v3} (keying per-cookie); le baseline sono rimisurate sotto la configurazione \emph{deployable} corrente (collasso \texttt{dev:guest}); \textit{Recall aggregata} alla soglia globale 1\% FPR su tutte le classi.}
 \label{tab:baselines}
 \end{table}
 
 \subsection{Cost-sensitive routing}
 
-Per convertire la forte capacità di ranking (lateral AUC 0.900 su singola run; cfr. il caveat multi-seed in Tab.~\ref{tab:baselines}) in recall operativo, è stato implementato un routing cost-sensitive. Il flusso di eventi viene separato a runtime in \textit{signal-dirty} e \textit{signal-clean}. Sul flusso pulito, la soglia viene rilassata per minimizzare i falsi negativi dei movimenti laterali (configurabile tramite un parametro di \texttt{cost\_ratio}). Sul test sintetico, ciò porta il recall laterale dal $\sim$13.0\% (soglia globale all'1\% FPR, FPR benigno $\sim$2.3\%) al $\sim$28.6\% (decisione instradata, FPR benigno $\sim$6.0\%), con recall aggregato $\sim$70.3\%.
+Per convertire la forte capacità di ranking (lateral AUC 0.932 su singola run; cfr. il caveat multi-seed in Tab.~\ref{tab:baselines}) in recall operativo, è stato implementato un routing cost-sensitive. Il flusso di eventi viene separato a runtime in \textit{signal-dirty} e \textit{signal-clean}. Sul flusso pulito, la soglia viene rilassata per minimizzare i falsi negativi dei movimenti laterali (configurabile tramite un parametro di \texttt{cost\_ratio}). Sul test sintetico, ciò porta il recall laterale dal $\sim$21.7\% (soglia globale all'1\% FPR, FPR benigno $\sim$1.7\%) al $\sim$37.1\% (decisione instradata, FPR benigno $\sim$4.2\%), con recall aggregato $\sim$77.9\%.
 
 \section{Deployment e dettagli hardware}
 
@@ -247,7 +248,7 @@ Nel momento di chiusura del framework (o tramite specifici endpoint API persiste
 
 \subsection{La sfida del lateral movement}
 
-Senza l'ausilio delle etichette (unsupervised), il lateral movement non mostra tracce o indicatori palesi: è feature-identico a un accesso benigno non abituale. Le leve che lo rendono \emph{ordinabile} (lateral AUC $0.90$ su singola run --- $0.882\pm0.012$ in media multi-seed a 3 seed su configurazione ridotta, coerente con la singola run; da $\sim$0.47 della GNN statica) sono il vicinato temporale ampio ($\text{num\_hops}{=}3$, $\text{neighbor\_size}{=}30$, $\text{memory\_dim}{=}256$) e soprattutto le \textit{history features} esplicite ($+0.163$ AUC, il contributo dominante), affiancate dall'hashed-identity ($+0.046$ AUC); il precursore di kill-chain ($+0.013$ AUC) e la testa strutturale ($+0.007$ AUC) risultano invece \emph{marginali} (ablation multi-seed). La conversione del ranking in recall operativo avviene poi con la soglia cost-sensitive instradata (Sezione~4.3): sul test sintetico il recall laterale passa da $\sim$\textit{13.0\%} (soglia globale all'1\% FPR, FPR benigno $\sim$2.3\%) a $\sim$\textit{28.6\%} (decisione instradata, FPR benigno $\sim$6.0\%) --- operating point regolabile via \texttt{cost\_ratio}/\texttt{clean\_fpr\_cap}. Resta la classe più ostica (AP $\sim$0.44), ma nettamente sopra le baseline (cfr. Sezione~\ref{sec:eval}).
+Senza l'ausilio delle etichette (unsupervised), il lateral movement non mostra tracce o indicatori palesi: è feature-identico a un accesso benigno non abituale. Le leve che lo rendono \emph{ordinabile} (lateral AUC $0.932$ su singola run --- $0.882\pm0.012$ in media multi-seed a 3 seed su configurazione ridotta, la singola run a piena capacità è più alta; da $\sim$0.48 della GNN statica) sono il vicinato temporale ampio ($\text{num\_hops}{=}3$, $\text{neighbor\_size}{=}30$, $\text{memory\_dim}{=}256$) e soprattutto le \textit{history features} esplicite ($+0.163$ AUC, il contributo dominante), affiancate dall'hashed-identity ($+0.046$ AUC); il precursore di kill-chain ($+0.013$ AUC) e la testa strutturale ($+0.007$ AUC) risultano invece \emph{marginali} (ablation multi-seed). La conversione del ranking in recall operativo avviene poi con la soglia cost-sensitive instradata (Sezione~4.3): sul test sintetico il recall laterale passa da $\sim$\textit{21.7\%} (soglia globale all'1\% FPR, FPR benigno $\sim$1.7\%) a $\sim$\textit{37.1\%} (decisione instradata, FPR benigno $\sim$4.2\%) --- operating point regolabile via \texttt{cost\_ratio}/\texttt{clean\_fpr\_cap}. Resta la classe più ostica (AP $\sim$0.59), ma nettamente sopra le baseline (cfr. Sezione~\ref{sec:eval}).
 
 \subsection{Anti-poisoning gate in live stream}
 
@@ -332,11 +333,11 @@ L'architettura core (memoria ricorrente, \textit{GraphAttentionEmbedding} multi-
 \section{Risultati: il contributo del nodo config}
 \label{sec:v4results}
 
-La valutazione segue lo stesso protocollo del capitolo precedente (replay per-evento attraverso l'esatto codice di serving, split cronologico 70/10/20, soglia cost-sensitive instradata). Si riportano due confronti complementari: (i) il \emph{deployable} v3 vs v4 all'\textit{operating point} pubblicato (singola run, 200\,000 eventi / 15 epoche, \texttt{seed}=42), e (ii) la \emph{validazione mirata} del nodo config — un'ablazione controllata \emph{a parità di dati} su seed multipli.
+La valutazione segue lo stesso protocollo del capitolo precedente (replay per-evento attraverso l'esatto codice di serving, split cronologico 70/10/20, soglia cost-sensitive instradata). Si riportano due confronti complementari: (i) il modello v3 vs v4 (\textit{keying} per-cookie) all'\textit{operating point} instradato (coppia di run rimisurata col codice corrente, 200\,000 eventi / 15 epoche, \texttt{seed}=42), e (ii) la \emph{validazione mirata} del nodo config — un'ablazione controllata \emph{a parità di dati} su seed multipli.
 
-\subsection{Confronto del modello pubblicato (v3 $\rightarrow$ v4)}
+\subsection{Confronto v3 $\rightarrow$ v4 (\textit{keying} per-cookie)}
 
-La Tabella~\ref{tab:v3v4} confronta l'artefatto deployabile prima e dopo l'introduzione del nodo config, al medesimo \textit{operating point} (decisione cost-sensitive instradata sul segnale). Il guadagno più rilevante è sul \textbf{movimento laterale}: il \textit{recall} operativo passa da $\sim$25.5\% a $\sim$59.9\% (più che raddoppiato), con AP $0.464\rightarrow0.614$ e AUC $0.894\rightarrow0.936$, a fronte di un FPR benigno quasi invariato ($\sim$4.8\% $\rightarrow$ $\sim$5.6\%). È il comportamento atteso per costruzione: \textit{config}$\rightarrow$\textit{device} cattura il ``tool nuovo su device noto'' e \textit{config}$\rightarrow$\textit{user} il ``client che quell'utente non usa abitualmente'', cioè i \textit{tell} del laterale e del furto di credenziali.
+La Tabella~\ref{tab:v3v4} confronta l'artefatto (\textit{keying} per-cookie, coerente con la riga TGN della Tab.~\ref{tab:baselines}) prima e dopo l'introduzione del nodo config, al medesimo \textit{operating point} (decisione cost-sensitive instradata sul segnale). Il guadagno \emph{robusto} è sul \textbf{recall operativo del movimento laterale}: passa da $\sim$37.1\% a $\sim$63.3\% ($+26$ punti), coerente con la validazione multi-seed \textit{theft-rich} (Tab.~\ref{tab:theft}, $+0.135$). Le metriche aggregate e l'AUC laterale restano invece \emph{sostanzialmente piatte} (AUC laterale $0.932\rightarrow0.936$, entro il rumore single-run $\pm0.01$--$0.03$; AUC aggregata $0.973\rightarrow0.965$, AP aggregata $0.936\rightarrow0.886$) e l'FPR benigno \emph{sale} ($\sim$4.2\% $\rightarrow$ $\sim$6.6\%): il nodo config non domina uniformemente, ma \emph{sposta} il modello verso un recall operativo del laterale più alto al punto di lavoro instradato --- il \textit{trade-off} che si paga è un FPR benigno maggiore e un'AP aggregata più bassa. È il comportamento atteso per costruzione: \textit{config}$\rightarrow$\textit{device} cattura il ``tool nuovo su device noto'' e \textit{config}$\rightarrow$\textit{user} il ``client che quell'utente non usa abitualmente'', cioè i \textit{tell} del laterale e del furto di credenziali.
 
 \begin{table}[ht!]
 \centering
@@ -345,22 +346,22 @@ La Tabella~\ref{tab:v3v4} confronta l'artefatto deployabile prima e dopo l'intro
 \hline
 \textbf{Metrica (test set)} & \textbf{v3 (4 nodi)} & \textbf{v4 (nodo config)} & $\Delta$ \\
 \hline
-AUC aggregata                    & 0.952 & \textbf{0.964} & $+0.012$ \\
-AP aggregata                     & 0.896 & \textbf{0.905} & $+0.009$ \\
-Recall aggregata (instradata)    & 0.709 & \textbf{0.835} & $+0.126$ \\
+AUC aggregata                    & \textbf{0.973} & 0.965 & $-0.008$ \\
+AP aggregata                     & \textbf{0.936} & 0.886 & $-0.050$ \\
+Recall aggregata (instradata)    & 0.779 & \textbf{0.867} & $+0.088$ \\
 \hline
-Lateral --- AUC                  & 0.894 & \textbf{0.936} & $+0.042$ \\
-Lateral --- AP                   & 0.464 & \textbf{0.614} & $+0.150$ \\
-Lateral --- Recall (instradata)  & 0.255 & \textbf{0.599} & $+0.344$ \\
-Lateral --- Recall (@1\%FPR)     & 0.141 & 0.152 & $+0.011$ \\
+Lateral --- AUC                  & 0.932 & 0.936 & $+0.004$ \\
+Lateral --- AP                   & \textbf{0.587} & 0.549 & $-0.038$ \\
+Lateral --- Recall (instradata)  & 0.371 & \textbf{0.633} & $+0.262$ \\
+Lateral --- Recall (@1\%FPR)     & \textbf{0.217} & 0.163 & $-0.054$ \\
 \hline
-Policy --- AUC / Recall@thr      & $\sim$0.95 / -- & 0.967 / 0.941 & $\sim$ \\
-Contextual --- AUC / Recall@thr  & $\sim$0.99 / -- & 0.990 / 0.970 & $\sim$ \\
+Policy --- AUC / Recall@thr      & 0.994 / 0.999 & 0.971 / 0.998 & $\sim$ \\
+Contextual --- AUC / Recall@thr  & 0.993 / 0.981 & 0.989 / 0.979 & $\sim$ \\
 \hline
-FPR benigno (instradato)         & $\sim$0.048 & $\sim$0.056 & $+0.008$ \\
+FPR benigno (instradato)         & \textbf{0.042} & 0.066 & $+0.024$ \\
 \hline
 \end{tabular}
-\caption{Confronto del modello \emph{deployabile} v3 vs v4 sul medesimo test set sintetico (replay per-evento, \texttt{num\_events}=200\,000, \texttt{seed}=42, decisione cost-sensitive instradata). \emph{Nota metodologica}: valori da \emph{singola} run (training GPU non-deterministico, $\pm0.01$--$0.03$ per run sul lateral AUC); il segnale robusto è il salto di \textit{recall} operativo del laterale ($+0.344$), ben oltre il rumore single-run. Le classi \textit{policy} (OPA-owned) e \textit{contextual} (rule-trivial) restano invariate per costruzione. Il confronto con le baseline non-relazionali (Tab.~\ref{tab:baselines}) è immutato: nessuna baseline modella il nodo config, quindi il vantaggio di v4 si \emph{somma} a quello già documentato del TGN sul segnale temporale.}
+\caption{Confronto v3 vs v4 (\textit{keying} per-cookie) sul medesimo test set sintetico (replay per-evento, \texttt{num\_events}=200\,000, \texttt{seed}=42, 15 epoche, decisione cost-sensitive instradata, \texttt{save=False}; coppia di run rimisurata col codice corrente). \emph{Nota metodologica}: valori da \emph{singola} run (training GPU non-deterministico, $\pm0.01$--$0.03$ per run sul lateral AUC), quindi i $\Delta$ entro tale banda (AUC laterale $+0.004$, AUC aggregata $-0.008$) \emph{non} sono significativi; il segnale robusto è il salto di \textit{recall} operativo del laterale instradato ($+0.262$), confermato dalla validazione multi-seed \textit{theft-rich} (Tab.~\ref{tab:theft}). Il nodo config non è un dominio uniforme: alza il recall operativo del laterale a costo di un FPR benigno più alto ($+0.024$) e di un'AP aggregata più bassa ($-0.050$). Le classi \textit{policy} (OPA-owned) e \textit{contextual} (rule-trivial) restano sostanzialmente invariate per costruzione. Il confronto con le baseline non-relazionali (Tab.~\ref{tab:baselines}) è immutato: nessuna baseline modella il nodo config.}
 \label{tab:v3v4}
 \end{table}
 
@@ -417,7 +418,7 @@ $+$mem$+$heads$+$layer    & $0.913\pm0.025$ & $0.526\pm0.105$ & $0.443\pm0.111$ 
 
 \subsection{Sintesi}
 
-Il nodo \textit{configuration} (v4) migliora sostanzialmente il movimento laterale (recall operativo $+0.344$ all'\textit{operating point} pubblicato) e abilita la rilevazione del furto di credenziali (recall $+0.108$ vs l'ablazione a parità di dati), senza costi architetturali: \texttt{msg\_dim} e \texttt{node\_feat\_dim} restano invariati, e lo sweep conferma che la capacità attuale è già adeguata. Il vantaggio si \emph{somma} a quello già documentato del TGN sulle baseline non-relazionali (Tab.~\ref{tab:baselines}), che non modellano la configurazione del client.
+Il nodo \textit{configuration} (v4) alza sostanzialmente il \textbf{recall operativo} del movimento laterale al punto di lavoro instradato ($+0.262$) e abilita la rilevazione del furto di credenziali (recall $+0.108$ vs l'ablazione a parità di dati), senza costi architetturali: \texttt{msg\_dim} e \texttt{node\_feat\_dim} restano invariati, e lo sweep conferma che la capacità attuale è già adeguata. Non è però un dominio uniforme: il guadagno è \emph{sul recall instradato}, e si paga con un FPR benigno più alto ($+0.024$) e un'AP aggregata più bassa ($-0.050$), mentre AUC aggregata e laterale restano piatte entro il rumore single-run; è quindi uno \textit{spostamento dell'operating point} verso il laterale, non un miglioramento su tutte le metriche. Questo guadagno operativo si \emph{somma} a quello già documentato del TGN sulle baseline non-relazionali (Tab.~\ref{tab:baselines}), che non modellano la configurazione del client.
 
 % ==================== ESPERIMENTO: identità del device ====================
 \section{Esperimento: granularità dell'identità del dispositivo (nodo \texttt{dev:guest})}
@@ -486,16 +487,16 @@ Le valutazioni discusse nei due capitoli sono state condotte sotto protocolli di
 \midrule
 \multicolumn{7}{l}{\textit{Pannello A — stream standard, single run (200k ev., seed 42), soglia globale 1\% FPR}} \\
 \addlinespace[2pt]
-\textbf{TGN} (v3, deployable)            & \textbf{0.947} & \textbf{0.870} & \textbf{0.900} & ---   & 0.130 & ---   \\
-GNN non temporale (ablation)             & 0.574 & 0.569 & 0.468 & ---   & 0.139$^{\dagger}$ & ---   \\
-One-Class SVM                            & 0.845 & 0.793 & 0.632 & ---   & 0.047 & ---   \\
-Isolation Forest                         & 0.775 & 0.628 & 0.639 & ---   & 0.010 & ---   \\
-XGBoost (supervisionato)$^{\ddagger}$    & 0.977 & ---   & 0.942 & ---   & ---   & ---   \\
+\textbf{TGN} (v3, deployable)            & \textbf{0.973} & \textbf{0.936} & \textbf{0.932} & ---   & 0.217 & \textbf{0.713} \\
+GNN non temporale (ablation)             & 0.579 & 0.573 & 0.478 & ---   & 0.125$^{\dagger}$ & 0.367 \\
+One-Class SVM                            & 0.803 & 0.741 & 0.598 & ---   & 0.070 & 0.479 \\
+Isolation Forest                         & 0.782 & 0.594 & 0.674 & ---   & 0.010 & 0.141 \\
+XGBoost (supervisionato)$^{\ddagger}$    & 0.974 & 0.947 & 0.928 & ---   & 0.307 & 0.757 \\
 \midrule
 \multicolumn{7}{l}{\textit{Pannello B — stream standard, single run, decisione cost-sensitive instradata}} \\
 \addlinespace[2pt]
-v3 (4 nodi)                              & 0.952 & 0.896 & 0.894 & 0.464 & 0.255 & 0.709 \\
-\textbf{v4} (nodo config)                & \textbf{0.964} & \textbf{0.905} & \textbf{0.936} & \textbf{0.614} & \textbf{0.599} & \textbf{0.835} \\
+v3 (4 nodi)                              & \textbf{0.973} & \textbf{0.936} & 0.932 & \textbf{0.587} & 0.371 & 0.779 \\
+\textbf{v4} (nodo config)                & 0.965 & 0.886 & \textbf{0.936} & 0.549 & \textbf{0.633} & \textbf{0.867} \\
 \midrule
 \multicolumn{7}{l}{\textit{Pannello C — stream theft-rich, 3 seed (media), ablazioni controllate (\texttt{save=False})}} \\
 \addlinespace[2pt]
@@ -504,7 +505,7 @@ $\approx$v3 (ablazione config)           & 0.956 & ---   & 0.913 & ---   & 0.334
 v4 $+$ \texttt{dev:guest}                & 0.961 & ---   & 0.911 & 0.632 & 0.488 & 0.787 \\
 \bottomrule
 \end{tabular}
-\caption{Quadro riepilogativo delle prestazioni di tutti i modelli e varianti osservati. \textbf{Solo i confronti intra-pannello sono validi} (protocolli di valutazione diversi). \textit{Lat.\ Recall} è a soglia globale 1\% FPR nel Pannello~A e a decisione instradata nei Pannelli~B e~C. La colonna \textit{agg Recall} (recall aggregata su tutte le classi) è alla medesima decisione instradata nei Pannelli~B/C; per le baseline del Pannello~A (soglia globale 1\% FPR) non è disponibile (---). Nel Pannello~A il \textbf{TGN} coincide col \textit{deployable} v3: i valori differiscono lievemente da quelli del Pannello~B per la diversa regola di decisione (soglia globale vs instradata) e per la varianza single-run. I valori di Pannello~C sono medie su 3 \texttt{seed} su uno stream \emph{theft-rich} (incidenti più frequenti, non appaiati evento-per-evento), perciò non comparabili in assoluto con i Pannelli~A/B. $^{\dagger}$ Il recall della GNN statica è \emph{spurio} (AUC$\approx$caso a soglia permissiva, non segnale reale). $^{\ddagger}$ XGBoost è \emph{supervisionato} (vede le etichette): upper-bound di riferimento, fuori dal paradigma non supervisionato del TGN. Lo \textit{sweep} architetturale (Tab.~\ref{tab:archsweep}) conferma inoltre che nessun aumento di capacità migliora il movimento laterale. Sorgenti: Tab.~\ref{tab:baselines} (A), Tab.~\ref{tab:v3v4} (B), Tab.~\ref{tab:theft} e~\ref{tab:guestdev} (C).}
+\caption{Quadro riepilogativo delle prestazioni di tutti i modelli e varianti osservati. \textbf{Solo i confronti intra-pannello sono validi} (protocolli di valutazione diversi). \textit{Lat.\ Recall} è a soglia globale 1\% FPR nel Pannello~A e a decisione instradata nei Pannelli~B e~C. La colonna \textit{agg Recall} (recall aggregata su tutte le classi) è alla soglia globale 1\% FPR nel Pannello~A e alla decisione instradata nei Pannelli~B/C. Nel Pannello~A i valori sono \emph{rimisurati} su singola run (\texttt{seed}=42): la riga \textbf{TGN} è la run \emph{v3} (keying per-cookie), le baseline sono sotto la configurazione \emph{deployable} corrente (\texttt{dev:guest}); differiscono da quelli del Pannello~B per la diversa regola di decisione (soglia globale vs instradata) e per la varianza single-run. I valori di Pannello~C sono medie su 3 \texttt{seed} su uno stream \emph{theft-rich} (incidenti più frequenti, non appaiati evento-per-evento), perciò non comparabili in assoluto con i Pannelli~A/B. $^{\dagger}$ Il recall della GNN statica è \emph{spurio} (AUC$\approx$caso a soglia permissiva, non segnale reale). $^{\ddagger}$ XGBoost è \emph{supervisionato} (vede le etichette): upper-bound di riferimento, fuori dal paradigma non supervisionato del TGN. Lo \textit{sweep} architetturale (Tab.~\ref{tab:archsweep}) conferma inoltre che nessun aumento di capacità migliora il movimento laterale. Sorgenti: Tab.~\ref{tab:baselines} (A), Tab.~\ref{tab:v3v4} (B), Tab.~\ref{tab:theft} e~\ref{tab:guestdev} (C).}
 \label{tab:summary}
 \end{table}
 

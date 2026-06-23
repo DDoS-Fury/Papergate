@@ -106,3 +106,21 @@
   The report's 0.8824 / >73% / 2.18% were a **batched full-span** run (cfr. batched-eval lesson)
   — not reproducible faithfully on a focused window. User removed the LANL section entirely
   (possibly not the right dataset for a streaming O(1) model).
+
+## 2026-06-23 — Report = collage di run storiche; rigenerare può ribaltare la narrazione
+- **Pattern**: `report.tex` è composto da run fatte in momenti diversi col codice che evolveva.
+  La stessa configurazione poteva comparire in due tabelle con numeri diversi (collisione, non
+  "progressione"): es. v3 routed lateral recall = 25.5% (Pannello B) vs 37.1% (§4.3/Pannello A).
+- **Regola**: distinguere (a) run diverse per *config diverse* (legittimo, basta nota di provenienza)
+  da (b) la *stessa* config con due numeri (è un errore da riconciliare). Riconciliare SOLO le
+  collisioni, non rigenerare tutto.
+- **Finding chiave (v3→v4 rigenerato `save=False`, per-cookie, seed 42, 200k, 15 ep)**: col codice
+  attuale il v3 è già forte (lateral AP 0.587 vs il vecchio 0.464), quindi i "guadagni aggregati"
+  che la vecchia Tab. v3v4 attribuiva a v4 erano un artefatto del confronto contro un v3 fiacco.
+  Storia corretta: il nodo config NON domina uniformemente — è un **trade-off**: +0.262 recall
+  laterale instradato (robusto, confermato dal theft-rich multi-seed) a costo di FPR benigno +0.024
+  e AP aggregata -0.050; AUC aggregata/laterale piatte entro il rumore single-run.
+- **Lezione operativa**: quando si rigenera una tabella di confronto, ricalcolare TUTTE le colonne
+  con lo stesso codice nello stesso giro (paired run), altrimenti il delta misura anche la deriva
+  del codice, non solo la variabile sotto test. E verificare se il delta sopravvive al rumore
+  single-run prima di chiamarlo "guadagno".
