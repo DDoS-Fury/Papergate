@@ -25,6 +25,7 @@ public/*.json
 .antigravitycli/
 .claude/
 CLAUDE.md
+tasks/*.md
 
 # LANL dataset
 data/
