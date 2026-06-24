@@ -182,6 +182,23 @@ services:
     entrypoint: ["python"]
     command: ["/app/tests/ablations/run_arch_sweep.py"]
 
+  # Rigenerazione riproducibile dei Pannelli A/B del report (tab:baselines, tab:v3v4)
+  # multi-seed (save=False, non tocca public/). Scrive i JSON delle metriche in
+  # tasks/runs/ e i frammenti LaTeX in docs/latex/generated/.
+  #   docker compose --profile regen-report up
+  regen-report:
+    <<: *base
+    profiles: ["regen-report"]
+    container_name: graphagate-regen-report
+    volumes:
+      - ./public:/app/public
+      - ./src:/app/src
+      - ./tests:/app/tests
+      - ./tasks:/app/tasks
+      - ./docs:/app/docs
+    entrypoint: ["python"]
+    command: ["/app/tests/regen_report_tables.py"]
+
   # Ablation study per valutare l'efficacia del modello senza il device edge.
   # Utilizza il test client per inviare stream al serve-tgn omettendo il parametro key_device.
   # Dipende dal serve-tgn che deve essere già in esecuzione (o avviato insieme con i due profili).

@@ -1,0 +1,11 @@
+% Auto-generato da tests/regen_report_tables.py — NON modificare a mano.
+% Sorgente numerica: tasks/runs/panelA.json
+% Protocollo MISTO (storico): riga TGN = v3 per-cookie; baseline = deployable (dev:guest).
+% Una riga per metrica; le colonne sono i modelli nell'ordine:
+%   TGN (v3, per-cookie) | GNN non temp. | One-Class SVM | Isolation Forest | XGBoost (sup.)$^{\ddagger}$
+AUC aggregata & $0.965\pm0.007$ & $0.555\pm0.037$ & $0.801\pm0.018$ & $0.763\pm0.014$ & $0.974\pm0.001$ \\
+AP aggregata & $0.922\pm0.014$ & $0.560\pm0.021$ & $0.739\pm0.026$ & $0.575\pm0.016$ & $0.948\pm0.001$ \\
+Lateral --- AUC & $0.913\pm0.014$ & $0.451\pm0.021$ & $0.599\pm0.002$ & $0.645\pm0.025$ & $0.929\pm0.001$ \\
+Lateral --- Recall @1\%FPR & $0.166\pm0.009$ & $0.125\pm0.006$ & $0.062\pm0.016$ & $0.009\pm0.002$ & $0.339\pm0.023$ \\
+Recall aggregata @1\%FPR & $0.665\pm0.043$ & $0.366\pm0.004$ & $0.479\pm0.038$ & $0.116\pm0.020$ & $0.772\pm0.011$ \\
+% $^{\ddagger}$ XGBoost \`e supervisionato (vede le etichette): upper-bound, fuori categoria.

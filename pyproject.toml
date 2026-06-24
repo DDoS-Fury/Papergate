@@ -14,6 +14,9 @@ dependencies = [
     "torch_geometric>=2.6,<3.0",
     "numpy>=1.26,<3.0",
     "scikit-learn>=1.4",
+    # Supervised reference baseline (tests/baselines/xgboost) — packaged so the Panel A
+    # comparison is reproducible out-of-the-box (no runtime pip install). Mirrors requirements.txt.
+    "xgboost>=2.0.0",
     # Progress bars for training + offline streaming evaluation (TTY-aware, docker-log safe).
     "tqdm>=4.66",
     # HTTP inference service (graphagate.serve_api); pydantic ships with fastapi.

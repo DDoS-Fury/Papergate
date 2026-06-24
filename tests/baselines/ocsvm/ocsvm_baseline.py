@@ -157,8 +157,9 @@ def ocsvm_baseline(cfg: TGNConfig = TGNConfig()):
 
     # --- PER-ANOMALY-TYPE BREAKDOWN ------------------------------------------
     print("\n--- METRICHE PER TIPO DI ANOMALIA ---")
+    per_type = {}
     benign = test_types == 0
-    for type_id, name in ((1, "policy    "), (2, "contextual"), (3, "lateral   ")):
+    for type_id, name in ((1, "policy"), (2, "contextual"), (3, "lateral")):
         sel = benign | (test_types == type_id)
         s_sel, l_sel = test_scores[sel], (test_types[sel] == type_id).astype(int)
         if l_sel.sum() == 0:
@@ -166,8 +167,18 @@ def ocsvm_baseline(cfg: TGNConfig = TGNConfig()):
         t_auc = roc_auc_score(l_sel, s_sel)
         t_ap = average_precision_score(l_sel, s_sel)
         _, t_recall = _binary_metrics(s_sel, l_sel, threshold)
-        print(f"  {name} | n={int(l_sel.sum()):4d} | AUC: {t_auc:.4f} | "
+        per_type[name] = {"auc": float(t_auc), "ap": float(t_ap),
+                          "recall": float(t_recall), "n": int(l_sel.sum())}
+        print(f"  {name:10s} | n={int(l_sel.sum()):4d} | AUC: {t_auc:.4f} | "
               f"AP: {t_ap:.4f} | Recall@thr: {t_recall:.4f}")
+
+    # Machine-readable summary (consumed by tests/regen_report_tables.py). Recall here is
+    # at the global @target_fpr threshold — the apples-to-apples Panel A (tab:baselines) metric.
+    return {
+        "agg_auc": float(auc), "agg_ap": float(ap),
+        "agg_precision": float(precision), "agg_recall": float(recall),
+        "per_type": per_type,
+    }
 
 
 def main():
