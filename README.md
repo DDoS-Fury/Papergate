@@ -2,7 +2,7 @@
 
 ![Copertina](docs/images/rdm1.png)
 
-![Python](https://img.shields.io/badge/Python-3.10+-3776AB?style=for-the-badge&logo=python&logoColor=white)
+![Python](https://img.shields.io/badge/Python-3.12-3776AB?style=for-the-badge&logo=python&logoColor=white)
 ![PyTorch](https://img.shields.io/badge/PyTorch-2.12-EE4C2C?style=for-the-badge&logo=pytorch&logoColor=white)
 ![PyG](https://img.shields.io/badge/PyTorch_Geometric-2.7-3C2179?style=for-the-badge&logo=pytorch&logoColor=white)
 ![NumPy](https://img.shields.io/badge/NumPy-013243?style=for-the-badge&logo=numpy&logoColor=white)
@@ -54,14 +54,14 @@ compatibilità strutturale — che insieme coprono le tre classi di anomalia.
 
 ```mermaid
 flowchart TD
-    EV["Access event — schema v4, catena a 5 archi (chiavi namespaced per tipo)<br/>key_source(src:ip) → key_config(conf:ja3) → key_device(tpm:/ck:/ipdev:) → key_user → key_dst<br/>(+ binding config→user)<br/>(t, edge_msg sull'arco di accesso) + static attrs: role / clearance / tier / resource-risk / source-internal"]
+    EV["Access event — schema v4, catena a 5 archi (chiavi namespaced per tipo)<br/>key_source(src:ip) → key_config(conf:ja3 ∨ conf:guest) → key_device(tpm: ∨ dev:guest*) → key_user → key_dst<br/>(+ binding config→user) · *dev:guest = collasso non-TPM, default; ck:/ipdev: se keying per-cookie<br/>(t, edge_msg sull'arco di accesso) + static attrs: role / clearance / tier / resource-risk / source-internal"]
     REG["NodeRegistry<br/>entity key → memory slot<br/>dynamic admission · LRU eviction"]
     NL["MessageNeighborLoader<br/>bounded ring-buffer [num_nodes, K]<br/>last K temporal neighbours (+ t, + msg)"]
     EV --> REG --> NL
 
     subgraph EMB["embed() — identity- & history-aware node embeddings"]
         MEM["TGNMemory<br/>recurrent per-node state (GRU)<br/>z_mem + last_update (memory_dim=256)"]
-        ID["Hashed Identity<br/>hash(key) % buckets → nn.Embedding [hash_buckets, hash_dim]"]
+        ID["Hashed Identity<br/>stable_hash(key) % buckets → nn.Embedding [hash_buckets, hash_dim]"]
         STAT["Static Node Features<br/>tier / risk / internal [16]"]
         CAT["concat → x = [ z_mem ‖ node_feat ‖ id ]"]
         GNN["GraphAttentionEmbedding<br/>TransformerConv (4 heads, num_hops=3, + residual)<br/>edge_attr = [ time_enc(Δt) ‖ hist_msg ]"]
@@ -135,8 +135,9 @@ Il "buffer" della memoria storica e del vicinato (`MessageNeighborLoader`) non c
 
 ## Tipi di anomalia (dati sintetici)
 
-Il generatore (`src/data/stream_synthetic.py`) simula la catena *IP → device → utente →
-risorsa* (smart working/roaming, NAT, device condivisi, cookie-wipe) e produce, oltre alle
+Il generatore (`src/data/stream_synthetic.py`) simula la catena v4 *IP → config (JA3) → device →
+utente → risorsa* (smart working/roaming, NAT, device condivisi, cookie-wipe, tool/JA3 mai visti)
+e produce, oltre alle
 etichette binarie `y`, un vettore `types` per la valutazione per-classe e un bitmask
 `scenario` (roaming / wiped / shared) per la valutazione per-scenario:
 
@@ -156,61 +157,74 @@ etichette binarie `y`, un vettore `types` per la valutazione per-classe e un bit
 ## Validazione (risultati onesti)
 
 Valutazione **de-circolarizzata + de-degenerata** sullo stream sintetico (`num_events`=200k,
-`seed`=42, FPR target 1%, split cronologico 70/10/20, solo benigno in training, soglia calibrata
-sul benigno di validazione). Focus sul **lateral** (policy è di OPA, contextual è banale). **Tutte le
-baseline ricevono gli stessi segnali tabellari del TGN** (feature di storia causali + lo stesso
-prior precursor): così il divario col TGN isola il contributo della **macchina
-temporale-relazionale**, non dei contatori.
+**3 seed** `[42,7,123]` — media ± dev.std, FPR target 1%, split cronologico 70/10/20, solo benigno
+in training, soglia calibrata sul benigno di validazione). Focus sul **lateral** (policy è di OPA,
+contextual è banale). **Tutte le baseline ricevono gli stessi segnali tabellari del TGN** (feature
+di storia causali + lo stesso prior precursor): così il divario col TGN isola il contributo della
+**macchina temporale-relazionale**, non dei contatori.
 
 | Modello (stessi segnali tabellari) | Agg AUC | Agg AP | **lateral AUC** | lateral Rec@1%FPR |
 |---|---|---|---|---|
-| One-Class SVM | 0.845 | 0.793 | 0.632 | 4.7% |
-| Static GNN (grafo, **no temporale**) | 0.574 | 0.569 | 0.468 ≈ caso | 13.9% (spurio) |
-| Isolation Forest | 0.775 | 0.628 | 0.639 | 1.0% |
-| **TGN (full)** | **0.947** | **0.870** | **0.900** | **13.0%** |
+| Isolation Forest | 0.763 | 0.575 | 0.645 | 0.9% |
+| One-Class SVM | 0.801 | 0.739 | 0.599 | 6.2% |
+| Static GNN (grafo, **no temporale**) | 0.555 | 0.560 | 0.451 ≈ caso | 12.5% (spurio) |
+| **TGN (full, v3 per-cookie)** | **0.965** | **0.922** | **0.913** | **16.6%** |
+| _XGBoost (supervisionato, upper-bound)_ | _0.974_ | _0.948_ | _0.929_ | _33.9%_ |
 
-> **Risultati schema v4 (5 nodi / 5 archi, nodo config/JA3, run 200k/15ep, seed 42).**
-> Il nodo *Configuration* raddoppia il recall operativo sul **lateral movement** (dal ~25.5% del v3
-> al **~59.9%**), con Lateral AUC **0.936** e Agg AUC **0.964**. Migliora nettamente anche la
-> rilevazione del **credential theft** (Recall +0.108 rispetto all'ablazione senza nodo config).
-> Il FPR benigno resta controllato (~5.6%). Questo vantaggio si somma a quello già documentato del TGN.
+> Medie su **3 seed**; dispersione (± dev.std) nella relazione tecnica (`docs/latex/report.tex`,
+> tab. baseline). _XGBoost_ è **supervisionato** (vede le label): upper-bound di riferimento, fuori
+> dal paradigma non supervisionato del TGN — non una baseline comparabile.
+
+> **Schema v4 (5 nodi / 5 archi, nodo config/JA3 — 3 seed `[42,7,123]`, decisione cost-sensitive
+> instradata).** Il nodo *Configuration* alza il recall operativo sul **lateral movement** dal ~35.0%
+> del v3 al **~57.7%** (**+0.227**, oltre il rumore multi-seed), con Lateral AUC **0.913 → 0.930** e
+> Agg AUC ~invariata (**0.965 → 0.964**). Migliora la rilevazione del **credential theft** (Recall
+> **+0.108** vs l'ablazione senza nodo config, su stream *theft-rich*). Non è un dominio uniforme: il
+> trade-off è un FPR benigno instradato più alto (~5.0% → **~6.6%**). Tabelle complete e validazioni
+> mirate nella relazione tecnica (`docs/latex/report.tex`).
 >
-> **[storico] Risultati schema v3.** Lateral AUC 0.894, AUC aggregata 0.952 (stesso setup v4). Lo schema a 4 nodi
-> usava il fingerprint JA3 solo come bit di validità, mascherando attacchi con tool nuovi su device noti
-> o furti di credenziali da client differenti. La feature *source-internal* disabilitata di default mitigava in parte il problema.
+> **Identità del device (deployable).** Di default `guest_device_fallback=True`: i dispositivi senza
+> TPM collassano su un unico nodo `dev:guest` anziché tenere un'identità-cookie per macchina. Sullo
+> stream sintetico è un miglioramento di Pareto (FPR benigno e varianza tra seed più bassi, niente
+> falsi positivi da cookie-wipe) senza degradare la detection; il keying per-cookie resta attivabile
+> (flag off) per l'attribuzione forense per-macchina.
 >
-> **[storico] Risultati schema v2.** Lateral AUC 0.818, AUC aggregata 0.919. Nota di confronto onesto: nel v2
-> è stato corretto il bug di `signal_dirty`/rule-baseline che trattava il metodo HTTP come un sensore (ogni POST finiva
-> sulla soglia conservativa); il punto operativo si regola con `cost_ratio` / `clean_fpr_cap`. I numeri
-> in tabella (TGN **e** baseline) sono del run de-circolarizzato corrente (200k/seed 42), coerenti
-> con la relazione tecnica.
+> **[storico, single-run].** Schema v3 (4 nodi): Lateral AUC ~0.894, Agg AUC ~0.952. Schema v2:
+> Lateral AUC ~0.818, Agg AUC ~0.919. Run single-seed di setup precedenti (lo schema a 4 nodi usava
+> il JA3 solo come bit di validità, mascherando tool nuovi su device noti e furti di credenziali da
+> client differenti), mantenuti solo come contesto evolutivo; i numeri correnti in tabella sono
+> multi-seed e differiscono di conseguenza.
 
 - **Lo Static GNN — stessi contatori + precursor, stessa struttura di grafo, ma senza la
-  macchina temporale — sta a caso sul lateral (0.47).** Il TGN arriva a **0.90** (single-run;
-  **0.882±0.012** in media multi-seed a 3 seed): il segnale laterale vive nella **memoria
-  ricorrente + vicinato temporale**, non nei contatori (che tutti hanno). Ablation multi-seed
-  (3 seed): history feats **+0.163** AUC (il contributo dominante), hashed identity **+0.046**;
-  precursor **+0.013** e struct head **+0.007** entrambi **marginali**.
-- **Recall@1%FPR ~13%** resta basso (la soglia globale è dominata dalle classi facili); il 13.9%
+  macchina temporale — sta a caso sul lateral (0.451).** Il TGN arriva a **0.913±0.014**
+  (3 seed): il segnale laterale vive nella **memoria ricorrente + vicinato temporale**, non nei
+  contatori (che tutti hanno). Ablation multi-seed (3 seed): history feats **+0.163** AUC (il
+  contributo dominante), hashed identity **+0.046**; precursor **+0.013** e struct head **+0.007**
+  entrambi **marginali**.
+- **Recall@1%FPR ~16.6%** resta basso (la soglia globale è dominata dalle classi facili); il 12.5%
   della Static GNN è **spurio** (AUC≈caso con soglia permissiva, non un segnale reale). Il segnale
-  onesto è l'**AUC 0.90 / 0.882 multi-seed** (≫ caso); il «~40% recall» precedente era un artefatto
+  onesto è l'**AUC 0.913 multi-seed** (≫ caso); il «~40% recall» di vecchie misure era un artefatto
   circolare. La conversione in recall operativo passa per il routing cost-sensitive (Sez. soglia):
-  sul test sintetico il recall laterale sale a ~25–29% (FPR benigno ~5–6%).
+  sul test sintetico il recall laterale sale a ~35.0% (FPR benigno ~5.0%), e a ~57.7% con il nodo
+  config (v4).
 
 Dettagli su de-circolarizzazione, de-degenerazione, ablation multi-seed, cold-start e
 anti-poisoning in 👉 [`docs/inductive_testing.md`](docs/inductive_testing.md) e
 [`docs/lateral_movement.md`](docs/lateral_movement.md). Riproduzione: profili Compose
-`training-tgn`, `baseline-iforest`, `baseline-ocsvm`, `baseline-gnn`, `ablations`, `verify-tgn`.
+`training-tgn`, `baseline-iforest`, `baseline-ocsvm`, `baseline-gnn`, `baseline-xgboost`,
+`ablations`, `config-eval`, `guest-device-eval`, `arch-sweep`, `eval-lanl`, `verify-tgn`. Le
+tabelle della relazione tecnica si rigenerano (multi-seed) col profilo `regen-report`.
 
 ## Limitazioni e Threat Model
 
 Da leggere prima di trattare le metriche come garanzie di produzione:
 
-- **Validità esterna.** Al momento la valutazione è solo su stream **sintetico**. La validità
-  esterna su dataset reali resta **lavoro futuro** (DARPA OpTC, CIC-IDS, ed eventualmente una
-  rivalutazione *faithful*/non-batchata di LANL auth — i numeri LANL preliminari, ottenuti con
-  eval batchato, non sono affidabili per la pubblicazione e l'idoneità del dataset host-to-host
-  a un modello ZTA event-streaming è da verificare).
+- **Validità esterna.** Le metriche pubblicate sono su stream **sintetico**. Esiste un harness
+  *faithful* event-streaming su **LANL auth** (`tests/eval_lanl.py`, profilo `eval-lanl`, con
+  gating `has_config` per il percorso legacy senza nodo config), ma i risultati non sono ancora
+  consolidati come publication-grade: la validità esterna su dataset reali (LANL, DARPA OpTC,
+  CIC-IDS) e l'idoneità di un dataset host-to-host a un modello ZTA event-streaming restano
+  **lavoro futuro**.
 - **Anti-poisoning gate auto-deciso.** Memoria/vicinato si aggiornano solo per eventi
   *scorati* benigni. Conseguenze intrinseche: un attaccante stealthy scorato benigno
   **avvelena** la baseline; un benigno scorato anomalo non viene mai appreso (**starvation**).
@@ -220,10 +234,10 @@ Da leggere prima di trattare le metriche come garanzie di produzione:
   raggiunga il servizio può alterare lo stato, bypassando il gate. Il design assume un
   orchestrator fidato su rete privata; non esporre il servizio senza TLS + autenticazione.
 - **Recall operativo del lateral (non "risolto").** Il routing cost-sensitive (`cost_ratio`=20.0,
-  `clean_fpr_cap`=0.05) converte il ranking (lateral AUC ~0.90) in recall operativo, ma resta
-  limitato: sul test sintetico il recall laterale passa da ~13% (soglia globale 1% FPR) a ~25–29%
-  (decisione instradata, FPR benigno ~5–6%). È un trade-off regolabile via `cost_ratio` /
-  `clean_fpr_cap`, **non** un problema chiuso.
+  `clean_fpr_cap`=0.05) converte il ranking (lateral AUC ~0.913) in recall operativo, ma resta
+  limitato: sul test sintetico il recall laterale passa da ~16.6% (soglia globale 1% FPR) a ~35.0%
+  (v3, decisione instradata, FPR benigno ~5.0%) e fino a ~57.7% con il nodo config (v4, FPR ~6.6%).
+  È un trade-off regolabile via `cost_ratio` / `clean_fpr_cap`, **non** un problema chiuso.
 - **Precursor = euristica.** Il prior kill-chain assume che il lateral segua un recon che fa
   scattare Snort sullo stesso IP. Regge nel generatore; un attaccante che evita il recon rumoroso
   lo aggira. È un prior additivo onesto, non una garanzia.
