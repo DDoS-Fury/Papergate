@@ -1068,6 +1068,10 @@ def train_tgn(cfg: TGNConfig = TGNConfig(), *, dataset: "StreamData | None" = No
         "agg_ap": ap,
         "agg_precision": precision,
         "agg_recall": recall,
+        # Aggregate recall at the SAME global 1% FPR threshold the baselines use, for the
+        # apples-to-apples Panel A (tab:baselines) comparison; agg_recall above is the
+        # signal-routed (operational) recall used by Panel B (tab:v3v4).
+        "agg_recall_global": old_agg_recall,
         "lateral_recall_before": old_lat_recall,
         "lateral_recall_after": new_lat_recall,
         "fpr_before": old_fpr,
