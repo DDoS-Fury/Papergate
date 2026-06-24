@@ -1,3 +1,59 @@
+# TODO — Colmare il gap: v4 + dev:guest sullo stream standard (2026-06-24)
+
+## Contesto
+Il deployable (`guest_device_fallback=True`, `dev:guest`) è valutato SOLO su stream
+theft-rich (Pannello C, Tab. `tab:guestdev`). Sullo stream standard (Pannello B,
+200k ev / 15 ep, decisione cost-sensitive instradata) tutti i numeri pubblicati sono
+**per-cookie**, prodotti prima dell'adozione del guest. Manca la riga v4+guest standard:
+è ciò che gira in produzione e dovrebbe stare nel quadro riepilogativo.
+
+## Piano
+- [x] Indagine: confermato che v4+guest non è mai misurato su stream standard
+- [x] Driver `tests/ablations/run_guest_standard_eval.py` (sibling di run_guest_device_eval,
+      ma stream standard + metriche Pannello B; v4 per-cookie vs v4+dev:guest; 3 seed; save=False)
+- [x] Profilo Compose `guest-standard-eval`
+- [x] Eseguire via docker compose (GPU) — 2 varianti × 3 seed × 200k/15ep
+- [x] Riportato in 05.tex: NIENTE sezione nuova — il risultato è folded in coda
+      all'Interpretazione di §sec:guestdev (un paragrafo + Tab. tab:gueststd, dati appaiati
+      dello stesso run). Niente rigenerazione: per-cookie e guest freschi vengono dallo
+      stesso run. Pannello B pubblicato non toccato. Tesi compila (latexmk exit 0, ref OK).
+- [x] Sezione review
+
+## Note
+- Sullo stream standard il furto si esaurisce in train → metriche theft NaN nel test
+  (atteso, come Pannello B). Focus su lateral + aggregate + FPR instradato.
+
+## Review — risultato (3 seed [42,7,123], 200k/15ep, instradata, save=False)
+| metrica (test) | v4 per-cookie | v4 + dev:guest | Δ (guest−cookie) |
+|---|---|---|---|
+| AUC aggregata | 0.979±0.004 | 0.965±0.005 | **−0.014** |
+| AP aggregata | 0.955±0.007 | 0.926±0.021 | −0.029 |
+| Recall aggregata (instradata) | 0.851±0.003 | 0.811±0.000 | −0.039 |
+| Lateral AUC | 0.952±0.007 | 0.922±0.009 | **−0.029** |
+| Lateral AP | 0.749±0.027 | 0.652±0.078 | −0.097 |
+| Lateral Recall (instradata) | 0.603±0.006 | 0.532±0.028 | **−0.071** |
+| Lateral Recall @1%FPR | 0.458±0.041 | 0.372±0.065 | −0.086 |
+| FPR benigno (instradato) | 0.043±0.008 | 0.042±0.007 | −0.001 |
+
+**Finding (onesto, controintuitivo rispetto alla premessa).** Sullo stream STANDARD il
+collasso `dev:guest` NON è il miglioramento di Pareto visto su theft-rich: è una **lieve
+regressione** sul laterale (lat AUC −0.029, recall instradata −0.071), agg AUC −0.014, FPR
+**piatto** (−0.001). Motivo: il test split standard ha **zero furto e ~zero cookie-wipe**,
+quindi i due vantaggi del guest (detection del furto + eliminazione dei FP da wipe + crollo
+di varianza) sono **assenti per costruzione**; resta solo la perdita della novelty-cue
+per-macchina, che qui costa un po' di ranking laterale.
+- Cross-check: guest 3-seed (lat AUC 0.922, agg 0.965) ≈ retrain deployable single-seed in
+  README (0.918 / 0.959). Coerente.
+- **Caveat code-drift**: il v4 per-cookie FRESCO (lat AUC 0.952) è > del Pannello B
+  pubblicato (0.930): il codice è migliorato dopo la generazione delle tabelle. Il confronto
+  VALIDO è appaiato fresh-vs-fresh (stesso run), cioè il Δ qui sopra. Per coerenza assoluta
+  andrebbe rigenerato anche il Pannello B (profilo `regen-report`).
+- Implicazione tesi: il modello **deployato** (guest) ha lat AUC ~0.922 sullo stream
+  standard, leggermente **sotto** il 0.930 per-cookie pubblicato; il guest si giustifica coi
+  benefici theft-rich/operativi (Tab. guestdev), non come win sullo stream standard.
+
+---
+
 # TODO — Esperimento: device senza TPM → nodo `dev:guest` condiviso (2026-06-18)
 
 ## Contesto
