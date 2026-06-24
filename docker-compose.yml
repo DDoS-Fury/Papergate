@@ -169,6 +169,20 @@ services:
     entrypoint: ["python"]
     command: ["/app/tests/ablations/run_guest_device_eval.py"]
 
+  # Colma il gap del report: valuta il deployable (v4 + dev:guest) sullo stream STANDARD
+  # (protocollo Pannello B, 200k/15ep, decisione instradata) vs v4 per-cookie, a parità di
+  # dati. I numeri standard pubblicati erano solo per-cookie. Stream standard + save=False.
+  guest-standard-eval:
+    <<: *base
+    profiles: ["guest-standard-eval"]
+    container_name: graphagate-guest-standard-eval
+    volumes:
+      - ./public:/app/public
+      - ./src:/app/src
+      - ./tests:/app/tests
+    entrypoint: ["python"]
+    command: ["/app/tests/ablations/run_guest_standard_eval.py"]
+
   # Sweep architetturale (v4): layer MLP extra, memory_dim, teste di attenzione.
   # save=False (non tocca public/); adozione solo se migliora oltre il rumore multi-seed.
   arch-sweep:
