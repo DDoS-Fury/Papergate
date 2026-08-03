@@ -39,7 +39,7 @@ class TGNConfig:
     num_sources: int = 150
     # MUST equal len(RESOURCE_URIS) in stream_synthetic.py: resource node keys are
     # the exact route URIs the security-orchestrator sends as key_dst.
-    num_resources: int = 19
+    num_resources: int = 1000
     # v4 schema: the client CONFIGURATION (TLS/JA3 fingerprint) is a 5th node role,
     # inserted into the causal chain as ``source → config → device → user → resource``
     # (plus a ``config → user`` binding). JA3 has limited cardinality (a handful of
@@ -96,7 +96,7 @@ class TGNConfig:
 
     # TGN Architecture
     node_feat_dim: int = 16
-    msg_dim: int = 7
+    msg_dim: int = 11
     time_dim: int = 32
     memory_dim: int = 256
     num_hops: int = 3

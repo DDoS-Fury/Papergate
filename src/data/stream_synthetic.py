@@ -117,6 +117,27 @@ ROUTE_METHODS = {
     "/api/v1/reactor-parameters": {0, 1, 3},  # GET, POST, DELETE
     TRUSTED_GUARD: {1},                       # POST only
 }
+
+_rng = random.Random(42)
+for i in range(981):  # Total 1000 resources
+    cat = _rng.choice(["public", "hr", "finance", "nuclear", "ops", "security"])
+    if cat == "public":
+        uri = f"/api/v2/public/resource_{i}"
+        ROUTE_METHODS[uri] = {0, 1}
+    else:
+        uri = f"/internal/{cat}/doc_{i}"
+        ROUTE_METHODS[uri] = {0, 1, 3}
+        if cat == "hr":
+            SECURITY_MATRIX[uri] = ("INTERNAL", {"hr"})
+        elif cat == "finance":
+            SECURITY_MATRIX[uri] = ("CONFIDENTIAL", {"finance"})
+        elif cat == "ops":
+            SECURITY_MATRIX[uri] = ("INTERNAL", {"ops"})
+        elif cat == "nuclear":
+            SECURITY_MATRIX[uri] = ("TOP_SECRET", {"nuclear"})
+        elif cat == "security":
+            SECURITY_MATRIX[uri] = ("SECRET", {"security"})
+
 # Resource node keys MUST be the exact URIs the orchestrator sends as key_dst
 # (after its normalizeAIPath): no synthetic suffixes, one node per real route.
 RESOURCE_URIS = list(ROUTE_METHODS)
@@ -156,6 +177,14 @@ def policy_allows(role: str, method: int, uri: str) -> bool:
 # methods, since the resource node is method-agnostic). Routes the orchestrator never
 # scores as sensitive (public/auth/static) are 0.0. Keep aligned if the Go map changes.
 RESOURCE_RISK = {uri: 0.0 for uri in RESOURCE_URIS}
+for uri in SECURITY_MATRIX:
+    cls, _ = SECURITY_MATRIX[uri]
+    if cls == "INTERNAL": RESOURCE_RISK[uri] = 0.5
+    elif cls == "CONFIDENTIAL": RESOURCE_RISK[uri] = 0.6
+    elif cls == "SECRET": RESOURCE_RISK[uri] = 0.8
+    elif cls == "TOP_SECRET": RESOURCE_RISK[uri] = 0.9
+
+# Restore specific overrides
 RESOURCE_RISK.update({
     "/api/v1/personnel": 0.6,                                  # max(GET/POST 0.4, DELETE 0.6)
     "/api/v1/documents": 0.7,                                  # max(GET/POST 0.5, DELETE 0.7)
@@ -352,6 +381,7 @@ class ZTAStreamSimulator:
         # USER (the access edge is user -> resource).
         self._valid_cache: dict[str, list[tuple[int, int]]] = {}
         self._violation_cache: dict[str, list[tuple[int, int]]] = {}
+        self._zipf_probs: dict[int, np.ndarray] = {}
         self.user_habitual: list[set[tuple[int, int]]] = []
         for u in range(self.num_users):
             valid = self._policy_valid_actions(self.user_roles[u])
@@ -387,6 +417,7 @@ class ZTAStreamSimulator:
         self._next_wipe_slot = 0
         self._next_theft_slot = 0
         self._slot_age: dict[int, int] = {}      # events seen by a re-keyed (wiped) slot
+        self.last_user_t: dict[int, int] = {}
         self.compromised_state: dict[int, int] = {}  # machine -> kill-chain phase
         self.compromised_chain_remaining: dict[int, int] = {} # machine -> steps left in lateral chain
         self._active_thefts: list[dict] = []
@@ -415,6 +446,16 @@ class ZTAStreamSimulator:
                 if uri in SECURITY_MATRIX and not policy_allows(role, m, uri)
             ]
         return self._violation_cache[role]
+
+    def _zipf_choice(self, choices: list):
+        if not choices:
+            return None
+        n = len(choices)
+        if n not in self._zipf_probs:
+            w = 1.0 / (np.arange(1, n + 1) ** 1.2)
+            self._zipf_probs[n] = w / w.sum()
+        idx = np.random.choice(n, p=self._zipf_probs[n])
+        return choices[idx]
 
     def _maybe_wipe_cookie(self, machine: int) -> None:
         """Re-key a cookie-identified machine onto a fresh (cold) device slot."""
@@ -459,7 +500,8 @@ class ZTAStreamSimulator:
         sensitive = [(r, m) for r, m in valid if RESOURCE_URIS[r] in SECURITY_MATRIX]
         res_idx, method = random.choice(sensitive or valid or [(0, 0)])
         feat = [1.0, 0.0, 0.0, 0.0, float(method),
-                ROLES.index(role) / (len(ROLES) - 1), clr / 4.0]
+                ROLES.index(role) / (len(ROLES) - 1), clr / 4.0,
+                0.1, 0.1, 0.0]
         incident["remaining"] -= 1
         if incident["remaining"] <= 0:
             self._active_thefts.remove(incident)
@@ -472,6 +514,11 @@ class ZTAStreamSimulator:
     def _event(self, *, source, config, device, user, res_idx, feat, label, etype, scenario):
         if device in self._slot_age:
             self._slot_age[device] += 1
+            
+        delta_t = self.t - self.last_user_t.get(user, self.t)
+        self.last_user_t[user] = self.t
+        feat.append(float(np.log1p(delta_t) / 10.0))
+        
         dst = self.res_lo + res_idx
         return {
             "source": source, "config": config, "device": device, "user": user, "dst": dst,
@@ -578,13 +625,35 @@ class ZTAStreamSimulator:
         is_anonymous = not is_anomalous and random.random() < 0.15
 
         if not is_anomalous:
+            # Benign Service Account (cronjob/bot) 5% of the time: very predictable pattern
+            if random.random() < 0.05:
+                user = 0  # Dedicate user 0 as a service account
+                u_role, u_clearance = self.user_roles[user], self.user_clearances[user]
+                config = self.cfg_lo + 1  # Fixed JA3 for script
+                valid = self._policy_valid_actions(u_role)
+                if valid:
+                    res_idx, method = valid[0]  # Deterministic access
+                    feat = [1.0, 0.0, 0.0, 0.0, float(method), ROLES.index(u_role) / (len(ROLES) - 1), u_clearance / 4.0, 0.2, 0.5, 0.0]
+                    return self._event(source=source, config=config, device=dev_slot, user=user,
+                                       res_idx=res_idx, feat=feat, label=0, etype=0, scenario=scenario)
+
+            # Benign human error (OPA Deny) 2% of the time for valid users
+            if not is_anonymous and random.random() < 0.02:
+                invalid = self._policy_violations(u_role)
+                if invalid:
+                    res_idx, method = random.choice(invalid)
+                    feat = [1.0, 0.0, 0.0, 0.0, float(method), ROLES.index(u_role) / (len(ROLES) - 1), u_clearance / 4.0, 0.05, 0.01, 0.4]
+                    # This is an OPA denial triggered by a benign user mistake (label=1 because OPA denies it, etype=1)
+                    return self._event(source=source, config=config, device=dev_slot, user=user,
+                                       res_idx=res_idx, feat=feat, label=1, etype=1, scenario=scenario)
+
             if is_anonymous:
                 user = self.num_registered_users + int(np.random.randint(0, self.num_guests))
                 u_role, u_clearance = "guest", 0
                 config = self.cfg_lo  # conf:guest
                 dev_slot = self._guest_dev_slot if self._guest_dev_slot is not None else self.dev_lo + machine
                 valid_anon = [(r, m) for r, uri in enumerate(RESOURCE_URIS) if uri not in SECURITY_MATRIX for m in ROUTE_METHODS[uri]]
-                res_idx, method = random.choice(valid_anon)
+                res_idx, method = self._zipf_choice(valid_anon)
             else:
                 valid = self._policy_valid_actions(u_role)
                 habit = [a for a in valid if a in self.user_habitual[user]]
@@ -592,15 +661,19 @@ class ZTAStreamSimulator:
                 # Benign exploration: an authorised-but-non-habitual access (policy-clean,
                 # signal-clean, label=0) — novelty alone is not an anomaly cue.
                 if non_habit and random.random() < self.benign_explore_prob:
-                    res_idx, method = random.choice(non_habit)
+                    res_idx, method = self._zipf_choice(non_habit)
                 elif habit:
-                    res_idx, method = random.choice(habit)
+                    res_idx, method = self._zipf_choice(habit)
                 elif valid:
-                    res_idx, method = random.choice(valid)
+                    res_idx, method = self._zipf_choice(valid)
                 else:
                     res_idx, method = 0, 0  # public-path fallback
             
+            
             ja3, s1, s2, s3 = 1.0, 0.0, 0.0, 0.0
+            bytes_in = abs(np.random.normal(0.1, 0.05))
+            bytes_out = abs(np.random.normal(0.2, 0.1))
+            http_status = 0.0 if res_idx != 0 else 0.6  # 404 for fallback
             label, etype = 0, 0
         else:
             state = self.compromised_state[machine]
@@ -613,10 +686,30 @@ class ZTAStreamSimulator:
                 self.compromised_chain_remaining[machine] -= 1
                 if self.compromised_chain_remaining[machine] <= 0:
                     self.compromised_state[machine] = 3
+            elif state == 3:
+                anomaly_type = "exfil"    # Data Exfiltration
+                self.compromised_state[machine] = 4 # Done
             else:
                 anomaly_type = np.random.choice(["policy", "context", "lateral"])
 
-            if anomaly_type == "lateral":
+            bytes_in = abs(np.random.normal(0.1, 0.05))
+            bytes_out = abs(np.random.normal(0.2, 0.1))
+            http_status = 0.0
+
+            if anomaly_type == "exfil":
+                valid = self._policy_valid_actions(u_role)
+                sensitive = [(r, m) for r, m in valid if RESOURCE_URIS[r] in SECURITY_MATRIX]
+                if sensitive:
+                    res_idx, method = random.choice(sensitive)
+                else:
+                    res_idx = int(np.random.randint(0, self.num_resources))
+                    method = 0
+                ja3, s1, s2, s3 = 1.0, 0.0, 0.0, 0.0
+                bytes_in = 1.0
+                bytes_out = 15.0 # Massive transfer
+                http_status = 0.0
+                etype = 3
+            elif anomaly_type == "lateral":
                 valid = self._policy_valid_actions(u_role)
                 non_habit = [a for a in valid if a not in self.user_habitual[user]]
                 if non_habit:
@@ -647,6 +740,7 @@ class ZTAStreamSimulator:
                     res_idx = int(np.random.randint(0, self.num_resources))
                     method = int(np.random.randint(0, 4))
                 ja3, s1, s2, s3 = 1.0, 0.0, 0.0, 0.0
+                http_status = 0.4 # 403 Forbidden
                 etype = 1
             elif anomaly_type == "context":
                 res_idx = int(np.random.randint(0, self.num_resources))
@@ -657,11 +751,14 @@ class ZTAStreamSimulator:
                 s1 = 1.0 if np.random.rand() > 0.2 else 0.0
                 s2 = 1.0 if np.random.rand() > 0.5 else 0.0
                 s3 = 1.0 if np.random.rand() > 0.8 else 0.0
+                http_status = 0.6 # 404 Not Found
                 etype = 2
+            
             label = 1
 
         feat = [ja3, float(s1), float(s2), float(s3), float(method),
-                ROLES.index(u_role) / (len(ROLES) - 1), u_clearance / 4.0]
+                ROLES.index(u_role) / (len(ROLES) - 1), u_clearance / 4.0,
+                float(bytes_in), float(bytes_out), float(http_status)]
         return self._event(source=source, config=config, device=dev_slot, user=user,
                            res_idx=res_idx, feat=feat, label=label, etype=etype,
                            scenario=scenario)
@@ -677,7 +774,7 @@ class SyntheticStream:
     user: torch.Tensor          # [N] global user node ids
     dst: torch.Tensor           # [N] global resource node ids
     t: torch.Tensor             # [N] timestamps
-    msg: torch.Tensor           # [N, 7] edge messages (access edge)
+    msg: torch.Tensor           # [N, 11] edge messages (access edge)
     y: torch.Tensor             # [N] binary labels
     types: torch.Tensor         # [N] anomaly types (0..4)
     scenario: torch.Tensor      # [N] benign-context bitmask (SCEN_*)
