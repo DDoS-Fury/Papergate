@@ -16,7 +16,7 @@
 ![License: MIT](https://img.shields.io/badge/License-MIT-yellow?style=for-the-badge)
 
 GNN model training and serving microservice (and standalone), specialized in
-**unsupervised anomaly detection** for ZTA intrusion detection/prevention systems.
+**one-class anomaly detection** for ZTA intrusion detection/prevention systems.
 
 ## Overview (Temporal Graph Network)
 
@@ -26,8 +26,11 @@ arco temporale (edge) contenente segnali Zero-Trust; il modello mantiene una **m
 comportamento di ciascuna entità e una cronologia limitata dei suoi **vicini temporali** recenti,
 assegnando uno score a ogni nuovo evento in modo sequenziale.
 
-- **Unsupervised anomaly detection** — addestrato esclusivamente su traffico benigno tramite negative
-  sampling. Per ogni evento benigno il modello viene spinto verso *benigno* e su tre tipi di
+- **One-class anomaly detection** — addestrato esclusivamente su traffico benigno tramite negative
+  sampling. *Precisazione:* il metodo è **one-class / semi-supervised**, non unsupervised: le label
+  selezionano il training set (solo benigno) e la soglia operativa primaria è calibrata con label
+  di lateral movement sullo slice di validazione. Nessuna label è mai usata per calcolare uno score
+  di test. Vedi il docstring di `src/train_tgn.py`. Per ogni evento benigno il modello viene spinto verso *benigno* e su tre tipi di
   perturbazione verso *anomalo*; lo score di anomalia è calcolato come `1 − P(benign)`.
 - **Classi di anomalie rilevate** — *contestuale* (fiducia TLS compromessa / allarmi
   dai sensori), *policy* (un'entità che agisce al di fuori del proprio ruolo/clearance/tier), *movimento
@@ -86,31 +89,60 @@ flowchart TD
     GNN --> STR
     SUM --> SCO["anomaly score = 1 − σ(logit)"]
     SCO --> PREC["score = min(1, score × precursor_boost)"]
-    PREC --> GATE{"score < threshold ?<br/>(cost-sensitive routing)"}
-    GATE -->|benign| UPD["update TGNMemory<br/>+ neighbor_loader.insert<br/>(anti-poisoning gate)"]
-    GATE -->|anomaly| REP["report anomaly<br/>memory NOT updated"]
+    PREC --> DEC{"score ≥ threshold ?<br/>(cost-sensitive routing)"}
+    DEC -->|anomaly| REP["report anomaly<br/>(+ arm precursor, drop trust)"]
+    DEC -->|benign| OK["allow"]
+    PREC --> GATE{"commit gate"}
+    GATE -->|"OPA ALLOW<br/>(measured protocol)"| UPD["update TGNMemory<br/>+ neighbor_loader.insert"]
+    GATE -->|"OPA DENY"| NOUPD["memory NOT updated"]
     UPD -.->|writes back history| NL
 ```
+
+> **Il gate misurato è quello di OPA, non lo score del modello.** La decisione
+> (`score ≥ threshold`) e il *commit gate* sono due cose distinte. Nei numeri riportati il
+> commit avviene sugli eventi che OPA ammetterebbe (proxy: `not signal_dirty`), non su quelli
+> che il modello ritiene benigni — un modello che si auto-decide cosa memorizzare fa correre
+> via l'FPR (vedi il docstring di `train_tgn._replay`). Il percorso auto-deciso esiste
+> (`score_event(update=True)`, endpoint `/score`) ed è la modalità *OPA-less*, ma **non** è il
+> protocollo con cui sono state prodotte le misure.
 
 ### Componenti e a cosa servono
 
 | Componente (`attributo`) | Ruolo |
 |---|---|
 | **TGNMemory** (`memory`) | Stato ricorrente per-nodo aggiornato via GRU dai messaggi degli eventi: la "memoria storica" del comportamento di ogni entità. Espone `z_mem` e `last_update`. `memory_dim` è stata aumentata a 256 per gestire l'impronta comportamentale complessa. |
-| **Hashed Identity** (`hash_emb`) | Embedding apprendibile via hashing deterministico della chiave (`stable_hash`, BLAKE2b). Mantiene induttività al 100% per i nodi nuovi e dà a ogni entità — incluse le **risorse** — un'identità distinguibile. *Nota onesta:* l'ablation multi-seed le attribuisce un contributo modesto sul lateral (**−0.046 AUC** rimuovendola), comunque superiore a quello del precursore. |
-| **History features** (`compute_hist_feats`) | Per ogni evento `[log1p(pair_count), log1p(src_count), pair/(src+1)]`: contatori d'interazione causali e *benign-gated* (derivabili a runtime, non circolari). Iniettano il segnale di **novità** della coppia src→dst — il **contributo dominante** sul lateral. Ablation multi-seed: **+0.163 AUC**. |
-| **Kill-chain precursor** (`recent_alert`, `precursor_boost`) | Prior moltiplicativo *serving-time* che alza lo score di un'entità subito dopo un suo alert (recon→lateral), con decadimento `0.5^(Δt/half_life)`. Stato fuori dalla memoria TGN (il gate scarterebbe il precursore); **non** è un input addestrato. Ablation multi-seed: **+0.013 AUC** sul lateral — contributo **marginale** (come la testa strutturale). |
-| **Static node features** (`node_feat`) | Attributi statici ZTA per-nodo, buffer `[num_nodes, 16]`. Indici usati: `[2]` device tier, `[3]` resource priority, `[4]` resource **risk** (mirror di `getResourceSensitivity`/`matrice_sicurezza`), `[5]` source network **internal/external** (RFC1918, derivato dall'IP — feature, non gate), `[14]` trust_score. |
+| **Hashed Identity** (`hash_emb`) | Embedding apprendibile via hashing deterministico della chiave (`stable_hash`, BLAKE2b). Mantiene induttività al 100% per i nodi nuovi e dà a ogni entità — incluse le **risorse** — un'identità distinguibile. *Nota onesta:* il delta di ablation è in attesa di rigenerazione (vedi §risultati) — le due serie presenti nel repo si contraddicevano e nessuna aveva un log a supporto. |
+| **History features** (`compute_hist_feats`) | Per ogni evento `[log1p(pair_count), log1p(src_count), pair/(src+1)]`: contatori d'interazione causali e *benign-gated* (derivabili a runtime, non circolari). Iniettano il segnale di **novità** della coppia src→dst. Il delta di ablation è in attesa di rigenerazione (vedi §risultati). |
+| **Kill-chain precursor** (`recent_alert`, `precursor_boost`) | Prior moltiplicativo *serving-time* che alza lo score di un'entità subito dopo un suo alert (recon→lateral), con decadimento `0.5^(Δt/half_life)`. Stato fuori dalla memoria TGN (il gate scarterebbe il precursore); **non** è un input addestrato. Delta di ablation in attesa di rigenerazione (vedi §risultati). |
+| **Static node features** (`node_feat`) | Attributi statici ZTA per-nodo, buffer `[num_nodes, 16]`. Indici usati: `[2]` device tier, `[3]` **inutilizzato** (conteneva l'indice risorsa: leakage, rimosso), `[4]` resource **risk** (mirror di `getResourceSensitivity`/`matrice_sicurezza`), `[5]` source network **internal/external** (RFC1918, derivato dall'IP — feature, non gate), `[14]` trust_score. |
 | **MessageNeighborLoader** (`neighbor_loader`) | Ring-buffer **bounded in RAM** con gli ultimi `neighbor_size=30` vicini temporali per nodo. Abilita il message-passing sul vicinato storico — il segnale **strutturale** per il lateral movement — con memoria `O(num_nodes·K·msg_dim)` costante. **Nessun database a grafo.** |
 | **GraphAttentionEmbedding** (`gnn`) | Reti multi-hop (`num_hops=3`) di `TransformerConv` (4 teste, con connessioni residuali) che calcolano l'embedding di nodo `z` attendendo sui vicini temporali estesi; `edge_attr` = encoding del tempo relativo `Δt` concatenato al messaggio storico dell'arco. |
 | **Feature head** (`link_pred`, `LinkPredictor`) | MLP su `[z_src, z_dst, cur_msg, feat_src, feat_dst, Δt_enc, history_feats]`. Allenata con un obiettivo **InfoNCE** (ranking della dst vera sopra K casuali) + ancora BCE positiva + BCE contestuale. È la testa che — con memoria + history feats — porta il segnale **lateral**. |
-| **Structural head** (`struct_proj`, `struct_scale`) | Similarità coseno scalata tra le proiezioni di `z_src` e `z_dst`. *Nota onesta:* l'ablation multi-seed la mostra **marginale** (rimuoverla non cambia il lateral AUC) — candidata a semplificazione. |
+| **Structural head** (`struct_proj`, `struct_scale`) | Similarità coseno scalata tra le proiezioni di `z_src` e `z_dst`. *Nota onesta:* nelle misure precedenti risultava marginale — candidata a semplificazione, da confermare con le ablation rigenerate. |
 | **NodeRegistry** (`registry`) | Mappa le chiavi-entità esterne → slot di memoria, con **ammissione dinamica** di entità mai viste e **eviction LRU**. Su eviction azzera lo slot in memoria, feature statiche, message store e vicinato. |
-| **Calibrazione soglia** | Soglia di decisione calibrata su uno slice benigno held-out al *target FPR* (default 0.01); il flusso *signal-clean* usa una soglia cost-sensitive con cap sull'FPR (`clean_fpr_cap`=0.05). |
-| **Anti-poisoning gate** | Memoria e neighbour loader vengono aggiornati **solo** per eventi classificati benigni → la baseline non viene avvelenata da eventi ostili. |
+| **Calibrazione soglia** | Replay di validazione con **lo stesso gate del test** (nessuna label nel gate), in due passate a punto fisso. Soglia primaria = quantile sul benigno *signal-clean* al *target FPR* (default 0.01), **label-free**. La soglia cost-sensitive (`clean_fpr_cap`=0.05) resta riportata come **upper bound dichiarato**: richiede eventi lateral etichettati nella finestra di validazione. |
+| **Anti-poisoning gate** | Memoria e neighbour loader vengono aggiornati **solo** per gli eventi ammessi dal decisore esterno (OPA ALLOW) → la baseline non viene avvelenata da eventi ostili. Nella modalità *OPA-less* (`/score`) il gate è lo score del modello stesso; è disponibile ma non è il protocollo misurato. |
 
 #### Performance e Gestione Memoria (O(1) Lookup)
-Il "buffer" della memoria storica e del vicinato (`MessageNeighborLoader`) non comporta mai *swapping* o caricamenti lenti. È costituito da grosse matrici pre-allocate fisse in RAM (es. `[Capacità Totale Nodi, K]`) fin dall'avvio del server. Ogni utente o IP possiede una sua "riga" privata all'interno di queste matrici. All'arrivo di una richiesta, il sistema esegue un accesso diretto (*lookup*) in tempo **O(1)** esclusivamente alla riga del nodo coinvolto, aggiornando gli eventi in modalità ring-buffer. La storia degli altri utenti non viene spostata, caricata o alterata, garantendo prestazioni estreme (frazioni di millisecondo) e assenza di colli di bottiglia anche con decine di migliaia di nodi concorrenti.
+Il "buffer" della memoria storica e del vicinato (`MessageNeighborLoader`) non comporta mai *swapping* o caricamenti lenti. È costituito da grosse matrici pre-allocate fisse in RAM (es. `[Capacità Totale Nodi, K]`) fin dall'avvio del server. Ogni utente o IP possiede una sua "riga" privata all'interno di queste matrici. All'arrivo di una richiesta, il sistema esegue un accesso diretto (*lookup*) in tempo **O(1)** esclusivamente alla riga del nodo coinvolto, aggiornando gli eventi in modalità ring-buffer. La storia degli altri utenti non viene spostata, caricata o alterata.
+
+> ⚠️ **Portata esatta del claim `O(1)` / stato limitato.** Vale per i **buffer tensoriali**
+> (memoria TGN, ring-buffer del vicinato, feature statiche), che sono pre-allocati a
+> dimensione fissa. **Non** vale per l'intero stato del modello:
+>
+> - `last_contact`, `pair_count`, `src_count`, `recent_alert` (`src/model/tgn.py`) sono
+>   dizionari Python **non limitati**: crescono con ogni coppia `(src, dst)` mai committata,
+>   vengono persistiti nel checkpoint e sono ripuliti solo per-slot in eviction.
+> - L'**eviction non è O(1)**: `NodeRegistry._select_eviction` è un `min` su tutta la
+>   capacity con una sincronizzazione per elemento, `MessageNeighborLoader.reset_node` fa una
+>   scansione `O(num_nodes × K)` per invalidare i riferimenti entranti, e la ripulitura dei
+>   dizionari è lineare nella loro dimensione.
+> - Le uniche latenze misurate nel repo sono **P50 ≈ 9.6 ms / P99 ≈ 10.8 ms** end-to-end HTTP
+>   (`docs/latex/report.tex`) — non "frazioni di millisecondo", e comunque non riprodotte da
+>   un log versionato. Ogni richiesta esegue 5 espansioni del vicinato e 5 forward del GNN
+>   (uno per arco della catena).
+>
+> È un limite di scalabilità noto e dichiarato: il paper esce sulla versione *vanilla*.
 
 ### Flusso per evento (serving)
 
@@ -124,13 +156,20 @@ Il "buffer" della memoria storica e del vicinato (`MessageNeighborLoader`) non c
    vicini reali → embedding `z` *consapevole di identità e storia*.
 4. `score()`: somma la **feature head** e la **structural head** → logit →
    `anomaly score = 1 − σ(logit)`.
-5. Se `score < threshold` (benigno): aggiorna `TGNMemory` e inserisce l'arco nel neighbour
-   loader (**predict-then-update**); altrimenti l'anomalia è segnalata e la memoria resta
-   intatta.
+5. Il decisore esterno (OPA) risponde ALLOW/DENY. Su **ALLOW** si aggiorna `TGNMemory` e si
+   inserisce l'arco nel neighbour loader (**predict-then-update**); su DENY la memoria resta
+   intatta. Il verdetto del modello viene riportato indietro (`flagged`) e arma il precursore
+   kill-chain / abbassa il trust anche quando OPA ammette l'evento.
 
-> **Train/serve consistency** — la valutazione offline in `train_tgn.py` riproduce il flusso
-> evento-per-evento attraverso esattamente le primitive di serving (`infer_score` /
-> `update_memory`), quindi le metriche riportate riflettono il comportamento in produzione.
+> **Train/serve consistency — equivalenza verificata, non codice condiviso.** La valutazione
+> offline (`train_tgn._replay`) **non** chiama le primitive di serving: è una
+> re-implementazione vettorizzata che valuta un blocco di eventi con una sola espansione del
+> vicinato. Ciò che lega i due percorsi è un test: `tests/verify_replay_batching.py` rigioca
+> lo stesso stream evento per evento attraverso `infer_score` / `update_memory` e verifica
+> l'accordo con `_replay(batch_size=1)` entro 1e-5, **sia sulla catena v4 a 5 archi sia sulla
+> legacy v3** (misurato: `max|Δ| = 3.1e-07`). Revisioni precedenti di questo README
+> affermavano che i due path condividessero il codice: non era vero, e l'harness verificava
+> per giunta solo il ramo legacy.
 
 > **Nota (Hashed Identity)** — l'identità di nodo non è *transduttiva*, bensì generata tramite hashing **deterministico** della chiave (`stable_hash`, BLAKE2b): coerente tra processi e riavvii (il `hash()` builtin è salato per-processo e romperebbe la riproducibilità). Per entità note e non note al training fornisce un embedding coerente e scalabile (bucket), mantenendo il modello totalmente induttivo.
 
@@ -157,6 +196,39 @@ etichette binarie `y`, un vettore `types` per la valutazione per-classe e un bit
 
 ## Validazione (risultati onesti)
 
+> 🔴 **STATO: le tabelle qui sotto NON sono riproducibili da HEAD e vanno rigenerate.**
+>
+> Il generatore è stato **de-leakato**. La revisione pre-submission ha misurato che
+> l'arricchimento del dataset ("Phase 2": 1000 risorse procedurali, campionamento Zipf,
+> colonne `bytes_*`/`http_status`) aveva introdotto scorciatoie che rendevano il task
+> banale:
+>
+> | classe | best AUC a **feature singola** — prima | dopo |
+> |---|---|---|
+> | policy | 0.930 | 0.859 *(risk: semantico, dichiarato)* |
+> | contextual | 0.926 | 0.898 *(sonde Snort: by design)* |
+> | **lateral** | **0.920** | **0.567** |
+> | cred-theft | 0.941 | 0.730 |
+>
+> La causa principale: `node_feat[dst, 3]` conteneva l'indice risorsa, e poiché il benigno
+> si concentrava sulle risorse popolari (= indici bassi) mentre gli attacchi campionavano
+> uniforme, **quella singola colonna raggiungeva da sola AUC 0.92 su ogni classe** — cioè
+> quanto l'AUC lateral riportata dal modello. In più, quattro pattern a valore costante
+> (`http_status==0.4`, `bytes==(0.1,0.1)`, `bytes_out==15.0`, `bytes==(0.2,0.5)`)
+> identificavano policy, cred-theft, exfil e i service account benigni con **precision e
+> recall del 100%**.
+>
+> **Le tabelle attuali precedono questo problema** (generate il 2026-06-24, prima
+> dell'arricchimento): sul generatore di allora `AUC(node_feat[dst,3])` sul lateral era
+> **0.4899**, cioè caso — il valore riportato è genuinamente guadagnato dal modello. Ma
+> quel generatore non esiste più, quindi i numeri **non sono riproducibili da HEAD** e vanno
+> rifatti sul dataset corretto.
+>
+> Presidio permanente: `pytest tests/test_leakage_audit.py` (CPU, pochi secondi) verifica su
+> 3 seed che nessuna colonna d'input separi una classe da sola, che non esistano fingerprint
+> a valore esatto, e che benigno e lateral condividano la marginale di destinazione. Le due
+> classi su cui poggia il contributo — **lateral e cred-theft — non hanno alcuna deroga**.
+
 Valutazione **de-circolarizzata + de-degenerata** sullo stream sintetico (`num_events`=200k,
 **3 seed** `[42,7,123]` — media ± dev.std, FPR target 1%, split cronologico 70/10/20, solo benigno
 in training, soglia calibrata sul benigno di validazione). Focus sul **lateral** (policy è di OPA,
@@ -169,8 +241,14 @@ di storia causali + lo stesso prior precursor): così il divario col TGN isola i
 | Isolation Forest | 0.763 | 0.575 | 0.645 | 0.9% |
 | One-Class SVM | 0.801 | 0.739 | 0.599 | 6.2% |
 | Static GNN (grafo, **no temporale**) | 0.555 | 0.560 | 0.451 ≈ caso | 12.5% (spurio) |
-| **TGN (full, v3 per-cookie)** | **0.965** | **0.922** | **0.913** | **16.6%** |
+| **TGN (full, v3 per-cookie)** ⚠️ | **0.965** | **0.922** | **0.913** | **16.6%** |
 | _XGBoost (supervisionato, upper-bound)_ | _0.974_ | _0.948_ | _0.929_ | _33.9%_ |
+
+> ⚠️ **Protocollo misto, da rigenerare.** In questa tabella la riga TGN proviene da run
+> **v3 per-cookie**, mentre tutte le baseline girano *deployable* (`dev:guest`, v4): righe
+> prodotte sotto due configurazioni diverse, presentate come confronto. Il driver è stato
+> corretto (`run_panel_a_tgn` esegue ora anche il TGN sotto il protocollo delle baseline),
+> ma i numeri qui sopra sono i vecchi — vanno rigenerati insieme al resto.
 
 > Medie su **3 seed**; dispersione (± dev.std) nella relazione tecnica (`docs/latex/report.tex`,
 > tab. baseline). _XGBoost_ è **supervisionato** (vede le label): upper-bound di riferimento, fuori
@@ -199,15 +277,38 @@ di storia causali + lo stesso prior precursor): così il divario col TGN isola i
 - **Lo Static GNN — stessi contatori + precursor, stessa struttura di grafo, ma senza la
   macchina temporale — sta a caso sul lateral (0.451).** Il TGN arriva a **0.913±0.014**
   (3 seed): il segnale laterale vive nella **memoria ricorrente + vicinato temporale**, non nei
-  contatori (che tutti hanno). Ablation multi-seed (3 seed): history feats **+0.163** AUC (il
-  contributo dominante), hashed identity **+0.046**; precursor **+0.013** e struct head **+0.007**
-  entrambi **marginali**.
+  contatori (che tutti hanno).
+- ⚠️ **I delta di ablation per componente sono RITIRATI in attesa di rigenerazione.** Le due
+  serie presenti nel repo si contraddicevano sulle stesse grandezze — README dava history
+  **+0.163** / hash **+0.046** / precursor **+0.013** / struct **+0.007**, mentre
+  `docs/lateral_movement.md` e `docs/inductive_testing.md` davano history **+0.066** /
+  precursor **+0.073** / hash **−0.003** / struct **−0.008** — e **nessuna delle due ha un
+  log a supporto** (`docs/latex/PROVENANCE.md` indica come sorgente "stdout"; non esiste
+  nessun file di ablation in `tasks/runs/`). Vanno rigenerate con
+  `tests/ablations/run_ablations.py`, log salvato, e riportate come Δ **appaiati per seed**
+  con test di Wilcoxon e CI bootstrap (`report_metrics.paired_delta`). Vedi anche la nota
+  sulla varianza run-to-run più sotto.
 - **Recall@1%FPR ~16.6%** resta basso (la soglia globale è dominata dalle classi facili); il 12.5%
   della Static GNN è **spurio** (AUC≈caso con soglia permissiva, non un segnale reale). Il segnale
   onesto è l'**AUC 0.913 multi-seed** (≫ caso); il «~40% recall» di vecchie misure era un artefatto
   circolare. La conversione in recall operativo passa per il routing cost-sensitive (Sez. soglia):
   sul test sintetico il recall laterale sale a ~35.0% (FPR benigno ~5.0%), e a ~57.7% con il nodo
   config (v4).
+
+> ⚠️ **Le barre d'errore pubblicate sottostimano la varianza reale — da rigenerare.**
+> Due run della **stessa** configurazione e dello **stesso** seed 42 (`tasks/runs/panelB.json`
+> vs `tasks/runs/tgn_v*_percookie.log`; stesso stream, `n_lateral=3868` e `n_benign=14555`
+> identici) differiscono di **+0.038 di AUC lateral** e **+0.132 di recall lateral**. Le
+> dispersioni riportate (±0.013÷0.014 su AUC, ±0.034÷0.057 su recall) provengono da 3 seed ×
+> **1 run ciascuno**, quindi confondono varianza tra-seed e varianza run-to-run e
+> **sottostimano** l'errore. Conseguenza diretta: il Δ titolare **+0.017 di lateral AUC**
+> v3→v4 è dentro il rumore e non è al momento stabilito (il Δ di recall **+0.227** è molto
+> più grande e probabilmente sopravvive, ma va ri-misurato).
+>
+> Correzioni già applicate: seeding completo + algoritmi deterministici in `train_tgn`,
+> `mean_std` con `ddof=1` (le σ pubblicate erano ~18% troppo strette), e `paired_delta` con
+> Wilcoxon appaiato + CI bootstrap al posto della regola `|Δ| > max(σ)`, che non era un test.
+> Resta da eseguire la griglia a ≥5 seed × 3 repliche.
 
 Dettagli su de-circolarizzazione, de-degenerazione, ablation multi-seed, cold-start e
 anti-poisoning in 👉 [`docs/inductive_testing.md`](docs/inductive_testing.md) e

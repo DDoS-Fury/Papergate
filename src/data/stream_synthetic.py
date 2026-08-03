@@ -37,13 +37,30 @@ generator's dynamics exercise:
     ``ip -> config -> device -> user`` binding pattern exposes it.
 
 Anomaly types (``types``): 0=benign, 1=policy violation (OPA-owned), 2=contextual,
-3=lateral movement, 4=credential theft. ``scenario`` is a per-event bitmask of
-benign-context flags (an event can be several at once): 1=roaming, 2=recently wiped
-cookie device, 4=shared device.
+3=lateral movement, 4=credential theft, 5=data exfiltration, 6=benign OPA denial (a
+human mistake: ``label=1`` because OPA denies it, but not an attack). ``scenario`` is a
+per-event bitmask of benign-context flags (an event can be several at once): 1=roaming,
+2=recently wiped cookie device, 4=shared device.
 
-Edge message layout (7-dim): ``[ja3, s1, s2, s3, method, role, clearance]`` —
-TLS-fingerprint trust, the three Snort/sensor probes, the HTTP method code and the
-requesting identity's role/clearance (possibly stolen).
+Edge message layout (10-dim): ``[ja3, s1, s2, s3, method, role, clearance, bytes_in,
+bytes_out, log1p(user Δt)/10]`` — TLS-fingerprint trust, the three Snort/sensor probes,
+the HTTP method code, the requesting identity's role/clearance (possibly stolen), the
+request/response volumes and the recency of this user's previous request.
+
+Everything in this message is available to the PDP *before* the request is forwarded.
+An earlier revision also carried ``http_status``, which is a **response** field: using it
+to decide whether to allow the request is a causality violation, and since it took a
+class-specific constant it was also a near-deterministic label channel. It was removed.
+
+Two invariants this generator must preserve, both regression-tested in
+``tests/test_leakage_audit.py``:
+
+  * **No shortcut feature.** No single input column may separate an anomaly class on its
+    own (bar the sensor probes on contextual and the resource RISK, which are legitimate
+    signals by design). In particular benign and attack traffic share the same
+    destination marginal, so "unusual destination" is never a free label.
+  * **No exact-value fingerprint.** Per-class constants (byte volumes, status codes) let
+    a model memorise the class instead of learning behaviour.
 """
 
 from __future__ import annotations
@@ -118,29 +135,77 @@ ROUTE_METHODS = {
     TRUSTED_GUARD: {1},                       # POST only
 }
 
-_rng = random.Random(42)
-for i in range(981):  # Total 1000 resources
-    cat = _rng.choice(["public", "hr", "finance", "nuclear", "ops", "security"])
-    if cat == "public":
-        uri = f"/api/v2/public/resource_{i}"
-        ROUTE_METHODS[uri] = {0, 1}
-    else:
-        uri = f"/internal/{cat}/doc_{i}"
-        ROUTE_METHODS[uri] = {0, 1, 3}
-        if cat == "hr":
-            SECURITY_MATRIX[uri] = ("INTERNAL", {"hr"})
-        elif cat == "finance":
-            SECURITY_MATRIX[uri] = ("CONFIDENTIAL", {"finance"})
-        elif cat == "ops":
-            SECURITY_MATRIX[uri] = ("INTERNAL", {"ops"})
-        elif cat == "nuclear":
-            SECURITY_MATRIX[uri] = ("TOP_SECRET", {"nuclear"})
-        elif cat == "security":
-            SECURITY_MATRIX[uri] = ("SECRET", {"security"})
+# The hand-written routes above are the *real* orchestrator surface. On top of them the
+# simulator generates a larger synthetic estate so the resource space is not degenerate.
+# That generation is **seed-dependent** (see ``build_resource_universe``): a resource
+# universe fixed across seeds would make the across-seed dispersion understate the true
+# variability, since every run would share the exact same route catalogue.
+_BASE_ROUTE_METHODS = dict(ROUTE_METHODS)
+_BASE_SECURITY_MATRIX = dict(SECURITY_MATRIX)
 
-# Resource node keys MUST be the exact URIs the orchestrator sends as key_dst
-# (after its normalizeAIPath): no synthetic suffixes, one node per real route.
-RESOURCE_URIS = list(ROUTE_METHODS)
+_GENERATED_CATEGORIES = ("public", "hr", "finance", "nuclear", "ops", "security")
+_GENERATED_CLASSIFICATION = {
+    "hr": ("INTERNAL", {"hr"}),
+    "finance": ("CONFIDENTIAL", {"finance"}),
+    "ops": ("INTERNAL", {"ops"}),
+    "nuclear": ("TOP_SECRET", {"nuclear"}),
+    "security": ("SECRET", {"security"}),
+}
+
+# Inherent RISK per classification (node_feat index 4). Single source of truth: this
+# MIRRORS getResourceSensitivity() in services/security-orchestrator/internal/handler/
+# handler.go (and the impact encoded in policy.rego matrice_sicurezza), collapsed to a
+# per-resource scalar (the max over methods, since the resource node is method-agnostic).
+# Routes the orchestrator never scores as sensitive (public/auth/static) are 0.0.
+_CLASSIFICATION_RISK = {
+    "INTERNAL": 0.5, "CONFIDENTIAL": 0.6, "SECRET": 0.8, "TOP_SECRET": 0.9,
+}
+# Hand-tuned overrides for the real routes (keep aligned if the Go map changes).
+_RISK_OVERRIDES = {
+    "/api/v1/personnel": 0.6,                # max(GET/POST 0.4, DELETE 0.6)
+    "/api/v1/documents": 0.7,                # max(GET/POST 0.5, DELETE 0.7)
+    "/api/v1/nuclear-materials": 0.7,        # max(0.5, DELETE 0.7)
+    "/api/v1/reactor-parameters": 1.0,       # max(GET/POST 0.8, DELETE 1.0)
+    TRUSTED_GUARD: 1.0,                      # sanitized delete = highest
+}
+
+
+def build_resource_universe(num_generated: int = 981, seed: int = 42):
+    """Build the resource catalogue: the real routes plus ``num_generated`` synthetic ones.
+
+    Returns ``(route_methods, security_matrix, resource_uris, resource_risk)``. The
+    synthetic estate is drawn under ``random.Random(seed)`` so that each simulator seed
+    gets its own catalogue — the resource universe is part of what a seed varies, not a
+    constant shared by every run.
+
+    Resource node keys MUST be the exact URIs the orchestrator sends as ``key_dst``
+    (after its normalizeAIPath): no synthetic suffixes, one node per real route.
+    """
+    route_methods = dict(_BASE_ROUTE_METHODS)
+    security_matrix = dict(_BASE_SECURITY_MATRIX)
+
+    rng = random.Random(seed)
+    for i in range(num_generated):
+        cat = rng.choice(_GENERATED_CATEGORIES)
+        if cat == "public":
+            uri = f"/api/v2/public/resource_{i}"
+            route_methods[uri] = {0, 1}
+        else:
+            uri = f"/internal/{cat}/doc_{i}"
+            route_methods[uri] = {0, 1, 3}
+            security_matrix[uri] = _GENERATED_CLASSIFICATION[cat]
+
+    resource_uris = list(route_methods)
+    resource_risk = {uri: 0.0 for uri in resource_uris}
+    for uri, (cls, _cats) in security_matrix.items():
+        resource_risk[uri] = _CLASSIFICATION_RISK[cls]
+    resource_risk.update(_RISK_OVERRIDES)
+    return route_methods, security_matrix, resource_uris, resource_risk
+
+
+# Module-level defaults (seed 42) — the reference catalogue used by ``policy_allows`` and
+# by the policy/netclass unit tests. Simulator instances build their own under their seed.
+ROUTE_METHODS, SECURITY_MATRIX, RESOURCE_URIS, RESOURCE_RISK = build_resource_universe()
 
 
 def policy_allows(role: str, method: int, uri: str) -> bool:
@@ -169,29 +234,6 @@ def policy_allows(role: str, method: int, uri: str) -> bool:
     if method == 0:  # GET — Simple Security Property (no read-up)
         return clr >= obj
     return clr <= obj  # writes — *-Property (no write-down)
-
-# Per-resource inherent RISK (node_feat index 4), in [0, 1]. Single source of truth:
-# this MIRRORS getResourceSensitivity() in
-# services/security-orchestrator/internal/handler/handler.go (and the impact encoded
-# in policy.rego matrice_sicurezza), collapsed to a per-resource scalar (the max over
-# methods, since the resource node is method-agnostic). Routes the orchestrator never
-# scores as sensitive (public/auth/static) are 0.0. Keep aligned if the Go map changes.
-RESOURCE_RISK = {uri: 0.0 for uri in RESOURCE_URIS}
-for uri in SECURITY_MATRIX:
-    cls, _ = SECURITY_MATRIX[uri]
-    if cls == "INTERNAL": RESOURCE_RISK[uri] = 0.5
-    elif cls == "CONFIDENTIAL": RESOURCE_RISK[uri] = 0.6
-    elif cls == "SECRET": RESOURCE_RISK[uri] = 0.8
-    elif cls == "TOP_SECRET": RESOURCE_RISK[uri] = 0.9
-
-# Restore specific overrides
-RESOURCE_RISK.update({
-    "/api/v1/personnel": 0.6,                                  # max(GET/POST 0.4, DELETE 0.6)
-    "/api/v1/documents": 0.7,                                  # max(GET/POST 0.5, DELETE 0.7)
-    "/api/v1/nuclear-materials": 0.7,                          # max(0.5, DELETE 0.7)
-    "/api/v1/reactor-parameters": 1.0,                         # max(GET/POST 0.8, DELETE 1.0)
-    "/api/v1/trusted-guard/sanitized-delete-personnel": 1.0,  # sanitized delete = highest
-})
 
 # ``scenario`` bitmask flags (benign-context annotations for scenario-level eval).
 SCEN_ROAMING = 1   # benign event issued from a non-home IP (smart working / 5G)
@@ -247,9 +289,23 @@ class ZTAStreamSimulator:
             np.random.seed(seed)
             random.seed(seed)
 
-        assert num_resources == len(RESOURCE_URIS), (
-            f"num_resources ({num_resources}) must equal len(RESOURCE_URIS) "
-            f"({len(RESOURCE_URIS)}): set TGNConfig.num_resources accordingly"
+        # Per-instance resource catalogue drawn under this run's seed (see
+        # ``build_resource_universe``): the real routes plus a synthetic estate sized so
+        # the total matches ``num_resources``.
+        n_generated = num_resources - len(_BASE_ROUTE_METHODS)
+        assert n_generated >= 0, (
+            f"num_resources ({num_resources}) must be >= the {len(_BASE_ROUTE_METHODS)} "
+            f"real routes: set TGNConfig.num_resources accordingly"
+        )
+        (
+            self.route_methods,
+            self.security_matrix,
+            self.resource_uris,
+            self.resource_risk,
+        ) = build_resource_universe(n_generated, seed if seed is not None else 42)
+        assert num_resources == len(self.resource_uris), (
+            f"num_resources ({num_resources}) must equal the built catalogue size "
+            f"({len(self.resource_uris)})"
         )
         self.num_registered_users = num_users
         self.num_guests = num_guests
@@ -268,10 +324,14 @@ class ZTAStreamSimulator:
         self.admission_horizon = admission_horizon
         self.use_resource_risk = use_resource_risk
 
-        self.route_methods = ROUTE_METHODS.copy()
-        self.security_matrix = SECURITY_MATRIX.copy()
-        self.resource_uris = RESOURCE_URIS.copy()
-        self.resource_risk = RESOURCE_RISK.copy()
+        # --- resource popularity, DECOUPLED from the resource index --------------------
+        # Access frequency follows a Zipf law, but the rank a resource gets is a random
+        # permutation of the index space rather than the index itself. Otherwise the
+        # resource id would encode popularity, and since benign traffic concentrates on
+        # popular resources while attacks do not, the id alone would separate the classes
+        # — a pure dataset artifact. See tests/test_leakage_audit.py.
+        pop_rank = np.random.permutation(num_resources).astype(np.float64)
+        self._res_pop_weight = 1.0 / ((pop_rank + 1.0) ** 1.2)
 
         # --- node index layout: [users][device slots][source slots][config slots][resources] ----
         self.user_lo = 0
@@ -366,14 +426,22 @@ class ZTAStreamSimulator:
             self.keys[self.res_lo + r] = self.resource_uris[r]
 
         # --- static node features (16-dim) -------------------------------------------
-        # Index map: [2]=device tier, [3]=resource priority, [4]=resource RISK,
+        # Index map: [2]=device tier, [3]=UNUSED, [4]=resource RISK,
         # [5]=source network internal(1)/external(0), [14]=trust score.
+        #
+        # [3] used to carry ``r / (num_resources - 1)``, i.e. the raw resource index
+        # dressed up as a "priority". It was redundant with the RISK in [4] and, because
+        # the index correlated with access frequency, it leaked the label: that single
+        # column reached AUC ~0.92 on every anomaly class. It is deliberately left at 0.
+        #
+        # [4] (RISK) is kept: it is a genuine ZTA attribute, known at decision time, and
+        # its correlation with policy violations is semantic rather than an artifact. Its
+        # standalone discriminative power is reported as a floor (tests/test_leakage_audit).
         nf = torch.zeros(self.num_nodes, 16)
         nf[:, 14] = 1.0  # trust score default
         for m in range(num_devices):
             nf[self.dev_lo + m, 2] = self.machine_tiers[m] / 2.0
         for r in range(num_resources):
-            nf[self.res_lo + r, 3] = r / float(num_resources - 1)
             if use_resource_risk:
                 nf[self.res_lo + r, 4] = self.resource_risk[self.resource_uris[r]]
         if use_source_internal:
@@ -387,7 +455,10 @@ class ZTAStreamSimulator:
         # USER (the access edge is user -> resource).
         self._valid_cache: dict[str, list[tuple[int, int]]] = {}
         self._violation_cache: dict[str, list[tuple[int, int]]] = {}
-        self._zipf_probs: dict[int, np.ndarray] = {}
+        self._sensitive_cache: dict[str, list[tuple[int, int]]] = {}
+        self._user_action_cache: dict[int, tuple[list, list]] = {}
+        # Zipf probability vectors, memoised per action-set cache key (see _zipf_choice).
+        self._zipf_probs: dict[tuple, np.ndarray] = {}
         self.user_habitual: list[set[tuple[int, int]]] = []
         for u in range(self.num_users):
             valid = self._policy_valid_actions(self.user_roles[u])
@@ -397,6 +468,14 @@ class ZTAStreamSimulator:
                 self.user_habitual.append({valid[j] for j in hab_idx})
             else:
                 self.user_habitual.append(set())
+
+        # Every ``(resource, method)`` action in the catalogue. Sampling contextual
+        # anomalies from this list (instead of drawing a method uniformly in 0..3) keeps
+        # them inside the served (route, method) space: an unserved pair is a region
+        # benign traffic never occupies and would be a free label.
+        self._all_actions = [
+            (r, m) for r, uri in enumerate(self.resource_uris) for m in self.route_methods[uri]
+        ]
 
         # --- mutable state ---------------------------------------------------------------
         self.t = start_time
@@ -469,14 +548,47 @@ class ZTAStreamSimulator:
             ]
         return self._violation_cache[role]
 
-    def _zipf_choice(self, choices: list):
+    def _sensitive_actions(self, role: str):
+        """Allowed actions on PROTECTED routes for this role — the "loot" set (cached)."""
+        if role not in self._sensitive_cache:
+            self._sensitive_cache[role] = [
+                (r, m) for r, m in self._policy_valid_actions(role)
+                if self.resource_uris[r] in self.security_matrix
+            ]
+        return self._sensitive_cache[role]
+
+    def _user_actions(self, user: int, role: str):
+        """``(habitual, non_habitual)`` allowed actions for this user (cached)."""
+        if user not in self._user_action_cache:
+            valid = self._policy_valid_actions(role)
+            hab = self.user_habitual[user]
+            self._user_action_cache[user] = (
+                [a for a in valid if a in hab],
+                [a for a in valid if a not in hab],
+            )
+        return self._user_action_cache[user]
+
+    def _zipf_choice(self, choices: list, key: tuple):
+        """Draw an action with popularity-weighted (Zipf) probability.
+
+        The weight comes from the resource's *popularity rank* — a random permutation of
+        the index space fixed at construction — never from its position in ``choices``.
+        ``key`` identifies the (cached, stable) action list so the probability vector is
+        computed once per list rather than per event.
+
+        Every destination draw in the generator, benign or anomalous, goes through here:
+        benign and attack traffic must share the same destination marginal, otherwise
+        "unusual destination" becomes a free label and the lateral-movement task is
+        solvable without ever looking at the graph.
+        """
         if not choices:
             return None
-        n = len(choices)
-        if n not in self._zipf_probs:
-            w = 1.0 / (np.arange(1, n + 1) ** 1.2)
-            self._zipf_probs[n] = w / w.sum()
-        idx = np.random.choice(n, p=self._zipf_probs[n])
+        p = self._zipf_probs.get(key)
+        if p is None or len(p) != len(choices):
+            w = self._res_pop_weight[[r for r, _ in choices]]
+            p = w / w.sum()
+            self._zipf_probs[key] = p
+        idx = int(np.random.choice(len(choices), p=p))
         return choices[idx]
 
     def _maybe_wipe_cookie(self, machine: int) -> None:
@@ -518,12 +630,20 @@ class ZTAStreamSimulator:
         role, clr = self.user_roles[u], self.user_clearances[u]
         # The attacker holds the victim's credentials: OPA's role/clearance/category
         # checks all pass. Prefer protected routes (the loot) over public ones.
-        valid = self._policy_valid_actions(role)
-        sensitive = [(r, m) for r, m in valid if self.resource_uris[r] in self.security_matrix]
-        res_idx, method = random.choice(sensitive or valid or [(0, 0)])
+        sensitive = self._sensitive_actions(role)
+        if sensitive:
+            res_idx, method = self._zipf_choice(sensitive, ("sens", role))
+        else:
+            valid = self._policy_valid_actions(role)
+            res_idx, method = (self._zipf_choice(valid, ("valid", role)) if valid else (0, 0))
+        # Byte volumes are drawn from the SAME laws as benign traffic. Credential theft is
+        # policy-clean and signal-clean by construction — only the broken
+        # ip -> config -> device -> user binding exposes it. Constant byte values here used
+        # to identify the class with 100% precision and recall, i.e. pure label leakage.
         feat = [1.0, 0.0, 0.0, 0.0, float(method),
                 ROLES.index(role) / (len(ROLES) - 1), clr / 4.0,
-                0.1, 0.1, 0.0]
+                float(abs(np.random.normal(0.1, 0.05))),
+                float(abs(np.random.normal(0.2, 0.1)))]
         incident["remaining"] -= 1
         if incident["remaining"] <= 0:
             self._active_thefts.remove(incident)
@@ -572,9 +692,13 @@ class ZTAStreamSimulator:
         self.t += int(np.random.exponential(scale=self._current_interarrival_scale()))
         self.step_count += 1
 
-        # Credential-theft incidents: a burst of requests from a never-seen attacker
-        # IP + device as an existing victim user (signal-clean, policy-clean).
-        if self._active_thefts and random.random() < 0.6:
+        # Credential-theft incidents: requests from a never-seen attacker IP + device as
+        # an existing victim user (signal-clean, policy-clean). They INTERLEAVE with normal
+        # traffic rather than arriving back-to-back: a high emission rate made the victim's
+        # inter-request gap collapse, and that gap is an edge feature — the class became
+        # identifiable from ``log1p(Δt)`` alone, with no need for the binding structure that
+        # is supposed to be the only thing exposing it.
+        if self._active_thefts and random.random() < 0.15:
             return self._emit_theft_event(random.choice(self._active_thefts))
         if (
             random.random() < self.p_cred_theft
@@ -655,7 +779,13 @@ class ZTAStreamSimulator:
                 valid = self._policy_valid_actions(u_role)
                 if valid:
                     res_idx, method = valid[0]  # Deterministic access
-                    feat = [1.0, 0.0, 0.0, 0.0, float(method), ROLES.index(u_role) / (len(ROLES) - 1), u_clearance / 4.0, 0.2, 0.5, 0.0]
+                    # Tight but continuous byte volumes: a cronjob is predictable, not
+                    # bit-identical. Constant values here were a guaranteed-benign
+                    # fingerprint the model could memorise.
+                    feat = [1.0, 0.0, 0.0, 0.0, float(method),
+                            ROLES.index(u_role) / (len(ROLES) - 1), u_clearance / 4.0,
+                            float(abs(np.random.normal(0.2, 0.02))),
+                            float(abs(np.random.normal(0.5, 0.03)))]
                     return self._event(source=source, config=config, device=dev_slot, user=user,
                                        res_idx=res_idx, feat=feat, label=0, etype=0, scenario=scenario)
 
@@ -663,39 +793,45 @@ class ZTAStreamSimulator:
             if not is_anonymous and random.random() < 0.02:
                 invalid = self._policy_violations(u_role)
                 if invalid:
-                    res_idx, method = random.choice(invalid)
-                    feat = [1.0, 0.0, 0.0, 0.0, float(method), ROLES.index(u_role) / (len(ROLES) - 1), u_clearance / 4.0, 0.05, 0.01, 0.4]
-                    # This is an OPA denial triggered by a benign user mistake (label=1 because OPA denies it, etype=1)
+                    res_idx, method = self._zipf_choice(invalid, ("viol", u_role))
+                    feat = [1.0, 0.0, 0.0, 0.0, float(method),
+                            ROLES.index(u_role) / (len(ROLES) - 1), u_clearance / 4.0,
+                            float(abs(np.random.normal(0.1, 0.05))),
+                            float(abs(np.random.normal(0.2, 0.1)))]
+                    # An OPA denial triggered by a benign user mistake. label=1 because OPA
+                    # does deny it, but etype=6 keeps it separable from genuine attacks:
+                    # folding it into etype=1 mixed honest mistakes into the policy class.
                     return self._event(source=source, config=config, device=dev_slot, user=user,
-                                       res_idx=res_idx, feat=feat, label=1, etype=1, scenario=scenario)
+                                       res_idx=res_idx, feat=feat, label=1, etype=6, scenario=scenario)
 
             if is_anonymous:
                 user = self.num_registered_users + int(np.random.randint(0, self.num_guests))
                 u_role, u_clearance = "guest", 0
                 config = self.cfg_lo  # conf:guest
                 dev_slot = self._guest_dev_slot if self._guest_dev_slot is not None else self.dev_lo + machine
-                valid_anon = [(r, m) for r, uri in enumerate(self.resource_uris) if uri not in self.security_matrix for m in self.route_methods[uri]]
-                res_idx, method = self._zipf_choice(valid_anon)
+                if not hasattr(self, "_anon_actions"):
+                    self._anon_actions = [
+                        (r, m) for r, uri in enumerate(self.resource_uris)
+                        if uri not in self.security_matrix for m in self.route_methods[uri]
+                    ]
+                res_idx, method = self._zipf_choice(self._anon_actions, ("anon",))
             else:
                 valid = self._policy_valid_actions(u_role)
-                habit = [a for a in valid if a in self.user_habitual[user]]
-                non_habit = [a for a in valid if a not in self.user_habitual[user]]
+                habit, non_habit = self._user_actions(user, u_role)
                 # Benign exploration: an authorised-but-non-habitual access (policy-clean,
                 # signal-clean, label=0) — novelty alone is not an anomaly cue.
                 if non_habit and random.random() < self.benign_explore_prob:
-                    res_idx, method = self._zipf_choice(non_habit)
+                    res_idx, method = self._zipf_choice(non_habit, ("nonhabit", user))
                 elif habit:
-                    res_idx, method = self._zipf_choice(habit)
+                    res_idx, method = self._zipf_choice(habit, ("habit", user))
                 elif valid:
-                    res_idx, method = self._zipf_choice(valid)
+                    res_idx, method = self._zipf_choice(valid, ("valid", u_role))
                 else:
                     res_idx, method = 0, 0  # public-path fallback
-            
-            
+
             ja3, s1, s2, s3 = 1.0, 0.0, 0.0, 0.0
             bytes_in = abs(np.random.normal(0.1, 0.05))
             bytes_out = abs(np.random.normal(0.2, 0.1))
-            http_status = 0.0 if res_idx != 0 else 0.6  # 404 for fallback
             label, etype = 0, 0
         else:
             state = self.compromised_state[machine]
@@ -716,26 +852,26 @@ class ZTAStreamSimulator:
 
             bytes_in = abs(np.random.normal(0.1, 0.05))
             bytes_out = abs(np.random.normal(0.2, 0.1))
-            http_status = 0.0
 
             if anomaly_type == "exfil":
-                valid = self._policy_valid_actions(u_role)
-                sensitive = [(r, m) for r, m in valid if self.resource_uris[r] in self.security_matrix]
+                sensitive = self._sensitive_actions(u_role)
                 if sensitive:
-                    res_idx, method = random.choice(sensitive)
+                    res_idx, method = self._zipf_choice(sensitive, ("sens", u_role))
                 else:
-                    res_idx = int(np.random.randint(0, self.num_resources))
-                    method = 0
+                    res_idx, method = self._zipf_choice(self._all_actions, ("all",))
                 ja3, s1, s2, s3 = 1.0, 0.0, 0.0, 0.0
-                bytes_in = 1.0
-                bytes_out = 15.0 # Massive transfer
-                http_status = 0.0
-                etype = 3
+                # A massive transfer is a legitimate, genuinely easy signal for this class
+                # — drawn continuously rather than as an exact constant. Exfiltration gets
+                # its OWN etype: folding it into etype=3 put a single-feature-separable
+                # sub-population inside the lateral-movement class, whose whole premise is
+                # that its edge features are indistinguishable from a benign access.
+                bytes_in = abs(np.random.normal(1.0, 0.2))
+                bytes_out = abs(np.random.normal(15.0, 3.0))
+                etype = 5
             elif anomaly_type == "lateral":
-                valid = self._policy_valid_actions(u_role)
-                non_habit = [a for a in valid if a not in self.user_habitual[user]]
+                _habit, non_habit = self._user_actions(user, u_role)
                 if non_habit:
-                    res_idx, method = random.choice(non_habit)
+                    res_idx, method = self._zipf_choice(non_habit, ("nonhabit", user))
                     ja3 = 1.0
                     # Movimento laterale: stealth — credenziali e protocolli legittimi,
                     # raramente fa scattare l'IDS (la rete deve studiare il grafo).
@@ -757,30 +893,36 @@ class ZTAStreamSimulator:
                 # compartment on a protected route.
                 invalid = self._policy_violations(u_role)
                 if invalid:
-                    res_idx, method = random.choice(invalid)
+                    res_idx, method = self._zipf_choice(invalid, ("viol", u_role))
                 else:
-                    res_idx = int(np.random.randint(0, self.num_resources))
-                    method = int(np.random.randint(0, 4))
+                    res_idx, method = self._zipf_choice(self._all_actions, ("all",))
                 ja3, s1, s2, s3 = 1.0, 0.0, 0.0, 0.0
-                http_status = 0.4 # 403 Forbidden
                 etype = 1
             elif anomaly_type == "context":
-                res_idx = int(np.random.randint(0, self.num_resources))
-                method = int(np.random.randint(0, 4))
+                # The tell of a contextual anomaly is the compromised TLS trust and the
+                # sensor alarms below — NOT the destination. So the destination is drawn
+                # from exactly the same action space, under exactly the same popularity
+                # law, as this role's benign traffic. Drawing from the full catalogue
+                # instead made the class ~93% protected routes against ~43% for benign,
+                # and the resource RISK alone then separated it at AUC 0.83.
+                valid = self._policy_valid_actions(u_role)
+                if valid:
+                    res_idx, method = self._zipf_choice(valid, ("valid", u_role))
+                else:
+                    res_idx, method = self._zipf_choice(self._all_actions, ("all",))
                 ja3 = 0.0 if np.random.rand() > 0.5 else 1.0
                 # Recon: attacco esterno — alta probabilità su Edge (80%), media su
                 # Mid (50%), bassa su Internal (20%).
                 s1 = 1.0 if np.random.rand() > 0.2 else 0.0
                 s2 = 1.0 if np.random.rand() > 0.5 else 0.0
                 s3 = 1.0 if np.random.rand() > 0.8 else 0.0
-                http_status = 0.6 # 404 Not Found
                 etype = 2
-            
+
             label = 1
 
         feat = [ja3, float(s1), float(s2), float(s3), float(method),
                 ROLES.index(u_role) / (len(ROLES) - 1), u_clearance / 4.0,
-                float(bytes_in), float(bytes_out), float(http_status)]
+                float(bytes_in), float(bytes_out)]
         return self._event(source=source, config=config, device=dev_slot, user=user,
                            res_idx=res_idx, feat=feat, label=label, etype=etype,
                            scenario=scenario)
@@ -825,9 +967,10 @@ class SyntheticStream:
     user: torch.Tensor          # [N] global user node ids
     dst: torch.Tensor           # [N] global resource node ids
     t: torch.Tensor             # [N] timestamps
-    msg: torch.Tensor           # [N, 11] edge messages (access edge)
+    msg: torch.Tensor           # [N, msg_dim=10] edge messages (access edge)
     y: torch.Tensor             # [N] binary labels
-    types: torch.Tensor         # [N] anomaly types (0..4)
+    types: torch.Tensor         # [N] 0=benign, 1=policy, 2=contextual, 3=lateral,
+                                #     4=cred-theft, 5=exfil, 6=benign human error (denied)
     scenario: torch.Tensor      # [N] benign-context bitmask (SCEN_*)
     node_features: torch.Tensor  # [num_nodes, 16]
     keys: list = field(repr=False)

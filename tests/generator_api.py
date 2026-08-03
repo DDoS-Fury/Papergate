@@ -14,6 +14,10 @@ simulator = ZTAStreamSimulator(
     num_users=cfg.num_users,
     num_devices=cfg.num_devices,
     num_sources=cfg.num_sources,
+    # Same reason as tests/generator.py: these two must track the trained config, or the
+    # generated stream lives in a different entity space than the checkpoint.
+    num_configs=cfg.num_configs,
+    guest_device_fallback=cfg.guest_device_fallback,
     num_resources=cfg.num_resources,
     num_wipe_slots=cfg.num_wipe_slots,
     num_theft_slots=cfg.num_theft_slots,

@@ -86,17 +86,25 @@ def test_generated_stream_is_policy_compliant():
     res_lo = sim.res_lo
     events = [sim.step() for _ in range(8000)]
 
-    n_benign = n_viol = 0
+    # Resolve routes against the SIMULATOR's own catalogue, not the module-level one: the
+    # synthetic estate is drawn per-seed (build_resource_universe), so a given URI can hold
+    # a different classification in a different run.
+    n_benign = n_viol = n_denied_benign = 0
     for e in events:
         role = roles[e["user"]]
-        uri = RESOURCE_URIS[e["dst"] - res_lo]
+        uri = sim.resource_uris[e["dst"] - res_lo]
         method = int(round(e["features"][4]))
         if e["label"] == 0 and e["etype"] == 0:
             n_benign += 1
-            assert policy_allows(role, method, uri), ("benign denied", role, method, uri)
+            assert sim.policy_allows(role, method, uri), ("benign denied", role, method, uri)
         if e["etype"] == 1:
             n_viol += 1
-            assert not policy_allows(role, method, uri), ("fake violation", role, method, uri)
+            assert not sim.policy_allows(role, method, uri), ("fake violation", role, method, uri)
+        if e["etype"] == 6:
+            # A benign human mistake: still a genuine OPA denial, just not an attack.
+            n_denied_benign += 1
+            assert not sim.policy_allows(role, method, uri), ("fake denial", role, method, uri)
+    assert n_denied_benign > 0
 
     # The stream must actually exercise both classes (guards against a vacuous pass).
     assert n_benign > 1000

@@ -3,14 +3,26 @@
 Pipeline:
   1. Generate a chronologically ordered synthetic ZTA access stream.
   2. Split it by time into train (70%) / val (10%) / test (20%).
-  3. Train unsupervised on benign traffic with structural + contextual negatives;
+  3. Train ONE-CLASS on benign traffic with structural + contextual negatives;
      memory is updated with benign events only.
   4. Calibrate the anomaly threshold on a held-out benign slice at ``target_fpr``.
-  5. Evaluate on the test stream **event-by-event**, through the exact serving code
-     path (``graphagate.serve_tgn``), so the reported AUC/AP reflects deployment.
+  5. Evaluate on the test stream **event-by-event**, reproducing the serving flow.
   6. Persist the deployable artifact (weights + memory + registry + threshold).
+
+Supervision, stated precisely — the method is **one-class / semi-supervised**, not
+unsupervised, and the paper must say so:
+
+  * the training set is *selected* by ground-truth labels (``benign_mask = b_y == 0``),
+    so the model never sees an attack but does rely on labels to know what to skip;
+  * the primary operating threshold is fitted with ground-truth lateral-movement labels
+    on the validation slice (``cost_sensitive_threshold``), which means a deployment
+    needs labelled red-team data in its calibration window. The unsupervised
+    benign-quantile threshold (``threshold_dirty``) is reported alongside it.
+
+No attack label is ever used to compute a test-set score.
 """
 
+import copy
 import random
 import sys
 from dataclasses import dataclass
@@ -167,11 +179,8 @@ def _replay(model, source_nodes, device_nodes, user, dst, t, msg, y, device, *,
 
             def _grp_anom(s_g, d_g, s_list, d_list, msg_g, aux_list):
                 """Anomaly score (1 - P(benign)) per edge of one group — a vectorised infer_score."""
-                d_pair = torch.tensor(
-                    [ts[k] - model.last_contact.get((s_list[k], d_list[k]), 0) for k in range(B)],
-                    dtype=torch.float, device=device,
-                )
-                d_src = (bt - model.memory.last_update[s_g]).to(torch.float)
+                d_pair = model.pair_delta_t(s_list, d_list, ts, device)
+                d_src = model.src_delta_t(s_g, bt, device)
                 hist = model.compute_hist_feats(s_list, d_list, device, aux_src_ids=aux_list)
                 logit = model.score(
                     z, nf, h_idx, assoc[s_g], assoc[d_g], msg_g, d_pair, d_src, hist
@@ -212,7 +221,13 @@ def _replay(model, source_nodes, device_nodes, user, dst, t, msg, y, device, *,
                 do_update[j] = (lab == 0) if gate_by_label else (not signal_dirty(msg_row))
 
                 snort_alert = msg_row[1] > 0.5
-                is_anomaly = (lab == 1) if gate_by_label else (score >= eff_thr)
+                # ``eff_thr is None`` = bootstrap pass: no threshold exists yet, so only the
+                # sensor alarm arms the precursor / trust feedback. Used by the first of the
+                # two calibration passes (see the CALIBRATION section).
+                if gate_by_label:
+                    is_anomaly = lab == 1
+                else:
+                    is_anomaly = eff_thr is not None and score >= eff_thr
                 if is_anomaly or snort_alert:
                     record_alert(model, actor, tv)  # arm the precursor (recon → lateral)
                     trust[actor] = max(0.0, trust[actor] - 0.5)
@@ -444,9 +459,24 @@ def train_tgn(cfg: TGNConfig = TGNConfig(), *, dataset: "StreamData | None" = No
     generator, reusing the whole pipeline for external validity; ``None`` is the default
     synthetic path. Returns a metrics dict.
     """
+    # Full seeding. `torch.manual_seed` alone left the CUDA generators and the
+    # non-deterministic scatter kernels free: two runs of the SAME config and SAME seed
+    # differed by up to 0.038 lateral AUC and 0.132 lateral recall — more than the
+    # across-seed standard deviation reported as the error bar, which made small effects
+    # (e.g. the +0.017 v3→v4 lateral AUC) indistinguishable from noise.
+    #
+    # `warn_only=True` because the scatter-add in TransformerConv / TGNMemory has no
+    # deterministic CUDA kernel: PyTorch warns instead of raising, and the residual
+    # non-determinism must be quantified by repeated runs rather than assumed away. Set
+    # CUBLAS_WORKSPACE_CONFIG=:4096:8 in the environment for the cuBLAS half of this.
     torch.manual_seed(cfg.seed)
+    torch.cuda.manual_seed_all(cfg.seed)
     np.random.seed(cfg.seed)
     random.seed(cfg.seed)
+    torch.use_deterministic_algorithms(True, warn_only=True)
+    if torch.backends.cudnn.is_available():
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
 
     if dataset is None:
         print("Generating streaming data...")
@@ -467,12 +497,6 @@ def train_tgn(cfg: TGNConfig = TGNConfig(), *, dataset: "StreamData | None" = No
     capacity = total_nodes + cfg.capacity_headroom
     neg_lo, neg_num = data.neg_lo, data.neg_num
 
-    n = len(dst)
-    n_train = int(n * cfg.train_frac)
-    n_val = int(n * cfg.val_frac)
-    train_end, val_end = n_train, n_train + n_val
-    bs = cfg.batch_size
-
     if torch.cuda.is_available():
         device = torch.device("cuda")
     elif torch.backends.mps.is_available():
@@ -484,8 +508,6 @@ def train_tgn(cfg: TGNConfig = TGNConfig(), *, dataset: "StreamData | None" = No
     # used during training — see _sample_structural_negatives. Using it would re-introduce
     # the circular "authorised-but-non-habitual" negative that mirrors the lateral-movement
     # test anomaly. It stays unused on purpose (dropped in _synthetic_stream_data).
-
-    print("--- INIZIO ADDESTRAMENTO UNSUPERVISED ---")
 
     # Entity registry: ``data.keys[i]`` is the external key for slot ``i`` (int ids for
     # users/IPs, URI strings for resources in the synthetic stream; computer names for LANL).
@@ -538,7 +560,9 @@ def train_tgn(cfg: TGNConfig = TGNConfig(), *, dataset: "StreamData | None" = No
     n_val = int(n * cfg.val_frac)
     train_end, val_end = n_train, n_train + n_val
     bs = cfg.batch_size
-    print("--- INIZIO ADDESTRAMENTO UNSUPERVISED ---")
+    # One-class, not unsupervised: labels select the training set (benign only). See the
+    # module docstring for the full statement of what is and is not supervised.
+    print("--- INIZIO ADDESTRAMENTO ONE-CLASS (solo traffico benigno) ---")
     for epoch in range(1, cfg.epochs + 1):
         model.memory.reset_state()  # restart the recurrent memory each epoch
         model.neighbor_loader.reset_state()  # ...and the temporal neighbourhood
@@ -666,12 +690,8 @@ def train_tgn(cfg: TGNConfig = TGNConfig(), *, dataset: "StreamData | None" = No
             def _edge_logits(src_nodes, dst_nodes, t_nodes, msgs, hist_feats):
                 """Score one edge group: Δt(pair recency), Δt(src activity), then heads."""
                 s_list, d_list, t_list = src_nodes.tolist(), dst_nodes.tolist(), t_nodes.tolist()
-                d_pair = torch.tensor(
-                    [t_list[j] - model.last_contact.get((s_list[j], d_list[j]), 0)
-                     for j in range(len(s_list))],
-                    dtype=torch.float, device=device,
-                )
-                d_src = (t_nodes - model.memory.last_update[src_nodes]).to(torch.float)
+                d_pair = model.pair_delta_t(s_list, d_list, t_list, device)
+                d_src = model.src_delta_t(src_nodes, t_nodes, device)
                 return model.score(
                     z, nf, h_idx, assoc[src_nodes], assoc[dst_nodes], msgs, d_pair, d_src, hist_feats
                 )
@@ -795,48 +815,114 @@ def train_tgn(cfg: TGNConfig = TGNConfig(), *, dataset: "StreamData | None" = No
     def _slice(arr, lo, hi):
         return arr[lo:hi] if arr is not None else None
 
-    val_scores, val_labels = _replay(
-        model, _slice(source_arr, train_end, val_end), _slice(device_arr, train_end, val_end),
-        user_arr[train_end:val_end], dst[train_end:val_end], t[train_end:val_end],
-        msg[train_end:val_end], y[train_end:val_end], device, gate_by_label=True,
-        config_nodes=_slice(config_arr, train_end, val_end),
-        batch_size=cfg.eval_batch_size, desc="Calibrazione (replay val)",
+    # The calibration replay runs the SAME gate as the test replay (``gate_by_label=False``:
+    # commit on the OPA-ALLOW proxy, not on ground truth). It used to run with
+    # ``gate_by_label=True``, which let the labels decide what entered memory, what the trust
+    # feature became and when the precursor armed — so the threshold was fitted on a score
+    # distribution that is not the one it is then applied to. Because the score-driven part
+    # of that feedback needs a threshold that does not exist yet, calibration is a single
+    # fixed-point iteration: pass A runs with no score threshold (sensor alarms only), its
+    # scores yield provisional thresholds, and pass B re-runs the identical replay under
+    # them. Pass B's scores are what the reported thresholds are fitted on.
+    def _snapshot_runtime():
+        """Deep copy of every piece of mutable runtime state a replay advances.
+
+        The two calibration passes replay the *same* slice, so pass B must start from the
+        state pass A started from — otherwise it scores against a memory that has already
+        ingested the very events it is about to see. (The test replay, by contrast,
+        legitimately continues from calibration: it is a later slice of the same stream.)
+        """
+        return {
+            "memory": copy.deepcopy(model.memory.state_dict()),
+            "msg_s_store": copy.deepcopy(model.memory.msg_s_store),
+            "msg_d_store": copy.deepcopy(model.memory.msg_d_store),
+            "neighbor": {k: (v.clone() if torch.is_tensor(v) else v)
+                         for k, v in model.neighbor_loader.state().items()},
+            "last_contact": dict(model.last_contact),
+            "pair_count": dict(model.pair_count),
+            "src_count": dict(model.src_count),
+            "recent_alert": dict(model.recent_alert),
+        }
+
+    def _restore_runtime(snap):
+        model.memory.load_state_dict(copy.deepcopy(snap["memory"]))
+        model.memory.msg_s_store = copy.deepcopy(snap["msg_s_store"])
+        model.memory.msg_d_store = copy.deepcopy(snap["msg_d_store"])
+        model.neighbor_loader.load_state(
+            {k: (v.clone() if torch.is_tensor(v) else v) for k, v in snap["neighbor"].items()}
+        )
+        model.last_contact = dict(snap["last_contact"])
+        model.pair_count = dict(snap["pair_count"])
+        model.src_count = dict(snap["src_count"])
+        model.recent_alert = dict(snap["recent_alert"])
+        model.node_feat.copy_(node_feat_post_train)
+
+    pre_cal_state = _snapshot_runtime()
+
+    def _cal_replay(desc, thr=None, thr_dirty=None):
+        _restore_runtime(pre_cal_state)
+        return _replay(
+            model, _slice(source_arr, train_end, val_end), _slice(device_arr, train_end, val_end),
+            user_arr[train_end:val_end], dst[train_end:val_end], t[train_end:val_end],
+            msg[train_end:val_end], y[train_end:val_end], device, gate_by_label=False,
+            threshold=thr, threshold_dirty=thr_dirty,
+            config_nodes=_slice(config_arr, train_end, val_end),
+            batch_size=cfg.eval_batch_size, desc=desc,
+        )
+
+    def _fit_thresholds(scores, labels):
+        """(threshold_clean, threshold_dirty, threshold_clean_unsup) from one replay's scores."""
+        benign = scores[labels == 0]
+        if benign.size == 0:
+            raise RuntimeError("No benign events in the validation slice for calibration.")
+        t_dirty = float(np.quantile(benign, 1.0 - cfg.target_fpr))
+        v_types = types[train_end:val_end].numpy()
+        v_clean = ~_rule_baseline(msg[train_end:val_end].numpy()).astype(bool)
+        # Label-free clean threshold: the benign-FPR quantile restricted to signal-clean
+        # events. Reported as the PRIMARY operating point because it needs no red-team
+        # labels in the validation window.
+        clean_benign = scores[v_clean & (labels == 0)]
+        t_unsup = float(np.quantile(clean_benign, 1.0 - cfg.target_fpr)) if clean_benign.size \
+            else t_dirty
+        mask = v_clean & ((labels == 0) | (v_types == 3))
+        cal_labels_ = (v_types[mask] == 3).astype(int)
+        if cal_labels_.sum() == 0:
+            # No lateral examples to calibrate against (e.g. a window without red-team
+            # activity): fall back to the conservative FPR threshold.
+            t_clean = t_dirty
+        else:
+            t_clean = cost_sensitive_threshold(
+                scores[mask], cal_labels_, cost_ratio=cfg.cost_ratio,
+                target_fpr_cap=cfg.clean_fpr_cap,
+            )
+        return t_clean, t_dirty, t_unsup, benign
+
+    scores_a, labels_a = _cal_replay("Calibrazione pass A (replay val, no soglia)")
+    thr_a, thr_dirty_a, _, _ = _fit_thresholds(scores_a, labels_a)
+    val_scores, val_labels = _cal_replay(
+        "Calibrazione pass B (replay val, gate di test)", thr=thr_a, thr_dirty=thr_dirty_a
     )
-    benign_val_scores = val_scores[val_labels == 0]
-    if benign_val_scores.size == 0:
-        raise RuntimeError("No benign events in the validation slice for calibration.")
+    threshold, threshold_dirty, threshold_clean_unsup, benign_val_scores = _fit_thresholds(
+        val_scores, val_labels
+    )
     val_types = types[train_end:val_end].numpy()
     val_msg = msg[train_end:val_end].numpy()
-
-    # Signal-DIRTY threshold (events whose edge signal already fires): keep the conservative
-    # benign-FPR quantile — the cheap rule baseline already catches these, no need to drop it.
-    threshold_dirty = float(np.quantile(benign_val_scores, 1.0 - cfg.target_fpr))
-
-    # Signal-CLEAN threshold: among signal-clean events the realistic discrimination the model
-    # owns is benign vs lateral (contextual is signal-dirty; policy is OPA-blocked upstream).
-    # Calibrate the cost-sensitive threshold on exactly that population so the ~0.76 lateral
-    # AUC becomes recall. ``threshold`` is the primary (clean-stream) decision threshold.
     val_clean = ~_rule_baseline(val_msg).astype(bool)
     cal_mask = val_clean & ((val_labels == 0) | (val_types == 3))
     cal_scores = val_scores[cal_mask]
     cal_labels = (val_types[cal_mask] == 3).astype(int)
-    if cal_labels.sum() == 0:
-        # No lateral examples to calibrate against (e.g. a window without red-team activity):
-        # fall back to the conservative FPR threshold so behaviour degrades gracefully.
-        threshold = threshold_dirty
-    else:
-        threshold = cost_sensitive_threshold(
-            cal_scores, cal_labels, cost_ratio=cfg.cost_ratio,
-            target_fpr_cap=cfg.clean_fpr_cap,
-        )
     print(
         f"Benign val score: mean={benign_val_scores.mean():.4f} "
         f"p95={np.quantile(benign_val_scores, 0.95):.4f}"
     )
     print(
         f"threshold_dirty@FPR={cfg.target_fpr}: {threshold_dirty:.4f} | "
+        f"threshold_clean_unsup@FPR={cfg.target_fpr}: {threshold_clean_unsup:.4f} "
+        f"[PRIMARY, label-free] | "
         f"threshold_clean@cost_ratio={cfg.cost_ratio}: {threshold:.4f} "
-        f"(clean cal: n_benign={int((cal_labels == 0).sum())} n_lateral={int(cal_labels.sum())})"
+        f"[SUPERVISED upper bound — requires labelled lateral movement in the validation "
+        f"window; clean cal: n_benign={int((cal_labels == 0).sum())} "
+        f"n_lateral={int(cal_labels.sum())}]"
     )
     # Lateral recall/FPR trade-off the clean threshold was picked from (operator/OPA reference).
     if cal_labels.sum() > 0:
@@ -917,10 +1003,18 @@ def train_tgn(cfg: TGNConfig = TGNConfig(), *, dataset: "StreamData | None" = No
     #     indistinguishable from benign exploration except by temporal/relational pattern).
     #     This is the model's real target.
     print("\n--- METRICHE PER TIPO DI ANOMALIA ---")
-    vs_rule = {1: "OPA-owned  ", 2: "rule-trivial", 3: "rule-blind ", 4: "rule-blind "}
+    vs_rule = {
+        1: "OPA-owned  ", 2: "rule-trivial", 3: "rule-blind ", 4: "rule-blind ",
+        5: "volume-tell", 6: "OPA-owned  ",
+    }
     per_type = {}
     benign = test_types == 0
-    for type_id, name in ((1, "policy"), (2, "contextual"), (3, "lateral"), (4, "cred-theft")):
+    # 5 = data exfiltration, reported separately from lateral movement: it carries a bulk
+    # transfer volume, so folding it into the lateral class would put a trivially separable
+    # sub-population inside the class the model's central claim rests on.
+    # 6 = benign OPA denial (a human mistake): label=1, but not an attack.
+    for type_id, name in ((1, "policy"), (2, "contextual"), (3, "lateral"),
+                          (4, "cred-theft"), (5, "exfil"), (6, "benign-denied")):
         sel = benign | (test_types == type_id)
         s_sel, l_sel = test_scores[sel], (test_types[sel] == type_id).astype(int)
         if l_sel.sum() == 0:
@@ -940,8 +1034,14 @@ def train_tgn(cfg: TGNConfig = TGNConfig(), *, dataset: "StreamData | None" = No
     # a freshly-compromised IP may have no benign history yet). Report lateral recall split
     # by whether the src had >=1 benign event before the event (warmed) vs not (cold), so
     # the honest "where detection is even possible" number is visible next to the overall one.
+    # Labels are available only up to val_end; from there on the partition is driven by the
+    # system's own routed decision, exactly as it would be in deployment.
     actor_arr = device_arr if device_arr is not None else user_arr
-    src_seen_test = causal_src_seen(actor_arr.numpy(), y.numpy())[val_end:]
+    pred_full = np.zeros(len(y), dtype=np.int64)
+    pred_full[val_end:] = test_preds
+    src_seen_test = causal_src_seen(
+        actor_arr.numpy(), y.numpy(), label_horizon=val_end, pred=pred_full
+    )[val_end:]
     lat_mask = test_types == 3
     lat_pred = test_preds  # routed operational decision
     warmed = lat_mask & src_seen_test
@@ -1060,7 +1160,10 @@ def train_tgn(cfg: TGNConfig = TGNConfig(), *, dataset: "StreamData | None" = No
             model, registry, threshold, hp, TGN_CHECKPOINT_PATH, TGN_STATS_PATH,
             threshold_dirty=threshold_dirty,
             calibration={"mode": "cost", "cost_ratio": cfg.cost_ratio,
-                         "clean_fpr_cap": cfg.clean_fpr_cap, "target_fpr": cfg.target_fpr},
+                         "clean_fpr_cap": cfg.clean_fpr_cap, "target_fpr": cfg.target_fpr,
+                         # Label-free alternative to ``threshold``; recorded so a deployment
+                         # without red-team labels can adopt it (see the CALIBRATION section).
+                         "threshold_clean_unsup": threshold_clean_unsup},
             operating_point=op_new,
         )
         print(f"\nSaved checkpoint -> {TGN_CHECKPOINT_PATH}")
@@ -1069,6 +1172,7 @@ def train_tgn(cfg: TGNConfig = TGNConfig(), *, dataset: "StreamData | None" = No
     return {
         "threshold": threshold,
         "threshold_dirty": threshold_dirty,
+        "threshold_clean_unsup": threshold_clean_unsup,
         "agg_auc": auc,
         "agg_ap": ap,
         "agg_precision": precision,

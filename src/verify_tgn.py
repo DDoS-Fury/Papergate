@@ -30,7 +30,19 @@ KEY_DEVICE = "ck:verify-device"                # admitted dynamically on first u
 KEY_SOURCE = "src:10.99.99.1"                  # namespaced source key, admitted on first use
 KEY_DST = "/api/v1/reactor-parameters"         # a preregistered resource entity URI
 TS = 10**9            # a timestamp far beyond any training time
-BENIGN_FEAT = [1.0, 0.0, 0.0, 0.0, 0.0, 0.5, 0.5]
+
+# Message layout prefix: [ja3, s1, s2, s3, method, role, clearance, ...]. The tail (byte
+# volumes, Δt) is zero-padded to the checkpoint's own msg_dim rather than hardcoded — a
+# fixed-length literal here silently rotted every time the schema changed and made this
+# verification harness crash instead of reporting.
+_BENIGN_PREFIX = [1.0, 0.0, 0.0, 0.0, 0.0, 0.5, 0.5]
+
+
+def benign_feat(msg_dim: int) -> list[float]:
+    """A signal-clean benign message of exactly ``msg_dim`` values."""
+    if msg_dim <= len(_BENIGN_PREFIX):
+        return _BENIGN_PREFIX[:msg_dim]
+    return _BENIGN_PREFIX + [0.0] * (msg_dim - len(_BENIGN_PREFIX))
 
 
 def _check(name: str, ok: bool, detail: str = "") -> bool:
@@ -44,49 +56,49 @@ def main() -> int:
     def load():
         # load_model returns (model, registry, threshold, threshold_dirty, hp); the
         # harness exercises the single-threshold path, so it ignores the latter two.
-        model, registry, threshold, _, _ = load_model(
+        model, registry, threshold, _, hp = load_model(
             TGN_CHECKPOINT_PATH, TGN_STATS_PATH, device
         )
-        return model, registry, threshold
+        return model, registry, threshold, benign_feat(int(hp["msg_dim"]))
 
     results = []
 
-    def score(m, r, thr, *, key_source=KEY_SOURCE, update=False):
+    def score(m, r, thr, feat, *, key_source=KEY_SOURCE, update=False):
         return score_event(
-            m, r, thr, KEY_USER, KEY_DEVICE, KEY_DST, TS, BENIGN_FEAT, device,
+            m, r, thr, KEY_USER, KEY_DEVICE, KEY_DST, TS, feat, device,
             key_source=key_source, update=update,
         )
 
     # 1. Reload determinism.
-    m1, r1, thr = load()
-    m2, r2, _ = load()
-    s1, _ = score(m1, r1, thr)
-    s2, _ = score(m2, r2, thr)
+    m1, r1, thr, feat = load()
+    m2, r2, _, _ = load()
+    s1, _ = score(m1, r1, thr, feat)
+    s2, _ = score(m2, r2, thr, feat)
     results.append(_check("reload determinism", abs(s1 - s2) < 1e-6, f"s1={s1:.6f} s2={s2:.6f}"))
 
     # 2a. Benign event (threshold forced high -> not anomaly -> memory advances).
-    m, r, _ = load()
-    _, is_anom = score(m, r, 2.0, update=True)
+    m, r, _, feat = load()
+    _, is_anom = score(m, r, 2.0, feat, update=True)
     idx = r.get(KEY_USER)
     lu = int(m.memory.last_update[idx])
     results.append(_check("benign event updates memory", (not is_anom) and lu == TS,
                           f"is_anom={is_anom} last_update={lu}"))
 
     # 2b. Anomalous event (threshold forced low -> anomaly -> memory frozen).
-    m, r, _ = load()
+    m, r, _, feat = load()
     idx = r.get(KEY_USER)
     lu0 = int(m.memory.last_update[idx])
-    _, is_anom = score(m, r, -1.0, update=True)
+    _, is_anom = score(m, r, -1.0, feat, update=True)
     lu1 = int(m.memory.last_update[idx])
     results.append(_check("anomaly does NOT poison memory", is_anom and lu1 == lu0,
                           f"is_anom={is_anom} before={lu0} after={lu1}"))
 
     # 3. Dynamic node admission (one fresh device key -> exactly one new slot).
-    m, r, thr = load()
+    m, r, thr, feat = load()
     new_key = "ck:never-seen-before"
     seen_before = r.get(new_key)
     n_before = len(r)
-    s, _ = score_event(m, r, thr, KEY_USER, new_key, KEY_DST, TS, BENIGN_FEAT, device,
+    s, _ = score_event(m, r, thr, KEY_USER, new_key, KEY_DST, TS, feat, device,
                        update=False)
     new_idx = r.get(new_key)
     ok = (
@@ -100,9 +112,9 @@ def main() -> int:
                           f"new_idx={new_idx} score={s:.4f} registry {n_before}->{len(r)}"))
 
     # 4. Source fallback: no client IP -> the source→device edge is skipped.
-    m, r, thr = load()
+    m, r, thr, feat = load()
     n_before = len(r)
-    s, _ = score(m, r, thr, key_source=None)
+    s, _ = score(m, r, thr, feat, key_source=None)
     no_src = r.get(KEY_SOURCE) is None
     results.append(_check("key_source=None fallback", math.isfinite(s) and no_src,
                           f"score={s:.4f} source_admitted={not no_src} "

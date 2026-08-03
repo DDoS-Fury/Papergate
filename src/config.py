@@ -96,7 +96,9 @@ class TGNConfig:
 
     # TGN Architecture
     node_feat_dim: int = 16
-    msg_dim: int = 11
+    # [ja3, s1, s2, s3, method, role, clearance, bytes_in, bytes_out, log1p(user Δt)/10]
+    # — request-time fields only; see the stream_synthetic module docstring.
+    msg_dim: int = 10
     time_dim: int = 32
     memory_dim: int = 256
     num_hops: int = 3
@@ -122,6 +124,17 @@ class TGNConfig:
     # InfoNCE ranking objective: number of random-destination negatives per positive.
     # The lateral signal is "rank the true dst above K alternatives given src history".
     infonce_k: int = 5
+    # Recency cap, in the stream's own clock unit (seconds). Both Δt inputs — pair
+    # recency and src activity — are clamped here, and a pair/entity never observed
+    # before is given exactly this value as a sentinel. Without it "never seen" was
+    # encoded as Δt = t_now (the absolute clock): it grew monotonically along the
+    # stream, so train / val / test saw systematically different encodings of the same
+    # state and a long-running server drifted away from both. It was also a shortcut in
+    # the InfoNCE objective — every random negative carried an absolute-clock Δt while
+    # every positive carried a small one, making the ranking task solvable from one
+    # scalar. One week: a pair silent for longer is operationally indistinguishable
+    # from one never seen, which is exactly what the sentinel asserts.
+    delta_t_cap: float = 604800.0
 
     # Kill-chain precursor prior (serving-time, not trained). Lateral movement follows a
     # recon alert on the same entity; we multiply an entity's anomaly score by up to

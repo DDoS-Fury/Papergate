@@ -1,9 +1,22 @@
 """Serving / persistence layer for the streaming TGN.
 
-This module is the single source of truth for the *real-time* code path. Both the
-offline evaluation in :mod:`graphagate.train_tgn` and any online deployment call
-the same primitives here, so the behaviour that is measured is exactly the
-behaviour that is served:
+This module is the single source of truth for the *real-time* code path.
+
+Relationship to the offline evaluation: ``train_tgn._replay`` does **not** call these
+primitives — it is an independent vectorised re-implementation that scores a block of
+events against one shared neighbour expansion. What ties the two together is a checked
+equivalence, not shared code: ``tests/verify_replay_batching.py`` replays the same stream
+through ``infer_score`` / ``update_memory`` event by event and asserts agreement with
+``_replay(batch_size=1)`` to 1e-5, on both the v4 five-edge chain and the legacy v3 one.
+Treat that harness as part of the contract: any change to one path must keep it green.
+
+One divergence is deliberate and is *not* a bug: the offline replay commits on the
+OPA-ALLOW proxy (``not signal_dirty``), whereas :func:`score_event` with ``update=True``
+commits on the model's own score. See the ``_replay`` docstring for why measuring under
+the OPA-in-the-loop gate is the conservative choice.
+
+- :func:`infer_score` — score one event (read memory, no mutation).
+- :func:`update_memory` — commit one event into the TGN memory.
 
 - :func:`infer_score` — score one event (read memory, no mutation).
 - :func:`update_memory` — commit one event into the TGN memory.
@@ -14,6 +27,7 @@ behaviour that is served:
 - :func:`commit_event` — the unconditional commit used when the benign/anomalous
   decision is made outside the model (e.g. OPA): map keys and advance memory +
   neighbour history without re-scoring.
+- :func:`apply_feedback` — precursor arming + trust nudge, shared by both paths.
 - :func:`save_model` / :func:`load_model` — persist and restore weights, the TGN
   memory buffers, the (non-state_dict) raw-message store, the entity registry and
   the calibrated decision threshold.
@@ -28,6 +42,7 @@ from typing import Hashable
 import numpy as np
 import torch
 
+from graphagate.config import TGNConfig
 from graphagate.model.registry import NodeRegistry
 from graphagate.model.tgn import ZTATemporalGraphNetwork, stable_hash
 from graphagate.netclass import ip_is_internal, to_guest_device
@@ -60,8 +75,9 @@ def build_model(hp: dict, device: torch.device) -> ZTATemporalGraphNetwork:
         link_pred_hidden_layers=int(hp.get("link_pred_hidden_layers", 2)),
     ).to(device)
     # Kill-chain precursor prior knobs (serving-time; not in the state_dict).
-    model.precursor_half_life = float(hp.get("precursor_half_life", 100000.0))
-    model.precursor_max_boost = float(hp.get("precursor_max_boost", 3.0))
+    # Fallbacks track TGNConfig, not the historical 100000.0 / 3.0 that saturated scores.
+    model.precursor_half_life = float(hp.get("precursor_half_life", TGNConfig.precursor_half_life))
+    model.precursor_max_boost = float(hp.get("precursor_max_boost", TGNConfig.precursor_max_boost))
     # v3 static-feature toggles: must match the values the checkpoint was trained with,
     # else the source node would carry a feature the model never learned from.
     model.use_source_internal = bool(hp.get("use_source_internal", False))
@@ -107,12 +123,10 @@ def infer_score(model, src_idx: int, dst_idx: int, t_val: int, msg_vec, device,
     n_id, edge_index, hist_t, hist_msg = model.neighbor_loader(nodes)
     assoc = model.neighbor_loader._assoc
     
-    last_t = getattr(model, "last_contact", {}).get((src_idx, dst_idx), 0)
-    delta_t_val = float(t_val - last_t)
-    delta_t = torch.tensor([delta_t_val], dtype=torch.float, device=device)
-    
-    delta_t_src_val = float(t_val - model.memory.last_update[src_idx].item())
-    delta_t_src = torch.tensor([delta_t_src_val], dtype=torch.float, device=device)
+    # Both recencies go through the model's shared encoder (cap + never-seen sentinel),
+    # which is what keeps the serving path on the same Δt distribution as training.
+    delta_t = model.pair_delta_t([src_idx], [dst_idx], [t_val], device)
+    delta_t_src = model.src_delta_t([src_idx], [float(t_val)], device)
 
     # Explicit interaction-history features for this src→dst pair (read-only; counts are
     # advanced in update_memory, exactly mirroring the train-time predict-then-update order).
@@ -187,6 +201,43 @@ def record_alert(model, src_idx: int, t_val: int) -> None:
     if not hasattr(model, "recent_alert"):
         model.recent_alert = {}
     model.recent_alert[src_idx] = t_val
+
+
+TRUST = 14  # runtime trust slot in node_feat
+
+
+def apply_feedback(model, user_idx: int, device_idx: int | None, timestamp: int, features,
+                   *, flagged: bool, boost_idx: int | None = None) -> None:
+    """Per-event alarm feedback: arm the kill-chain precursor and nudge the trust feature.
+
+    ``flagged`` is the decision the *system* reached for this event — the model's own
+    ``is_anomaly`` on the internal-gate path, or the caller's verdict on the
+    ``/infer`` → OPA → ``/update`` path. A sensor alert in ``features`` (Snort probe)
+    counts as an alarm on its own, since recon precedes lateral movement.
+
+    Both serving paths must call this. Previously only ``score_event(update=True)`` did,
+    so on the documented two-step flow — which is ``score_event(update=False)`` followed
+    by ``commit_event`` — ``recent_alert`` stayed empty, ``precursor_boost`` always
+    returned 1.0 and the trust column stayed frozen at its checkpoint value: two inputs
+    that contribute offline were simply absent in deployment.
+    """
+    if boost_idx is None:
+        boost_idx = device_idx if device_idx is not None else user_idx
+    alarm = bool(flagged) or (len(features) > 1 and features[1] > 0.5)
+    targets = [user_idx] if device_idx is None else [device_idx, user_idx]
+    # Datasets whose node_feat is narrower than the ZTA schema (e.g. the LANL adapter)
+    # have no trust column; the precursor still applies.
+    if model.node_feat.size(1) <= TRUST:
+        if alarm:
+            record_alert(model, boost_idx, timestamp)
+        return
+    if alarm:
+        record_alert(model, boost_idx, timestamp)
+        for idx in targets:
+            model.node_feat[idx, TRUST] = max(0.0, model.node_feat[idx, TRUST].item() - 0.5)
+    else:
+        for idx in targets:
+            model.node_feat[idx, TRUST] = min(1.0, model.node_feat[idx, TRUST].item() + 0.01)
 
 
 def signal_dirty(features) -> bool:
@@ -375,17 +426,9 @@ def score_event(
         eff_threshold = threshold_dirty
     is_anomaly = score >= eff_threshold
 
-    snort_alert = features[1] > 0.5
     if update:
-        if is_anomaly or snort_alert:
-            record_alert(model, boost_idx, timestamp)
-            if device_idx is not None:
-                model.node_feat[device_idx, 14] = max(0.0, model.node_feat[device_idx, 14].item() - 0.5)
-            model.node_feat[user_idx, 14] = max(0.0, model.node_feat[user_idx, 14].item() - 0.5)
-        else:
-            if device_idx is not None:
-                model.node_feat[device_idx, 14] = min(1.0, model.node_feat[device_idx, 14].item() + 0.01)
-            model.node_feat[user_idx, 14] = min(1.0, model.node_feat[user_idx, 14].item() + 0.01)
+        apply_feedback(model, user_idx, device_idx, timestamp, features,
+                       flagged=is_anomaly, boost_idx=boost_idx)
 
     if update and not is_anomaly:
         # Commit order mirrors the causal chain: source→config, config→device,
@@ -419,6 +462,7 @@ def commit_event(
     device_feat=None,
     dst_feat=None,
     guest_device_fallback: bool = False,
+    flagged: bool = False,
 ) -> None:
     """Commit an event the caller has already judged benign (e.g. OPA returned ALLOW).
 
@@ -430,6 +474,11 @@ def commit_event(
     benign/anomalous decision is made *outside* the model (score with
     :func:`infer_score` / :func:`score_event` ``update=False`` first, then commit here
     only on approval).
+
+    ``flagged`` carries back what the scoring step decided: OPA may ALLOW an event the
+    model still flagged, and that is precisely the case the kill-chain precursor exists
+    for. It drives :func:`apply_feedback` (precursor + trust), which this function used
+    not to run at all — leaving both signals inert on the recommended flow.
     """
     model.eval()
     if key_config is None:
@@ -450,6 +499,8 @@ def commit_event(
         _set_node_features(model, dst_idx, dst_feat, device)
     if source_idx is not None:
         _set_source_network_feature(model, source_idx, key_source)
+
+    apply_feedback(model, user_idx, device_idx, timestamp, features, flagged=flagged)
 
     features_bind = [0.0] * len(features)
     # Commit order: source→config, config→device, config→user, device→user, user→resource.

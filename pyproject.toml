@@ -14,6 +14,8 @@ dependencies = [
     "torch_geometric>=2.6,<3.0",
     "numpy>=1.26,<3.0",
     "scikit-learn>=1.4",
+    # Statistical tests: KS in the leakage audit, Wilcoxon in the paired-delta reporting.
+    "scipy>=1.11",
     # Supervised reference baseline (tests/baselines/xgboost) — packaged so the Panel A
     # comparison is reproducible out-of-the-box (no runtime pip install). Mirrors requirements.txt.
     "xgboost>=2.0.0",
@@ -26,6 +28,11 @@ dependencies = [
     "codecarbon",
     "aiohttp",
 ]
+
+[project.optional-dependencies]
+# The unit tests under tests/ are pytest-based (policy/BLP, netclass, serving v2,
+# calibration, leakage audit). Install with:  uv pip install -e '.[dev]'
+dev = ["pytest>=8.0"]
 
 [tool.setuptools]
 # `src/` layout: the package `graphagate` lives in src/.

@@ -88,15 +88,36 @@ ZTA via `tests/datasets/lanl_auth.py`, e riusa l'intera pipeline tramite `train_
 lancia col profilo Compose `eval-lanl`. Il mapping tiene le colonne di allarme *pulite* (LANL non ha
 discriminante è solo quello temporale/relazionale — il test onesto.
 
-### Risultati LANL e Confronto con lo Stato dell'Arte (SOTA)
-L'integrazione del modello Device-Centric ha prodotto metriche altamente competitive sul dataset pubblico LANL, in test eseguiti rigorosamente senza Data Leakage (split cronologico puro e zero metadati ZTA d'aiuto).
+### Risultati LANL — RITIRATI (lavoro futuro)
 
-Su un campione vasto (test set esteso validando l'intero periodo operativo del Red Team con uno split al 30/10/60):
-- **AUC ROC Aggregata**: **0.8824**
-- **Recall Movimento Laterale**: **73.33%** (bloccando sistematicamente la grande maggioranza degli attacchi furtivi confermati)
-- **Falsi Positivi (FPR)**: **2.18%**
-
-Questo risultato si colloca eccezionalmente vicino al SOTA accademico offline (che oscilla tra AUC 0.92 e 0.96 su LANL per modelli architetturalmente molto più complessi come HLMD e Pikachu). La nostra soluzione, pur cedendo qualche punto percentuale, offre l'enorme vantaggio industriale di operare in puro streaming in tempo reale, elaborando gli eventi singolarmente in memoria `O(1)`, senza i pesanti calcoli in batch richiesti dai modelli SOTA classici. Questo lo rende l'unico candidato realistico per il deployment nativo su un orchestrator Zero-Trust.
+> **I numeri LANL precedentemente riportati qui (AUC aggregata 0.8824, recall lateral
+> 73.33%, FPR 2.18%) sono stati RIMOSSI e non vanno usati nel paper.** Non sono
+> riproducibili né verificabili:
+>
+> - **Nessun artefatto.** Non esiste alcun log LANL in `tasks/runs/`, e
+>   `docs/latex/PROVENANCE.md` non mappa nessuna tabella su una run LANL. La fonte dei
+>   numeri è ignota.
+> - **La descrizione non corrisponde al codice.** Erano attribuiti a un modello
+>   "Device-Centric", ma in `tests/datasets/lanl_auth.py` `device_nodes`, `source_nodes` e
+>   `config_nodes` sono tutti `None`: viene costruito e valutato **solo** l'arco
+>   `user → dst`. Non esiste nodo device, non esistono archi di binding.
+> - **Il codice non è eseguibile così com'è.** `lanl_auth.py` emette un messaggio a 7
+>   dimensioni mentre `eval_lanl.py` non fa override di `msg_dim`, quindi il modello viene
+>   costruito con `msg_dim` corrente e la forward fallisce in `LinkPredictor.lin1`.
+> - **Protocollo non dichiarato.** `--eval-batch-size` vale 1024 di default, cioè
+>   l'approssimazione batchata che `train_tgn.py` stesso segnala come *non*
+>   publication-grade; e `--benign-stride 16` sottocampiona il benigno di 16×, il che gonfia
+>   la prevalenza dei positivi e distorce AP e FPR rispetto allo stream reale.
+> - Lo split dichiarato (30/10/60) non è quello di default in `eval_lanl.py` (70/10/20) e
+>   non è registrato da nessuna parte.
+>
+> Di conseguenza **anche il confronto con lo SOTA (HLMD, Pikachu, AUC 0.92–0.96) è
+> ritirato**: non c'è una misura nostra da confrontare.
+>
+> La validazione esterna su LANL resta l'estensione di maggior valore per questo lavoro —
+> è l'unica superficie di valutazione senza artefatti sintetici — ma va eseguita e
+> registrata prima di poter essere rivendicata. Vedi `README.md` §limiti, che su questo
+> punto è sempre stato corretto.
 
 ## Leve ancora aperte (lavoro futuro)
 

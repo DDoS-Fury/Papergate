@@ -65,9 +65,10 @@ def test_source_keys_are_namespaced_and_disjoint_from_devices():
 def test_resource_risk_and_source_internal_baked_into_node_features():
     sim = _sim()
     nf = sim.node_features
-    # node_feat[res, 4] mirrors RESOURCE_RISK for every preregistered resource.
-    for r in range(len(RESOURCE_URIS)):
-        assert nf[sim.res_lo + r, 4].item() == approx(RESOURCE_RISK[RESOURCE_URIS[r]])
+    # node_feat[res, 4] mirrors the risk map for every preregistered resource. Resolved
+    # against the simulator's own per-seed catalogue (see build_resource_universe).
+    for r in range(len(sim.resource_uris)):
+        assert nf[sim.res_lo + r, 4].item() == approx(sim.resource_risk[sim.resource_uris[r]])
     # node_feat[src, 5] is the internal bit derived from the (namespaced) source IP.
     for s in range(sim.src_slots):
         key = sim.keys[sim.src_lo + s]

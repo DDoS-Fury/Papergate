@@ -12,21 +12,29 @@ Il modello TGN è stato progettato appositamente per essere **stateful** e gesti
 
 ### Flusso di Esecuzione (Serving)
 
-1. **Inoltro della Richiesta (Tupla, schema v3 a 4 nodi)**
-   L'orchestrator ZTA non deve pre-processare vettori né interrogare database storici. Deve semplicemente inoltrare la singola transazione (o evento) grezza all'API di serving del modello (`src/serve_tgn.py -> score_event`). Ogni richiesta è modellata come catena causale a 3 archi `sorgente(IP) → dispositivo → utente → risorsa`. **Le chiavi sono namespaced per TIPO** così un IP non può mai aliasare uno slot dispositivo nel `NodeRegistry` condiviso (che è un unico keyspace per tutti i tipi di nodo). La tupla richiesta include:
+1. **Inoltro della Richiesta (Tupla, schema v4 a 5 nodi)**
+   L'orchestrator ZTA non deve pre-processare vettori né interrogare database storici. Deve semplicemente inoltrare la singola transazione (o evento) grezza all'API di serving del modello (`src/serve_tgn.py -> score_event`). Ogni richiesta è modellata come catena causale a **5 archi**: `sorgente → config`, `config → dispositivo`, `config → utente`, `dispositivo → utente` e l'accesso `utente → risorsa`. **Le chiavi sono namespaced per TIPO** così un IP non può mai aliasare uno slot dispositivo nel `NodeRegistry` condiviso (che è un unico keyspace per tutti i tipi di nodo). La tupla richiesta include:
    - `key_user`: identità (es. user id dal JWT; `anonymous` per i guest).
    - `key_device`: contesto hardware — `tpm:<id>` se il TPM è attestato, altrimenti `ck:<cookie>` (cookie/UUID persistente firmato; un cookie nuovo = macchina mai vista). In assenza totale di id hardware, fallback `ipdev:<ip>` (IP come device debole) **senza** `key_source`. **Non** usare mai l'IP nudo come device.
-   - `key_source` (opzionale): contesto di rete — `src:<ip>` (IP del client, namespaced). Se assente, l'arco sorgente→dispositivo viene semplicemente saltato. Il modello deriva da questo IP il bit **internal/external** (RFC1918) scritto in `node_feat[*,5]` del nodo sorgente — è una *feature*, non un gate di autorizzazione (la rete non concede privilegi: ZTA).
+   - `key_source` (opzionale): contesto di rete — `src:<ip>` (IP del client, namespaced). Se assente, l'arco sorgente→config viene semplicemente saltato. Il modello deriva da questo IP il bit **internal/external** (RFC1918) scritto in `node_feat[*,5]` del nodo sorgente — è una *feature*, non un gate di autorizzazione (la rete non concede privilegi: ZTA).
+   - `key_config` (opzionale): configurazione del client — il fingerprint TLS/JA3, `conf:<ja3>`. Se omesso il server sostituisce `conf:guest`, quindi **il nodo config è sempre presente**.
    - `key_dst`: URI della risorsa.
    - Timestamp (es. Unix epoch).
-   - Array di feature contestuali dell'arco (es. trust di JA3, sonde Snort, metodo HTTP, ruolo/clearance).
-   - **Attributi statici delle entità** (`src_feat` / `dst_feat`): ruolo, clearance,
-     device tier. L'orchestrator/OPA li conosce già per ogni richiesta, quindi vengono
-     passati per-evento (nessun datastore aggiuntivo). Sono il segnale che permette al
-     modello di rilevare le **violazioni di policy** — anomalie che hanno feature d'arco
-     identiche al traffico benigno. Poiché il training avviene su dati sintetici, gli
-     utenti in produzione saranno tutti "nuovi": è **obbligatorio** passare queste feature
-     perché il modello conosca i privilegi dell'utente reale appena incontrato.
+   - `features`: messaggio d'arco a **`msg_dim` float** (attualmente **10**, vedi
+     `TGNConfig.msg_dim`; `/infer` rifiuta con 422 una lunghezza diversa):
+     `[ja3, s1, s2, s3, metodo, ruolo, clearance, bytes_in, bytes_out, log1p(Δt utente)/10]`.
+     Solo campi disponibili **al momento della decisione**: nessun campo di risposta
+     (lo status HTTP è stato rimosso proprio per questo — vedi il docstring di
+     `stream_synthetic`).
+   - **Attributi statici delle entità** (`user_feat` / `device_feat` / `dst_feat`, len ==
+     `node_feat_dim` = 16): ruolo, clearance, device tier. L'orchestrator/OPA li conosce
+     già per ogni richiesta, quindi vengono passati per-evento (nessun datastore
+     aggiuntivo). Sono il segnale che permette al modello di rilevare le **violazioni di
+     policy** — anomalie che hanno feature d'arco identiche al traffico benigno. Poiché il
+     training avviene su dati sintetici, gli utenti in produzione saranno tutti "nuovi": è
+     **obbligatorio** passare queste feature perché il modello conosca i privilegi
+     dell'utente reale appena incontrato. *Non esiste alcun campo `src_feat`*: le
+     revisioni precedenti di questo documento lo citavano, ma l'API non l'ha mai avuto.
 
 2. **Gestione del `NodeRegistry`**
    All'arrivo di una tupla, il TGN utilizza il suo `NodeRegistry` per mappare le chiavi alfanumeriche (es. un nuovo indirizzo IP mai visto prima) in indici interi in tempo reale. Il sistema supporta l'ingresso di nodi non visti durante il training (spazio dei nodi dinamico e illimitato).
@@ -110,26 +118,41 @@ Configurazione via variabili d'ambiente (tutte opzionali):
 {
   "key_user": "alice",             // chiave utente (string o int); "anonymous" per guest
   "key_device": "tpm:a1b2c3",      // chiave dispositivo: "tpm:<id>" | "ck:<cookie>" | "ipdev:<ip>"
-  "key_source": "src:10.0.0.7",    // opz.: "src:<ip>" del client (se assente, niente arco IP→device)
+  "key_source": "src:10.0.0.7",    // opz.: "src:<ip>" del client (se assente, niente arco source→config)
+  "key_config": "conf:771,4865-...", // opz.: fingerprint TLS/JA3; default "conf:guest"
   "key_dst": "/api/v1/documents",  // chiave risorsa (URI normalizzato)
   "timestamp": 1717000000,         // intero (es. Unix epoch)
-  "features": [1.0, 0.0, 0.0, 0.0, 0.0, 0.67, 0.5], // messaggio d'arco (7 float):
+  "features": [1.0, 0.0, 0.0, 0.0, 0.0, 0.67, 0.5, 0.12, 0.08, 0.31],
+                                              // messaggio d'arco: len == msg_dim (10)
                                               // [0] JA3: 1.0 (ok), 0.0 (anomalia)
                                               // [1-3] Sonde Snort s1, s2, s3 (0.0 o 1.0)
                                               // [4] Metodo HTTP (0=GET, 1=POST, 2=PUT, 3=DELETE, 4=PATCH)
                                               // [5] Ruolo normalizzato (idx/(len-1))
                                               // [6] Clearance normalizzata (idx/4)
-  "src_feat": [/* ... */],         // opz., attributi statici, len == node_feat_dim (16)
-  "dst_feat": [/* ... */]          // opz.; per le risorse preregistrate il RISCHIO
+                                              // [7] bytes_in normalizzati
+                                              // [8] bytes_out normalizzati
+                                              // [9] log1p(Δt dall'ultima richiesta dell'utente)/10
+  "user_feat": [/* ... */],        // opz., attributi statici, len == node_feat_dim (16)
+  "device_feat": [/* ... */],      // opz., idem (tier in node_feat[2])
+  "dst_feat": [/* ... */],         // opz.; per le risorse preregistrate il RISCHIO
                                    // (node_feat[*,4]) è già baked nel checkpoint, quindi
                                    // dst_feat NON è necessario in produzione.
+  "flagged": false                 // solo /update: l'is_anomaly restituito dal /infer
+                                   // precedente. OPA può fare ALLOW su un evento che il
+                                   // modello ha segnalato: rimandarlo indietro è ciò che
+                                   // arma il precursore kill-chain e abbassa il trust.
 }
 ```
 
-Il messaggio d'arco viaggia sull'arco di accesso `utente → risorsa`; i due archi di
-binding (`IP → device`, `device → utente`) portano messaggi nulli e catturano le
-rotture di pattern relazionale (es. furto di credenziali: IP e device mai visti che si
-agganciano a un utente noto). Lo score restituito è il massimo sugli archi presenti.
+> ⚠️ Non esiste un campo `src_feat` (le revisioni precedenti di questo documento lo
+> mostravano): i nomi corretti sono `user_feat` / `device_feat` / `dst_feat`. Le lunghezze
+> di `features` e delle `*_feat` sono validate: una lunghezza sbagliata riceve un **422**.
+
+Il messaggio d'arco viaggia sull'arco di accesso `utente → risorsa`; i quattro archi di
+binding (`source → config`, `config → device`, `config → utente`, `device → utente`)
+portano messaggi nulli e catturano le rotture di pattern relazionale (es. furto di
+credenziali: IP, config e device mai visti che si agganciano a un utente noto). Lo score
+restituito è il massimo sugli archi presenti.
 
 Risposta di `/infer` e `/score`:
 
@@ -150,10 +173,10 @@ Lo schema in due step della sezione precedente si realizza così:
 
 Essendo stato addestrato su dati sintetici, in produzione il modello vedrà solo entità (utenti/IP) mai viste prima. Grazie alla gestione dinamica della memoria e all'uso dell'**Hashed Identity**, il modello alloca in tempo reale un nuovo slot in RAM per ogni identità sconosciuta (cold-start) calcolando al volo l'hashing scalabile dell'URI (`hash(URI) % buckets`). Questo fornisce da sùbito una base di embedding coerente e induttiva anche per i nodi appena scoperti.
 
-Per questo motivo, l'Orchestrator deve iniettare i privilegi a runtime tramite `src_feat`:
+Per questo motivo, l'Orchestrator deve iniettare i privilegi a runtime tramite `user_feat`:
 
-- **Utenti Autenticati (Nuovi nodi)**: L'Orchestrator deve calcolare ruolo e clearance (es. estratti dal JWT) in valori float e passarli in `src_feat`. Il modello li scriverà nello slot appena allocato, e da quel momento saprà applicare le policy corrette per quell'utente.
-- **Utenti Guest (Non autenticati)**: Quando la richiesta (es. a `/login` o endpoint pubblici) arriva da un IP senza sessione, `key_user` sarà `anonymous`, la chiave sorgente `src:<ip>`, e `src_feat` dovrà essere un array di zeri (`[0.0, 0.0, ...]`). Questo corrisponde al livello minimo di privilegi (Clearance=0, Tier=0). Il modello permetterà le chiamate alle rotte pubbliche, ma bloccherà come anomalo qualsiasi tentativo verso endpoint protetti. Appena l'utente farà login, l'Orchestrator comincerà a passare le sue feature reali, "promuovendone" di fatto i privilegi.
+- **Utenti Autenticati (Nuovi nodi)**: L'Orchestrator deve calcolare ruolo e clearance (es. estratti dal JWT) in valori float e passarli in `user_feat`. Il modello li scriverà nello slot appena allocato, e da quel momento saprà applicare le policy corrette per quell'utente.
+- **Utenti Guest (Non autenticati)**: Quando la richiesta (es. a `/login` o endpoint pubblici) arriva da un IP senza sessione, `key_user` sarà `anonymous`, la chiave sorgente `src:<ip>`, e `user_feat` dovrà essere un array di zeri (`[0.0, 0.0, ...]`). Questo corrisponde al livello minimo di privilegi (Clearance=0, Tier=0). Il modello permetterà le chiamate alle rotte pubbliche, ma bloccherà come anomalo qualsiasi tentativo verso endpoint protetti. Appena l'utente farà login, l'Orchestrator comincerà a passare le sue feature reali, "promuovendone" di fatto i privilegi.
 
 ### Vincoli operativi
 
@@ -170,7 +193,7 @@ Per questo motivo, l'Orchestrator deve iniettare i privilegi a runtime tramite `
 # Score read-only di un evento
 curl -s -X POST http://localhost:8088/infer \
   -H 'Content-Type: application/json' \
-  -d '{"key_user":"alice","key_device":"tpm:a1b2c3","key_source":"src:10.0.0.7","key_dst":"/api/v1/documents","timestamp":1717000000,"features":[1.0,0.0,0.0,0.0,0.0,0.67,0.5]}'
+  -d '{"key_user":"alice","key_device":"tpm:a1b2c3","key_source":"src:10.0.0.7","key_config":"conf:guest","key_dst":"/api/v1/documents","timestamp":1717000000,"features":[1.0,0.0,0.0,0.0,0.0,0.67,0.5,0.12,0.08,0.31]}'
 # -> {"anomaly_score":0.83,"is_anomaly":true,"threshold":0.6264}
 ```
 
@@ -184,11 +207,14 @@ type Event struct {
     KeyUser   string    `json:"key_user"`
     KeyDevice string    `json:"key_device"`           // "tpm:<id>" | "ck:<cookie>" | "ipdev:<ip>"
     KeySource string    `json:"key_source,omitempty"` // "src:<ip>" del client (opzionale)
+    KeyConfig string    `json:"key_config,omitempty"` // "conf:<ja3>" (default "conf:guest")
     KeyDst    string    `json:"key_dst"`
     Timestamp int64     `json:"timestamp"`
-    Features  []float64 `json:"features"`
-    SrcFeat   []float64 `json:"src_feat,omitempty"`
+    Features  []float64 `json:"features"`             // len == msg_dim (10)
+    UserFeat  []float64 `json:"user_feat,omitempty"`  // len == node_feat_dim (16)
+    DeviceFeat []float64 `json:"device_feat,omitempty"`
     DstFeat   []float64 `json:"dst_feat,omitempty"`
+    Flagged   bool      `json:"flagged,omitempty"`    // solo /update: is_anomaly del /infer
 }
 type ScoreResp struct {
     AnomalyScore float64 `json:"anomaly_score"`
@@ -213,15 +239,16 @@ func post(base, path string, in, out any) error {
 }
 
 // Per ogni evento di accesso:
-ev := Event{KeyUser: userID, KeyDevice: deviceID, KeySource: clientIP,
+ev := Event{KeyUser: userID, KeyDevice: deviceID, KeySource: clientIP, KeyConfig: ja3,
     KeyDst: resURI, Timestamp: time.Now().Unix(),
-    Features: edgeSignals, SrcFeat: srcAttrs, DstFeat: dstAttrs}
+    Features: edgeSignals, UserFeat: userAttrs, DeviceFeat: devAttrs, DstFeat: dstAttrs}
 
 var s ScoreResp
 if err := post(base, "/infer", ev, &s); err != nil { /* fail-closed */ }
 
 allow := opa.Decide(req, s.AnomalyScore)   // OPA è il decisore finale
 if allow {
+    ev.Flagged = s.IsAnomaly               // riporta il verdetto: arma precursore + trust
     _ = post(base, "/update", ev, nil)     // committa SOLO se approvato
 }
 ```
