@@ -194,16 +194,17 @@ class ZTAStreamSimulator:
 
     def __init__(
         self,
-        num_users: int = 50,
-        num_devices: int = 80,
-        num_sources: int = 150,
-        num_configs: int = 40,
+        num_users: int = 1000,
+        num_guests: int = 1000,
+        num_devices: int = 2000,
+        num_sources: int = 1500,
+        num_configs: int = 400,
         num_resources: int = 19,
         num_wipe_slots: int = 16,
         num_theft_slots: int = 64,
         benign_explore_prob: float = 0.15,
         p_roam: float = 0.10,
-        p_shared_device: float = 0.20,
+        p_shared_device: float = 0.30,
         p_cookie_wipe: float = 0.0003,
         p_cred_theft: float = 0.0012,
         admission_horizon: int | None = None,
@@ -221,7 +222,9 @@ class ZTAStreamSimulator:
             f"num_resources ({num_resources}) must equal len(RESOURCE_URIS) "
             f"({len(RESOURCE_URIS)}): set TGNConfig.num_resources accordingly"
         )
-        self.num_users = num_users + 1  # +1 per lo slot "anonymous"
+        self.num_registered_users = num_users
+        self.num_guests = num_guests
+        self.num_users = num_users + num_guests
         self.num_devices = num_devices
         self.num_sources = num_sources
         self.num_configs = num_configs
@@ -252,8 +255,8 @@ class ZTAStreamSimulator:
         # Clearance is NOT independent: like policy.rego it derives from the role
         # (ruoli_to_blp), so the role/clearance pair in every benign message is exactly
         # what the JWT would carry in production.
-        self.user_roles = [str(np.random.choice(ROLES)) for _ in range(num_users)]
-        self.user_roles.append("guest")
+        self.user_roles = [str(np.random.choice(ROLES)) for _ in range(self.num_registered_users)]
+        self.user_roles.extend(["guest"] * self.num_guests)
         self.user_clearances = [ROLE_CLEARANCE[r] for r in self.user_roles]
 
         # --- physical machines (stable across cookie wipes) -------------------------
@@ -264,10 +267,10 @@ class ZTAStreamSimulator:
         # Owner(s): base round-robin owner + extra users on shared machines.
         self.machine_users: list[list[int]] = []
         for m in range(num_devices):
-            users = [m % num_users]
+            users = [m % self.num_registered_users]
             if np.random.rand() < p_shared_device:
-                extra = np.random.randint(1, 3)
-                pool = [u for u in range(num_users) if u not in users]
+                extra = np.random.randint(1, 4)
+                pool = [u for u in range(self.num_registered_users) if u not in users]
                 users += list(np.random.choice(pool, size=min(extra, len(pool)), replace=False))
             self.machine_users.append(users)
 
@@ -296,9 +299,10 @@ class ZTAStreamSimulator:
 
         # --- external keys per node slot ---------------------------------------------
         self.keys: list[str | None] = [None] * self.num_nodes
-        for u in range(num_users):
+        for u in range(self.num_registered_users):
             self.keys[self.user_lo + u] = f"user_{u:04d}"
-        self.keys[self.user_lo + num_users] = "anonymous"  # Slot fisso per l'utente anonimo
+        for g in range(self.num_guests):
+            self.keys[self.user_lo + self.num_registered_users + g] = f"guest_{g:04d}"
         for m in range(num_devices):
             tier = self.machine_tiers[m]
             self.keys[self.dev_lo + m] = (
@@ -349,7 +353,7 @@ class ZTAStreamSimulator:
         self._valid_cache: dict[str, list[tuple[int, int]]] = {}
         self._violation_cache: dict[str, list[tuple[int, int]]] = {}
         self.user_habitual: list[set[tuple[int, int]]] = []
-        for u in range(num_users):
+        for u in range(self.num_users):
             valid = self._policy_valid_actions(self.user_roles[u])
             if valid:
                 k = max(1, len(valid) // 2)
@@ -384,6 +388,7 @@ class ZTAStreamSimulator:
         self._next_theft_slot = 0
         self._slot_age: dict[int, int] = {}      # events seen by a re-keyed (wiped) slot
         self.compromised_state: dict[int, int] = {}  # machine -> kill-chain phase
+        self.compromised_chain_remaining: dict[int, int] = {} # machine -> steps left in lateral chain
         self._active_thefts: list[dict] = []
 
     # --- helpers ------------------------------------------------------------------------
@@ -478,8 +483,24 @@ class ZTAStreamSimulator:
         }
 
     # --- one event -------------------------------------------------------------------
+    def _current_interarrival_scale(self) -> float:
+        """Returns a time-dependent scale for the exponential inter-arrival distribution
+        to simulate circadian rhythms (higher rate during work hours)."""
+        day_sec = self.t % 86400
+        weekday = (self.t // 86400) % 7
+        is_weekend = weekday >= 5
+        
+        if is_weekend:
+            return 1200.0  # Slow weekend traffic
+            
+        # Work hours: 08:00 to 18:00
+        if 28800 <= day_sec <= 64800:
+            return 45.0  # High work hour traffic
+        else:
+            return 600.0  # Slow night traffic
+
     def step(self) -> dict:
-        self.t += int(np.random.exponential(scale=300.0))
+        self.t += int(np.random.exponential(scale=self._current_interarrival_scale()))
         self.step_count += 1
 
         # Credential-theft incidents: a burst of requests from a never-seen attacker
@@ -503,7 +524,7 @@ class ZTAStreamSimulator:
             cfg_slot = self.cfg_lo + self.num_configs + k
             self.keys[cfg_slot] = f"conf:atk-{k:03d}"  # ...and a never-seen JA3
             incident = {
-                "victim": int(np.random.randint(0, self.num_users)),
+                "victim": int(np.random.randint(0, self.num_registered_users)),
                 "dev_slot": dev_slot,
                 "src_slot": self.src_lo + self.num_sources + k,
                 "cfg_slot": cfg_slot,
@@ -554,11 +575,11 @@ class ZTAStreamSimulator:
             machine in self.compromised_state and np.random.rand() < 0.3
         )  # compromised machines blend in 70% of the time
 
-        is_anonymous = not is_anomalous and random.random() < 0.10
+        is_anonymous = not is_anomalous and random.random() < 0.15
 
         if not is_anomalous:
             if is_anonymous:
-                user = self.num_users - 1  # anonymous user
+                user = self.num_registered_users + int(np.random.randint(0, self.num_guests))
                 u_role, u_clearance = "guest", 0
                 config = self.cfg_lo  # conf:guest
                 dev_slot = self._guest_dev_slot if self._guest_dev_slot is not None else self.dev_lo + machine
@@ -586,9 +607,12 @@ class ZTAStreamSimulator:
             if state == 1:
                 anomaly_type = "context"  # Recon phase (often triggers Snort)
                 self.compromised_state[machine] = 2
+                self.compromised_chain_remaining[machine] = int(np.random.randint(5, 12))
             elif state == 2:
-                anomaly_type = "lateral"  # Lateral movement phase
-                self.compromised_state[machine] = 3
+                anomaly_type = "lateral"  # Lateral movement phase chain
+                self.compromised_chain_remaining[machine] -= 1
+                if self.compromised_chain_remaining[machine] <= 0:
+                    self.compromised_state[machine] = 3
             else:
                 anomaly_type = np.random.choice(["policy", "context", "lateral"])
 
@@ -673,12 +697,13 @@ class SyntheticStream:
 
 
 def generate_streaming_data(
-    num_users=50,
-    num_devices=80,
-    num_sources=150,
-    num_configs=40,
+    num_users=1000,
+    num_guests=1000,
+    num_devices=2000,
+    num_sources=1500,
+    num_configs=400,
     num_resources=19,
-    num_events=5000,
+    num_events=50000,
     *,
     num_wipe_slots=16,
     num_theft_slots=64,
@@ -698,7 +723,7 @@ def generate_streaming_data(
     fully reproducible — ``random.choice`` is used alongside ``np.random``.
     """
     sim = ZTAStreamSimulator(
-        num_users=num_users, num_devices=num_devices, num_sources=num_sources,
+        num_users=num_users, num_guests=num_guests, num_devices=num_devices, num_sources=num_sources,
         num_configs=num_configs, num_resources=num_resources, num_wipe_slots=num_wipe_slots,
         num_theft_slots=num_theft_slots, benign_explore_prob=benign_explore_prob,
         p_roam=p_roam, p_shared_device=p_shared_device, p_cookie_wipe=p_cookie_wipe,

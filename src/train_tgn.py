@@ -473,7 +473,12 @@ def train_tgn(cfg: TGNConfig = TGNConfig(), *, dataset: "StreamData | None" = No
     train_end, val_end = n_train, n_train + n_val
     bs = cfg.batch_size
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    if torch.cuda.is_available():
+        device = torch.device("cuda")
+    elif torch.backends.mps.is_available():
+        device = torch.device("mps")
+    else:
+        device = torch.device("cpu")
     print(f"Using device: {device}")
     # NOTE: the data generator's per-IP authorised-resource matrix is intentionally NOT
     # used during training — see _sample_structural_negatives. Using it would re-introduce
