@@ -7,7 +7,7 @@ name = "graphagate"
 version = "0.1.0"
 description = "Streaming Temporal Graph Network for unsupervised anomaly detection in Zero Trust Architectures"
 readme = "README.md"
-requires-python = ">=3.10,<3.13"
+requires-python = ">=3.10,<3.15"
 license = { file = "LICENSE" }
 dependencies = [
     "torch==2.12.*",
