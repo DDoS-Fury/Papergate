@@ -33,7 +33,10 @@ import numpy as np
 from generator import event_generator
 
 BASE_URL = "http://localhost:8888"
-TYPE_NAMES = {0: "Benign", 1: "Policy", 2: "Contextual", 3: "Lateral", 4: "CredTheft"}
+TYPE_NAMES = {
+    0: "Benign", 1: "Policy", 2: "Contextual", 3: "Lateral", 4: "CredTheft",
+    5: "Exfil", 6: "BenignDenied",
+}
 # Unloaded single-client P50 round-trip (measured by test_client.py) — the yardstick
 # the load phase reports contention against. The service serialises on one global
 # lock, so the headline finding is the lock-bound throughput ceiling, NOT scaling.
@@ -44,6 +47,17 @@ RESOURCE_URIS = [
     "/", "/api/v1/personnel", "/api/v1/documents", "/api/v1/nuclear-materials",
     "/api/v1/reactor-parameters", "/api/v1/trusted-guard/sanitized-delete-personnel",
 ]
+
+
+def _msg(ja3: float) -> list[float]:
+    """A signal-clean message of exactly ``TGNConfig.msg_dim`` values.
+
+    Layout: ``[ja3, s1, s2, s3, method, role, clearance, bytes_in, bytes_out, Δt]``. Built
+    from the config rather than written out as a literal so it tracks the schema.
+    """
+    from graphagate.config import TGNConfig
+
+    return [ja3] + [0.0] * (TGNConfig().msg_dim - 1)
 
 
 def _pct(xs, q):
@@ -146,7 +160,9 @@ def _unique_event(gid, n):
         "key_source": f"src:10.{a}.{b}.{c}",
         "key_dst": RESOURCE_URIS[n % len(RESOURCE_URIS)],
         "timestamp": 20_000_000 + gid * 10_000_000 + n,
-        "features": [0.13, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        # Padded to the served schema: /infer validates len(features) == hp["msg_dim"],
+        # so a fixed-length literal 422s whenever the message layout changes.
+        "features": _msg(0.13),
     }
 
 

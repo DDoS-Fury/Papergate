@@ -42,15 +42,32 @@ def causal_hist_features(src, dst, y) -> np.ndarray:
     return feats
 
 
-def causal_src_seen(src, y) -> np.ndarray:
-    """Boolean (N,): has this src had >=1 benign event strictly before? (cold-start split)."""
+def causal_src_seen(src, y, *, label_horizon: int | None = None, pred=None) -> np.ndarray:
+    """Boolean (N,): has this src had >=1 benign event strictly before? (cold-start split).
+
+    ``label_horizon`` is the index past which ground-truth labels are no longer available
+    to the system — in practice ``val_end``. Beyond it the "was this benign" gate uses
+    ``pred`` (the model's own decision, 1 = flagged) instead of ``y``; with ``pred=None``
+    every event past the horizon counts as benign, i.e. the commit-everything gate.
+
+    Without a horizon the whole array is walked against ``y``, so membership of a *test*
+    event in the warmed vs cold partition depended on the ground-truth labels of the test
+    events before it — an oracle partition. The headline numbers never used it, but
+    ``recall_warmed`` / ``recall_cold`` were not deployable quantities.
+    """
     src = np.asarray(src); y = np.asarray(y)
+    pred = None if pred is None else np.asarray(pred)
+    horizon = len(src) if label_horizon is None else int(label_horizon)
     seen: set = set()
     out = np.zeros(len(src), dtype=bool)
     for i in range(len(src)):
         s = int(src[i])
         out[i] = s in seen
-        if y[i] == 0:
+        if i < horizon:
+            is_benign = y[i] == 0
+        else:
+            is_benign = True if pred is None else pred[i] == 0
+        if is_benign:
             seen.add(s)
     return out
 

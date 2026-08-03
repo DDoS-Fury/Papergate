@@ -167,6 +167,15 @@ class EventIn(BaseModel):
     dst_feat: Optional[list[float]] = Field(
         None, description="Destination static attributes."
     )
+    flagged: bool = Field(
+        False,
+        description=(
+            "/update only: the `is_anomaly` the preceding /infer returned. OPA may ALLOW "
+            "an event the model flagged; passing it back arms the kill-chain precursor "
+            "and drops the trust feature, which otherwise never fire on this flow. "
+            "Ignored by /infer and /score, which know their own verdict."
+        ),
+    )
 
 
 class ScoreOut(BaseModel):
@@ -308,6 +317,7 @@ def update(ev: EventIn) -> OkOut:
             key_source=ev.key_source, key_config=ev.key_config,
             user_feat=ev.user_feat, device_feat=ev.device_feat, dst_feat=ev.dst_feat,
             guest_device_fallback=bool(STATE.hp.get("guest_device_fallback", False)),
+            flagged=ev.flagged,
         )
     return OkOut()
 

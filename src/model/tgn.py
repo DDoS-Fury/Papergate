@@ -102,8 +102,17 @@ class ZTATemporalGraphNetwork(nn.Module):
         # Static per-node attributes (role / clearance / device tier), indexed by the
         # global node id. Populated from the data at train time and persisted in the
         # state_dict; dynamic entities admitted at serving time write their slot here.
-        self.register_buffer("node_feat", torch.zeros(num_nodes, node_feat_dim))
-        
+        _nf = torch.zeros(num_nodes, node_feat_dim)
+        # Column 14 is the trust score, and its neutral value is 1.0 (fully trusted), not
+        # 0.0. Zero-initialising the whole buffer meant every slot in the capacity headroom
+        # — i.e. every entity first seen at SERVING time — entered at minimum trust, the
+        # value that during training only followed two anomalous events on that entity,
+        # while training entities and evicted-and-recycled slots both entered at 1.0.
+        if node_feat_dim > 14:
+            _nf[:, 14] = 1.0
+        self.register_buffer("node_feat", _nf)
+
+
         # Hashed Identity Trick buffer
         self.register_buffer("node_hash", torch.zeros(num_nodes, dtype=torch.long))
         self.hash_emb = nn.Embedding(hash_buckets, hash_dim)
@@ -158,8 +167,19 @@ class ZTATemporalGraphNetwork(nn.Module):
         # serve_tgn.precursor_boost). It is NOT a trained input (benign-only training
         # would make it a dead feature). Persisted/purged like last_contact.
         self.recent_alert = {}
-        self.precursor_half_life = 100000.0
-        self.precursor_max_boost = 3.0
+        # Single source of truth: graphagate.config.TGNConfig. These stale class defaults
+        # (100000.0 / 3.0) were the values that saturated every score to 1.0 after a single
+        # cold-start alert — the reason config.py lowered them. Importing here keeps the
+        # three copies of this knob (config, model, serve_tgn fallback) from drifting apart.
+        from graphagate.config import TGNConfig as _Cfg
+
+        self.precursor_half_life = _Cfg.precursor_half_life
+        self.precursor_max_boost = _Cfg.precursor_max_boost
+        # Recency cap / never-seen sentinel for both Δt inputs — see config.delta_t_cap
+        # and ``pair_delta_t``. Runtime attribute (not a buffer): it is a decoding
+        # convention, and persisting it would let an old checkpoint silently override a
+        # corrected value.
+        self.delta_t_cap = _Cfg.delta_t_cap
 
         # Ablation switches (runtime-only, not persisted): the normal model keeps them
         # ON. Used by the ablation driver to isolate the contribution of the structural
@@ -188,8 +208,21 @@ class ZTATemporalGraphNetwork(nn.Module):
         ``edge_index`` is relabelled to local positions in ``n_id`` and
         ``hist_t`` / ``hist_msg`` are the corresponding *historical* edge attributes
         supplied by the neighbour loader — not the event currently being scored.
+
+        The GNN's relative-time encoding reads ``last_update`` straight from the memory
+        buffer rather than from the value ``TGNMemory.forward`` returns. PyG branches on
+        ``self.training``: in train mode it recomputes ``last_update`` as
+        ``scatter(t, idx, reduce='max')``, which is **0** for every node with no pending
+        message — i.e. almost the whole multi-hop neighbourhood. That zero flows into
+        ``rel_t = last_update[src] - t`` in the GNN, so with timestamps reaching ~1e7 the
+        model would train on ``rel_t ~ -1e7`` and serve on small values, through a
+        *periodic* (cosine) time encoding that maps the two regimes to uncorrelated
+        vectors. Reading the buffer keeps train and serve on the same distribution.
+        (The memory state ``z`` itself still uses PyG's train-mode update, which is
+        intended: that is the standard TGN "updated memory" trick.)
         """
-        z, last_update = self.memory(n_id)
+        z, _last_update_train = self.memory(n_id)
+        last_update = self.memory.last_update[n_id]
         nf = self.node_feat[n_id]
         h_idx = self.node_hash[n_id]
         he = self.hash_emb(h_idx)
@@ -198,6 +231,46 @@ class ZTATemporalGraphNetwork(nn.Module):
         x = torch.cat([z, nf, he], dim=-1)  # identity-aware node features
         z = self.gnn(x, last_update, edge_index, hist_t, hist_msg)
         return z
+
+    def pair_delta_t(self, src_ids, dst_ids, t_vals, device):
+        """Recency of each ``src→dst`` pair, capped, with a never-seen sentinel.
+
+        A pair with no committed contact gets exactly ``delta_t_cap`` — *not* the
+        absolute clock, which is what a ``last_contact.get(..., 0)`` default produces.
+        The absolute-clock encoding drifted along the stream (train, val and test each
+        saw a different "never seen" value for the same state, and a long-lived server
+        drifted away from all three) and handed the InfoNCE objective a one-scalar
+        shortcut, since every random negative is by construction a never-seen pair.
+        Capping also collapses "silent for a week" onto "never seen", which is the
+        operational claim we actually want the encoder to make.
+
+        Shared by the training replay, the training objective and the serving path so
+        the three cannot drift; the same cap applies to ``src_delta_t``.
+        """
+        cap = float(self.delta_t_cap)
+        out = []
+        for s, d, t in zip(src_ids, dst_ids, t_vals):
+            last = self.last_contact.get((int(s), int(d)))
+            out.append(cap if last is None else min(max(float(t) - float(last), 0.0), cap))
+        return torch.tensor(out, dtype=torch.float, device=device)
+
+    def src_delta_t(self, src_ids, t_vals, device=None):
+        """Recency of each src entity's own memory, capped, with the same sentinel.
+
+        ``last_update == 0`` is the cold-start marker of ``TGNMemory``: an entity that
+        has never been committed. Without the sentinel it produced Δt = t_now, the same
+        drifting encoding ``pair_delta_t`` documents.
+        """
+        cap = float(self.delta_t_cap)
+        if not torch.is_tensor(src_ids):
+            src_ids = torch.as_tensor(list(src_ids), dtype=torch.long,
+                                      device=self.memory.last_update.device)
+        if not torch.is_tensor(t_vals):
+            t_vals = torch.as_tensor(list(t_vals), dtype=torch.float, device=src_ids.device)
+        last = self.memory.last_update[src_ids].to(torch.float)
+        d = (t_vals.to(torch.float).to(last.device) - last).clamp(min=0.0, max=cap)
+        d = torch.where(last <= 0, torch.full_like(d, cap), d)
+        return d if device is None else d.to(device)
 
     def _hist_triplet(self, src_ids, dst_ids, device):
         """``[log1p(pair_count), log1p(src_count), pair_count/(src_count+1)]`` per pair."""

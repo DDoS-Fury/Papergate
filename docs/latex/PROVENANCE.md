@@ -41,13 +41,15 @@ nei `tasks/runs/*.log`).
 - **Pannello B** (`tab:v3v4`): TGN, keying **per-cookie** (`guest_device_fallback=False`),
   stream standard 200k eventi / 15 epoche, decisione cost-sensitive **instradata**.
   Variante `use_config_node` ON = v4 (nodo config), OFF = ≈v3 (catena legacy a 4 nodi).
-- **Pannello A** (`tab:baselines`): stesso stream standard. La **riga TGN** riusa la colonna
-  **v3 per-cookie** del Pannello B; le **baseline** (GNN non temp., One-Class SVM, Isolation
-  Forest, XGBoost) girano sotto la configurazione **deployable** (`dev:guest`,
-  `guest_device_fallback=True`). Le recall di Pannello A sono tutte alla **soglia globale 1%
-  FPR** (apples-to-apples); quelle di Pannello B sono **instradate** (operative).
-- Questo **protocollo misto** (TGN = v3 per-cookie, baseline = deployable) è storico ed è
-  mantenuto deliberatamente: unificarlo su `v4 + dev:guest` è il task **P3** (rimandato).
+- **Pannello A** (`tab:baselines`): stesso stream standard, **protocollo unico per tutte le
+  righe** — TGN e baseline (GNN non temp., One-Class SVM, Isolation Forest, XGBoost) girano
+  tutte sotto la configurazione **deployable** (`dev:guest`, `guest_device_fallback=True`,
+  v4) e tutte alla **soglia globale 1% FPR**. Quelle di Pannello B sono invece **instradate**
+  (operative).
+- ⚠️ Il protocollo misto precedente (riga TGN = v3 per-cookie riusata dal Pannello B, baseline
+  = deployable) è stato **rimosso**: `run_panel_a_tgn` esegue ora il TGN sotto lo stesso
+  protocollo delle baseline. **Le tabelle A attualmente versionate provengono dal protocollo
+  vecchio e da un generatore con label leakage: vanno rigenerate.**
 
 ## Semantica delle metriche (chiavi JSON → celle)
 

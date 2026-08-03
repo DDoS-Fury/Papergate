@@ -14,11 +14,11 @@ What it runs (all ``save=False`` — the deployable artifact in ``public/`` is u
 ----------------------------------------------------------------------------------------
 * **Panel B** — TGN, *per-cookie* keying (``guest_device_fallback=False``), the standard
   200k/15ep stream, ``use_config_node`` on (v4) vs off (≈v3). 3 seeds × 2 = 6 runs.
-* **Panel A** — same standard stream under the *deployable* config (``dev:guest``):
-  the GNN / One-Class SVM / Isolation Forest / XGBoost baselines, 3 seeds each. The
-  **TGN row** of Panel A is reused from Panel B's *v3 per-cookie* column (the historical
-  provenance: TGN row = v3 per-cookie, baselines = deployable — kept as-is here; unifying
-  the protocol is P3, deferred).
+* **Panel A** — same standard stream under the *deployable* config (``dev:guest``, v4),
+  **one protocol for every row**: the TGN plus the GNN / One-Class SVM / Isolation Forest
+  / XGBoost baselines, |seeds| runs each, all at the global 1% FPR threshold. Earlier
+  revisions reused Panel B's *v3 per-cookie* TGN column here, so the comparison table
+  mixed two configurations; the TGN row is now run under the baselines' own protocol.
 
 Outputs (under the component root)
 ----------------------------------
@@ -43,7 +43,7 @@ import numpy as np
 
 from graphagate.config import REPO_ROOT, TGNConfig
 from graphagate.train_tgn import train_tgn
-from graphagate.report_metrics import dump_json, fmt_ms, latex_cell, mean_std
+from graphagate.report_metrics import dump_json, fmt_ms, latex_cell, mean_std, paired_delta
 
 SEEDS = [42, 7, 123]
 TESTS_DIR = Path(__file__).resolve().parent
@@ -155,6 +155,25 @@ def run_panel_b(seeds: list[int]) -> dict:
     return payload
 
 
+def run_panel_a_tgn(seeds: list[int]) -> list[dict]:
+    """TGN under the SAME protocol as the Panel A baselines: v4, deployable (dev:guest).
+
+    Panel A used to reuse Panel B's ``v3`` per-cookie column for the TGN row while every
+    baseline ran deployable — a comparison table whose rows came from two different
+    configurations, disclosed only in PROVENANCE.md. This runs the TGN under the
+    baselines' own protocol so the table compares like with like.
+    """
+    out = []
+    for seed in seeds:
+        cfg = dataclasses.replace(TGNConfig(), seed=seed)  # deployable: dev:guest, v4
+        print("\n" + "=" * 80)
+        print(f"=== PANEL A: TGN | seed={seed} | deployable (dev:guest, v4), "
+              f"{cfg.num_events} ev / {cfg.epochs} ep ===")
+        print("=" * 80, flush=True)
+        out.append(train_tgn(cfg, save=False, use_config_node=True))
+    return out
+
+
 def run_panel_a_baselines(seeds: list[int]) -> dict:
     """GNN / OC-SVM / Isolation Forest / XGBoost on the deployable stream, |seeds| runs each."""
     raw = {}
@@ -187,14 +206,18 @@ def _cell(summary: dict, key: str, *, bold=False) -> str:
 
 
 def _delta(a: dict, b: dict, key: str) -> str:
-    """Signed Δ (mean a − mean b) with a significance marker vs the noise band."""
-    am, asd = a[key]["mean"], a[key]["std"]
-    bm, bsd = b[key]["mean"], b[key]["std"]
-    d = am - bm
-    if any(math.isnan(x) for x in (am, bm)):
+    """Signed Δ (a − b) from the PAIRED per-seed differences, with a significance marker.
+
+    Both arms are run under the same seeds, so the comparison is paired: the per-seed
+    differences are what carries the signal. The dagger marks a Δ that the paired test
+    does not establish (Wilcoxon signed-rank, α=0.05) — at 3 seeds that is everything,
+    which is the honest reading of the current grid.
+    """
+    if any(math.isnan(x) for x in (a[key]["mean"], b[key]["mean"])):
         return "---"
-    sig = "" if abs(d) > max(asd, bsd) else r"$^{\dagger}$"  # dagger = within noise band
-    return f"${d:+.3f}${sig}"
+    res = paired_delta(a[key]["vals"], b[key]["vals"])
+    sig = "" if res["significant"] else r"$^{\dagger}$"
+    return f"${res['mean_delta']:+.3f}${sig}"
 
 
 def _emit_panel_b_tex(summary: dict):
@@ -279,20 +302,20 @@ def main():
                        panel_b["summary"], list(PANEL_B_CELLS))
 
     if "A" in args.panels or args.panels == "AB":
-        # Panel A needs the v3 per-cookie TGN row; reuse Panel B if available, else run it.
-        if panel_b is None:
-            panel_b = run_panel_b(args.seeds)
-        tgn_row = _summarise(panel_b["raw"]["v3"], PANEL_A_TGN_CELLS)
+        # Unified protocol: the TGN row runs deployable/v4, exactly like the baselines.
+        tgn_raw = run_panel_a_tgn(args.seeds)
+        tgn_row = _summarise(tgn_raw, PANEL_A_TGN_CELLS)
         base = run_panel_a_baselines(args.seeds)
         payload = {
             "meta": _meta(args.seeds,
-                          "Panel A: TGN row = v3 per-cookie; baselines = deployable (dev:guest)"),
-            "tgn_row": {"raw": panel_b["raw"]["v3"], "summary": tgn_row},
+                          "Panel A: TGN and baselines both deployable (dev:guest, v4), "
+                          "global 1% FPR threshold"),
+            "tgn_row": {"raw": tgn_raw, "summary": tgn_row},
             "baselines": base,
         }
         dump_json(payload, RUNS_DIR / "panelA.json")
         _emit_panel_a_tex(tgn_row, base["summary"])
-        a_summary = {"TGN (v3,pc)": tgn_row, **base["summary"]}
+        a_summary = {"TGN (v4,dep)": tgn_row, **base["summary"]}
         _print_summary("PANEL A (tab:baselines)", a_summary, list(PANEL_A_BASE_CELLS))
 
     print(f"\nJSON -> {RUNS_DIR}\nLaTeX fragments -> {GEN_DIR}\nDONE_REGEN_REPORT_TABLES")
