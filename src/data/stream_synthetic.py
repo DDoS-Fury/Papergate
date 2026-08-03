@@ -266,6 +266,12 @@ class ZTAStreamSimulator:
         self.p_cookie_wipe = p_cookie_wipe
         self.p_cred_theft = p_cred_theft
         self.admission_horizon = admission_horizon
+        self.use_resource_risk = use_resource_risk
+
+        self.route_methods = ROUTE_METHODS.copy()
+        self.security_matrix = SECURITY_MATRIX.copy()
+        self.resource_uris = RESOURCE_URIS.copy()
+        self.resource_risk = RESOURCE_RISK.copy()
 
         # --- node index layout: [users][device slots][source slots][config slots][resources] ----
         self.user_lo = 0
@@ -357,7 +363,7 @@ class ZTAStreamSimulator:
         for k in range(num_theft_slots):
             self.keys[self.cfg_lo + num_configs + k] = f"_spare_cfg_{k}"
         for r in range(num_resources):
-            self.keys[self.res_lo + r] = RESOURCE_URIS[r]
+            self.keys[self.res_lo + r] = self.resource_uris[r]
 
         # --- static node features (16-dim) -------------------------------------------
         # Index map: [2]=device tier, [3]=resource priority, [4]=resource RISK,
@@ -369,7 +375,7 @@ class ZTAStreamSimulator:
         for r in range(num_resources):
             nf[self.res_lo + r, 3] = r / float(num_resources - 1)
             if use_resource_risk:
-                nf[self.res_lo + r, 4] = RESOURCE_RISK[RESOURCE_URIS[r]]
+                nf[self.res_lo + r, 4] = self.resource_risk[self.resource_uris[r]]
         if use_source_internal:
             for s in range(self.src_slots):
                 nf[self.src_lo + s, 5] = 1.0 if ip_is_internal(self.keys[self.src_lo + s]) else 0.0
@@ -423,14 +429,30 @@ class ZTAStreamSimulator:
         self._active_thefts: list[dict] = []
 
     # --- helpers ------------------------------------------------------------------------
+    def policy_allows(self, role: str, method: int, uri: str) -> bool:
+        if method not in self.route_methods.get(uri, set()):
+            return False
+        if uri not in self.security_matrix:
+            return True
+        classification, categories = self.security_matrix[uri]
+        if not categories.issubset(ROLE_CATEGORIES[role]):
+            return False
+        clr = ROLE_CLEARANCE[role]
+        obj = SECURITY_LEVELS[classification]
+        if uri == TRUSTED_GUARD:
+            return role == "admin" and method == 1
+        if method == 0:
+            return clr >= obj
+        return clr <= obj
+
     def _policy_valid_actions(self, role: str):
         """``(resource_idx, method)`` actions OPA would ALLOW for this role (cached)."""
         if role not in self._valid_cache:
             self._valid_cache[role] = [
                 (r, m)
-                for r, uri in enumerate(RESOURCE_URIS)
-                for m in ROUTE_METHODS[uri]
-                if policy_allows(role, m, uri)
+                for r, uri in enumerate(self.resource_uris)
+                for m in self.route_methods[uri]
+                if self.policy_allows(role, m, uri)
             ]
         return self._valid_cache[role]
 
@@ -441,9 +463,9 @@ class ZTAStreamSimulator:
         if role not in self._violation_cache:
             self._violation_cache[role] = [
                 (r, m)
-                for r, uri in enumerate(RESOURCE_URIS)
-                for m in ROUTE_METHODS[uri]
-                if uri in SECURITY_MATRIX and not policy_allows(role, m, uri)
+                for r, uri in enumerate(self.resource_uris)
+                for m in self.route_methods[uri]
+                if uri in self.security_matrix and not self.policy_allows(role, m, uri)
             ]
         return self._violation_cache[role]
 
@@ -497,7 +519,7 @@ class ZTAStreamSimulator:
         # The attacker holds the victim's credentials: OPA's role/clearance/category
         # checks all pass. Prefer protected routes (the loot) over public ones.
         valid = self._policy_valid_actions(role)
-        sensitive = [(r, m) for r, m in valid if RESOURCE_URIS[r] in SECURITY_MATRIX]
+        sensitive = [(r, m) for r, m in valid if self.resource_uris[r] in self.security_matrix]
         res_idx, method = random.choice(sensitive or valid or [(0, 0)])
         feat = [1.0, 0.0, 0.0, 0.0, float(method),
                 ROLES.index(role) / (len(ROLES) - 1), clr / 4.0,
@@ -652,7 +674,7 @@ class ZTAStreamSimulator:
                 u_role, u_clearance = "guest", 0
                 config = self.cfg_lo  # conf:guest
                 dev_slot = self._guest_dev_slot if self._guest_dev_slot is not None else self.dev_lo + machine
-                valid_anon = [(r, m) for r, uri in enumerate(RESOURCE_URIS) if uri not in SECURITY_MATRIX for m in ROUTE_METHODS[uri]]
+                valid_anon = [(r, m) for r, uri in enumerate(self.resource_uris) if uri not in self.security_matrix for m in self.route_methods[uri]]
                 res_idx, method = self._zipf_choice(valid_anon)
             else:
                 valid = self._policy_valid_actions(u_role)
@@ -698,7 +720,7 @@ class ZTAStreamSimulator:
 
             if anomaly_type == "exfil":
                 valid = self._policy_valid_actions(u_role)
-                sensitive = [(r, m) for r, m in valid if RESOURCE_URIS[r] in SECURITY_MATRIX]
+                sensitive = [(r, m) for r, m in valid if self.resource_uris[r] in self.security_matrix]
                 if sensitive:
                     res_idx, method = random.choice(sensitive)
                 else:
@@ -762,6 +784,35 @@ class ZTAStreamSimulator:
         return self._event(source=source, config=config, device=dev_slot, user=user,
                            res_idx=res_idx, feat=feat, label=label, etype=etype,
                            scenario=scenario)
+
+    def add_resource(self, uri: str, methods: set[int], classification: str = None, categories: set[str] = None, risk: float = 0.5):
+        """Dynamically add a new resource to the generator."""
+        if uri in self.resource_uris:
+            return
+        
+        self.route_methods[uri] = methods
+        if classification and categories:
+            self.security_matrix[uri] = (classification, categories)
+        self.resource_risk[uri] = risk
+        self.resource_uris.append(uri)
+        
+        self.keys.append(uri)
+        
+        new_feat = torch.zeros(1, 16)
+        new_feat[0, 14] = 1.0  # trust score
+        new_feat[0, 3] = self.num_resources / max(1.0, float(self.num_resources))
+        if self.use_resource_risk:
+            new_feat[0, 4] = risk
+            
+        self.node_features = torch.cat([self.node_features, new_feat], dim=0)
+        
+        self.num_resources += 1
+        self.num_nodes += 1
+        
+        # Invalidate caches so the new resource is picked up
+        self._valid_cache.clear()
+        self._violation_cache.clear()
+        self._zipf_probs.clear()
 
 
 @dataclass
