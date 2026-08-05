@@ -1,0 +1,74 @@
+\section{Related Work}
+\label{sec:related}
+
+\subsection{Lateral movement as anomalous-edge detection}
+
+Casting lateral movement as anomalous-edge detection over a temporal graph of
+authentication events is an established formulation, and we state up front that it is
+not ours. \textbf{Euler}~\cite{euler} composes a graph neural network with a recurrent
+encoder over discrete snapshots of a host-to-host authentication graph and detects
+red-team activity on LANL~\cite{lanl}; it is the canonical reference for the task.
+\textbf{Argus}~\cite{argus} reports comparable performance on the same corpus and is
+treated as the incumbent state of the art in later work. \textbf{LMDetect}~\cite{lmdetect}
+classifies time-aware subgraphs extracted around each authentication event over a
+heterogeneous multigraph. A recent \textbf{graph foundation model}~\cite{gfm} pretrains
+on host-to-host structure and reports results on both LANL and DARPA OpTC with fixed
+split conventions --- first 41 hours for training on LANL, six days for training and
+three for evaluation on OpTC --- that have become a comparability standard.
+
+Every one of these systems takes an authentication log as its substrate: nodes are
+hosts (sometimes hosts and users), edges are logon events. That choice fixes what is
+detectable. It also explains why they are directly comparable with each other and why
+we are not directly comparable with them: our numbers are produced on a substrate that
+carries a client-configuration node those graphs do not have, and their benchmark
+corpus does not contain the field that would populate it. We return to this in
+Section~\ref{sec:external} and treat LANL as an ablation of our own architecture ---
+the ``config node removed'' arm --- rather than as a shared benchmark.
+
+\subsection{Temporal graph learning}
+
+We build directly on the Temporal Graph Network of Rossi et al.~\cite{tgn}, which
+maintains a recurrent per-node memory updated by event messages and computes
+embeddings by attending over recent temporal neighbours. The relevant distinction
+against the systems above is the granularity of time. Euler and the snapshot-based
+family discretise the stream into fixed windows and encode the sequence of snapshots;
+a TGN consumes events continuously and updates only the entities each event touches.
+For a PDP that must answer per request, the continuous formulation is not merely more
+elegant, it is the deployable one: there is no window to wait for. Related continuous
+formulations include TGAT~\cite{tgat} and JODIE~\cite{jodie}. TGNs have subsequently
+been applied to anomaly detection over dynamic and provenance graphs, though not, to
+our knowledge, over a ZTA request stream with an explicit client-configuration node.
+
+\subsection{Zero Trust and policy-driven authorization}
+
+NIST SP 800-207~\cite{nist800207} separates the policy decision point from the policy
+enforcement point and mandates continuous evaluation. In practice the PDP is a policy
+engine such as Open Policy Agent~\cite{opa} evaluating declarative rules. A learned
+detector in this setting is an \emph{advisor} to that engine, not a replacement for it,
+and this has a consequence that is usually left implicit: the detector must not be the
+authority on what enters its own baseline. We make that explicit and measure under it
+(Section~\ref{sec:problem}). Surveys of the ZTA literature note that trust-score and
+PDP proposals are evaluated almost exclusively on bespoke, unreleased simulations ---
+a gap we confirm empirically in Section~\ref{sec:external}.
+
+\subsection{Client fingerprinting}
+
+JA3~\cite{ja3} hashes the ordered parameters of a TLS \texttt{ClientHello} into a
+fingerprint of the originating library and its configuration. It is widely deployed for
+malware-family attribution. We use it differently: not to recognise a known-bad
+fingerprint, but as a \emph{node identity} whose habitual association with a principal
+is learned, so that a familiar credential arriving under an unfamiliar fingerprint is
+anomalous by structure rather than by signature. This makes the mechanism robust to
+fingerprints never seen at training time, at the cost of being blind to an adversary who
+faithfully clones the victim's TLS stack.
+
+\subsection{Position}
+
+The task is not new; the substrate, the gate and the deployment protocol are where we
+claim contribution. Concretely: (i) a five-node ZTA chain including a configuration
+node, which makes credential reuse from an unfamiliar client expressible at all;
+(ii) an anti-poisoning commit gate driven by an external policy engine, reported as
+the protocol under which all figures were produced rather than as a design note; and
+(iii) an inductive streaming deployment with hashed node identity and verified
+train/serve equivalence. We report where each of these is supported by measurement and
+where it is not.

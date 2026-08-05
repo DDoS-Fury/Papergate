@@ -1,0 +1,102 @@
+\section{Experimental Setup}
+\label{sec:setup}
+
+\subsection{Why a synthetic primary benchmark}
+
+Section~\ref{sec:external} reports the survey in full; the conclusion drives this
+section. No public dataset is built for Zero Trust or continuous authorization, and
+none delivers user identity together with client TLS fingerprints as given fields. A
+corpus that would populate the five-node chain at scale, with labelled lateral movement
+and credential reuse, does not exist. We therefore build one, and treat the honesty of
+that construction as an object of measurement rather than an assumption.
+
+\subsection{The generator}
+
+The generator simulates the chain \textit{ip} $\rightarrow$ \textit{config (JA3)}
+$\rightarrow$ \textit{device} $\rightarrow$ \textit{user} $\rightarrow$ \textit{resource}
+over a population of users, devices, sources, client configurations and procedurally
+generated resources, with circadian arrival rates, roaming and NAT, shared devices,
+cookie wipes, service accounts issuing periodic batch traffic, and benign human error.
+It emits binary labels, a per-class type vector and a benign-context bitmask.
+
+One design decision is load-bearing. Benign traffic performs \emph{legitimate
+non-habitual accesses} with non-zero probability. Without this, lateral movement would
+be feature-identical to ``unusual destination'' and the task would collapse into the
+tautology \emph{non-habitual $\Leftrightarrow$ lateral} --- a detector could score
+perfectly by learning nothing about time. With it, a lateral event is
+indistinguishable from a benign exploratory access on the access edge alone, and the
+only discriminator left is the temporal pattern.
+
+\subsection{The leakage audit}
+
+\begin{table}[t]
+\centering
+\caption{Best single-feature AUC per class, before and after de-leakage. A high value
+means that one input column separates the class on its own, i.e.\ the task is trivial
+and any model result is uninterpretable. \prelim{Values from the audit run;
+regeneration pending.}}
+\label{tab:floor}
+\begin{tabular}{lcc}
+\toprule
+Class & Before & After \\
+\midrule
+Policy      & \FloorPolicyPre & \FloorPolicyPost~\textit{(risk; semantic, declared)} \\
+Contextual  & \FloorCtxPre    & \FloorCtxPost~\textit{(sensors; by design)} \\
+\textbf{Lateral}    & \textbf{\FloorLatPre} & \textbf{\FloorLatPost} \\
+Credential reuse & \FloorTheftPre & \FloorTheftPost \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+We report this because it nearly invalidated our own results. An enrichment of the
+generator --- more resources, power-law popularity sampling, byte-volume and status
+columns --- introduced severe label leakage in a single change. Benign traffic
+concentrated on popular resources while every attack branch sampled uniformly, so a
+column carrying the resource index reached AUC \FloorLatPre{} on \emph{every} class by
+itself, which is as high as the lateral AUC the full model was reporting. Four
+constant-valued patterns identified four populations at 100\% precision and recall.
+
+The remedy was not to soften the claims but to fix the generator: popularity decoupled
+from the resource index by a seed-dependent permutation, the resource universe made
+seed-dependent, every attack branch drawing its destination from the \emph{same}
+sampler as benign traffic, exact-value fingerprints replaced by continuous
+distributions, and response-side fields removed as a causality violation.
+Table~\ref{tab:floor} shows the effect. Lateral movement fell from \FloorLatPre{} to
+\FloorLatPost{}: the task did not merely become more honest, it became genuinely
+harder.
+
+A permanent audit now runs on three seeds in seconds on CPU and enforces, on every
+generator change: a bound on single-feature AUC with a motivated allowlist; absence of
+exact-value fingerprints; equality of the destination marginal between benign and
+anomalous traffic (by effect size, not by $p$-value --- at $n \approx 45{,}000$ a
+Kolmogorov--Smirnov test rejects on negligible differences); and that every
+(route, method) pair emitted is one the route actually serves. \textbf{The two classes
+the contribution rests on, lateral movement and credential reuse, have no exemptions},
+and a test enforces that they never acquire any.
+
+\subsection{Protocol}
+
+Unless stated otherwise: \PanelAsettings. Training sees benign events only. The test
+stream is replayed chronologically, event by event, under the external commit gate of
+Section~\ref{sec:problem} --- never under the model's own verdict. Dispersion is
+reported as sample standard deviation over seeds with $\text{ddof}=1$; paired
+comparisons use a per-seed paired difference with a Wilcoxon signed-rank test and a
+bootstrap confidence interval.
+
+\subsection{Baselines}
+
+Isolation Forest, One-Class SVM, a static graph neural network (same graph structure,
+no temporal memory), and XGBoost. \textbf{All of them receive the same tabular signals
+as the TGN} --- the causal history counters and the same precursor prior --- so the gap
+isolates the temporal-relational machinery rather than the counters. The static GNN is
+the load-bearing comparison: it has the graph and the counters and lacks only the
+recurrent memory and temporal neighbourhood. XGBoost is \emph{supervised}: it sees the
+labels, it is outside the one-class paradigm, and it is quoted as a reference upper
+bound, not as a comparable baseline.
+
+\subsection{A second synthetic stream}
+
+An independently constructed synthetic ZTA stream is being incorporated as a second
+evaluation substrate, to test whether the conclusions survive a generator we did not
+write --- the sharpest available check on the risk that our results are properties of
+our own simulator. Results on it are not included in this draft.

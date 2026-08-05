@@ -1,0 +1,207 @@
+\section{Approach}
+\label{sec:approach}
+
+
+\subsection{The five-node causal chain}
+
+\begin{figure}[t]
+\centering
+\begin{tikzpicture}[
+  font=\sffamily\scriptsize,
+  n/.style={draw, rounded corners=2pt, align=center, inner sep=3pt, minimum height=5.5mm},
+  acc/.style={->, >=Stealth, semithick},
+  bind/.style={->, >=Stealth, semithick, densely dashed, gray!70!black}
+]
+\node[n, fill=blue!8]   (s) {source \\ \textit{ip}};
+\node[n, fill=purple!10, right=6mm of s] (c) {config \\ \textit{ja3}};
+\node[n, fill=teal!10, right=6mm of c] (d) {device \\ \textit{tpm}};
+\node[n, fill=orange!12, below=7mm of c] (u) {user};
+\node[n, fill=red!8, right=6mm of u] (r) {resource};
+\draw[bind] (s) -- (c);
+\draw[bind] (c) -- (d);
+\draw[bind] (c) -- (u);
+\draw[bind] (d) -- (u);
+\draw[acc]  (u) -- node[below, font=\sffamily\tiny] {access} (r);
+\end{tikzpicture}
+\caption{One request, five edges. Dashed binding edges carry a zero message; only the
+access edge carries the event features. The event score is the maximum over its edges.
+The \textit{config}\,$\rightarrow$\,\textit{user} binding is what exposes credential
+reuse: a familiar principal under an unfamiliar client fingerprint.}
+\label{fig:chain}
+\end{figure}
+
+\begin{figure*}[t]
+\centering
+\begin{tikzpicture}[
+  font=\sffamily\scriptsize,
+  st/.style={draw, rounded corners=2pt, align=center, inner sep=4pt,
+             text width=22mm, minimum height=13mm, fill=blue!5},
+  mem/.style={st, fill=teal!10},
+  head/.style={draw, rounded corners=2pt, align=center, inner sep=3pt,
+               text width=24mm, minimum height=6mm, fill=orange!12},
+  ext/.style={draw, rounded corners=2pt, align=center, inner sep=4pt,
+              text width=22mm, minimum height=9mm, fill=red!7},
+  f/.style={->, >=Stealth, semithick},
+  gate/.style={->, >=Stealth, semithick, densely dashed, gray!60!black},
+  lbl/.style={font=\sffamily\tiny, align=center}
+]
+
+% --- row 1: from the request to the embedding ---
+\node[st] (req) {\textbf{request}\\[1pt]\textit{ip, ja3, dev,}\\\textit{user, res}};
+\node[st, right=6mm of req] (dec)
+  {\textbf{five-edge}\\\textbf{decomposition}\\[1pt]\textit{4 bindings}\\\textit{+ 1 access}};
+\node[mem, right=6mm of dec] (mm)
+  {\textbf{per-node}\\\textbf{memory}\\[1pt]GRU, $256$\\\textit{inductive slots}};
+\node[st, right=6mm of mm] (cat)
+  {\textbf{concat} $288$\\[1pt]$z_{\text{mem}}\|\,$hash-id\\$\|$ static attrs};
+\node[st, right=6mm of cat] (enc)
+  {\textbf{graph}\\\textbf{attention}\\[1pt]3 hops, $K{=}30$\\$\rightarrow z\,[256]$};
+
+% --- row 2: from the embedding to the verdict, flowing back to the left ---
+\node[head, below=16mm of enc, xshift=0mm, yshift=4mm] (fh)
+  {\textbf{feature head}\\\textit{MLP} $\rightarrow$ logit$_{f}$};
+\node[head, below=16mm of enc, xshift=0mm, yshift=-6mm] (sh)
+  {\textbf{structural head}\\ scaled $\cos$ $\rightarrow$ logit$_{s}$};
+
+\node[st, left=8mm of fh, yshift=-5mm] (sc)
+  {$s=1-\sigma(\text{logit}_f{+}\text{logit}_s)$\\[1pt]$\times$ \textbf{precursor}\\$1{+}b\,2^{-\Delta t/\tau}$};
+\node[st, left=6mm of sc] (thr)
+  {\textbf{threshold}\\[1pt]benign quantile\\at target FPR};
+\node[ext, left=6mm of thr] (pep) {\textbf{policy engine}\\\textit{external}\\\textit{decision}};
+
+\foreach \a/\b in {req/dec, dec/mm, mm/cat, cat/enc, sc/thr}
+  \draw[f] (\a) -- (\b);
+\draw[f] (enc.south) -- ++(0,-6mm) -| (fh.north);
+\draw[f] (enc.south) -- ++(0,-6mm) -| (sh.north);
+\draw[f] (fh.west) -- ++(-3mm,0) |- ([yshift=3mm]sc.east);
+\draw[f] (sh.west) -- ++(-3mm,0) |- ([yshift=-3mm]sc.east);
+\draw[f] (thr) -- node[lbl, above] {verdict} (pep);
+
+% commit gate: routed around the left edge and over the top row, so it crosses nothing
+\draw[gate] (pep.west) -- ++(-7mm,0) |- ([yshift=11mm]mm.north)
+  node[lbl, pos=0.88, above] {commit gate: the memory advances \emph{only} on
+  events the engine admits} -- (mm.north);
+
+\begin{scope}[on background layer]
+  \node[draw, densely dotted, rounded corners=3pt, inner sep=3.5mm, fill=blue!2,
+        fit=(mm)(cat)(enc)(fh)(sh)(sc),
+        label={[lbl, anchor=south east]south east:\textit{model}}] {};
+\end{scope}
+
+\end{tikzpicture}
+\caption{Model architecture. The five edges of one request are scored independently and
+the event takes the maximum. Each entity carries a GRU memory that is concatenated with a
+deterministic hashed identity and a static attribute vector, encoded over the last $K$
+temporal neighbours, and scored by two additive heads. The dashed path is what makes the
+protocol one-class and anti-poisoning: the verdict leaves the model, and the memory
+advances only on events the \emph{external} policy engine admits --- never on the model's
+own decision. Entity slots are allocated on first sight, so an unseen principal, device or
+fingerprint is scored without retraining.}
+\label{fig:arch}
+\end{figure*}
+
+A request is not one edge. Modelling it as $u \rightarrow r$ alone --- the
+authentication-graph formulation --- discards the question of \emph{how} the principal
+arrived. We emit five edges per request (Fig.~\ref{fig:chain}): the four bindings
+\textit{source}\,$\rightarrow$\,\textit{config},
+\textit{config}\,$\rightarrow$\,\textit{device},
+\textit{config}\,$\rightarrow$\,\textit{user} and
+\textit{device}\,$\rightarrow$\,\textit{user}, plus the access edge
+\textit{user}\,$\rightarrow$\,\textit{resource}. Commit order is fixed and identical in
+training, offline replay and serving. When a key is absent the corresponding edge is
+skipped and its neighbours bridge: a device-less dataset degrades to
+\textit{config}\,$\rightarrow$\,\textit{user}, and a dataset with no client fingerprint
+at all --- LANL --- degrades to the legacy \textit{source}\,$\rightarrow$\,\textit{device}
+path. The event score is the maximum over the edges present, so a single broken binding
+is sufficient to raise it.
+
+The \textit{config} node earns its place on one class. An attacker replaying stolen
+credentials issues a request whose principal is habitual, whose resource may well be
+habitual, and whose client fingerprint the principal has never used. On the access edge
+this is invisible. On the \textit{config}\,$\rightarrow$\,\textit{user} binding it is a
+pair with no history.
+
+\subsection{Node embedding}
+
+Fig.~\ref{fig:arch} gives the whole pipeline. Each entity holds a recurrent memory vector,
+updated by a GRU from the messages of the events it participates in (memory dimension
+256). At scoring time the memory is
+concatenated with two further signals. The first is a \textbf{hashed identity}: a
+deterministic BLAKE2b hash of the external entity key into a learned embedding table.
+Determinism matters --- Python's built-in hash is salted per process and would break
+reproducibility across restarts --- and hashing rather than an index table is what keeps
+the model fully inductive: an entity never seen at training time gets a coherent
+embedding immediately, with no retraining and no vocabulary. The second is a static
+attribute vector (device tier, resource sensitivity, network origin, trust score).
+
+The concatenation is passed through a three-hop graph attention encoder over the
+entity's recent temporal neighbours, with the edge attribute formed by concatenating a
+time encoding of $\Delta t$ with the historical edge message. Neighbours come from a
+ring buffer of the last $K{=}30$ temporal neighbours per node, pre-allocated in RAM. The
+buffer is the reason no graph database is required.
+
+\subsection{Scoring}
+
+The logit is the sum of two heads. A \textbf{feature head} --- an MLP over both endpoint
+embeddings, the current message, the static attributes, recency encodings and history
+counters --- carries the policy and contextual classes and the novelty cue for lateral
+movement. A \textbf{structural head} --- a scaled cosine similarity between non-linear
+projections of the two endpoint embeddings --- is a complementary low-cost signal. The
+anomaly score is $1 - \sigma(\text{logit})$.
+
+The history counters deserve a note, because they are where a circularity could hide.
+For each edge we compute $[\log(1{+}n_{\text{pair}}), \log(1{+}n_{\text{src}}),
+n_{\text{pair}}/(n_{\text{src}}{+}1)]$: how often this exact pair has been seen, how
+active the source is, and the ratio. They are \textbf{causal} (only past events) and
+\textbf{benign-gated} (incremented only on committed events), so they are derivable at
+serving time and cannot leak the label. Every baseline in Section~\ref{sec:results}
+receives these same counters --- otherwise the comparison would measure feature
+engineering rather than the temporal-relational machinery.
+
+Relative time is capped and carries an explicit ``never seen'' sentinel. Without the
+cap, ``never seen before'' was encoded as the absolute clock, which grows along the
+stream: training, validation and test saw different encodings of the same state, a
+long-lived server drifted, and the contrastive objective had a shortcut, since a random
+negative is by construction a pair never seen. One implementation of this is shared by
+replay, the training objective and serving.
+
+\subsection{Kill-chain precursor}
+
+Lateral movement typically follows reconnaissance that trips a sensor on the same
+origin --- but the commit gate discards precisely that precursor from memory, since the
+policy engine denies it. We therefore keep a small per-entity alert state outside the
+TGN memory and apply a multiplicative prior with exponential decay to the score of
+subsequent events from that entity. It is multiplicative by design: it lifts an already
+suspicious score above threshold without turning benign scores near zero into false
+positives. It is a serving-time heuristic, not a trained input --- benign-only training
+would make it a dead feature --- and an adversary who skips the noisy reconnaissance
+evades it.
+
+\subsection{Threshold calibration}
+
+The primary threshold is a quantile of the signal-clean benign score distribution at a
+target FPR, computed on a validation replay that uses \emph{the same gate as the test}
+and no labels. Calibration runs as a two-pass fixed point with a snapshot/restore of the
+runtime state between passes, so the second pass does not observe a memory that has
+already ingested its own slice. A cost-sensitive routed threshold, which converts
+ranking quality into operating recall at a higher benign FPR, is reported separately;
+it needs labelled lateral events in the validation window and is therefore quoted as a
+declared upper bound rather than as a deployable default.
+
+\subsection{Serving}
+
+Inference is exposed as an HTTP service. Per request the flow is: map the five keys to
+memory slots, admitting unseen entities dynamically; expand temporal neighbourhoods;
+embed; score; return the verdict to the orchestrator, which consults the policy engine
+and calls back to commit or not. Measured end-to-end latency is
+$P_{50} \approx \LatencyPFifty$\,ms and $P_{99} \approx \LatencyPNinetyNine$\,ms
+(\prelimnote), each request performing five neighbourhood expansions and five encoder
+forward passes.
+
+Offline evaluation does not call the serving primitives; it is a vectorised
+re-implementation that scores a block against a start-of-batch memory snapshot. We do
+not claim shared code. What binds them is a test: the same stream is replayed
+event-by-event through the serving primitives and compared against replay with batch
+size one, agreeing to $\max|\Delta| = \ParityDelta$ on both the five-edge chain and the
+legacy path. An earlier version of this harness exercised only the legacy branch; the
+five-edge chain, i.e. the configuration actually deployed, had never been verified.

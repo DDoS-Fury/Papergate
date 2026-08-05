@@ -1,0 +1,41 @@
+\section{Conclusion and Future Work}
+\label{sec:conclusion}
+
+Detecting lateral movement as anomalous-edge detection over a temporal graph is
+settled ground. We have argued that the substrate is not: a Zero-Trust policy decision
+point observes a five-node causal chain per request, and collapsing it to a
+host-to-host authentication edge discards the one signal that makes credential reuse
+from an unfamiliar client expressible at all. Modelling the client configuration as a
+node, rather than as a feature, is what turns that class from undetectable into
+detectable.
+
+Two further positions we would defend independently of our numbers. First, a streaming
+detector must not be the authority on what enters its own baseline; the commit gate
+belongs to the policy engine, and results should be reported under that gate rather
+than under the model's own verdict. Second, a synthetic benchmark deserves a permanent
+leakage audit shipped alongside it. Ours nearly invalidated our own results --- a
+single mislabelled column reached AUC \FloorLatPre{} on lateral movement by itself ---
+and after the fix the same class sits at \FloorLatPost, meaning the task became
+genuinely harder, not merely more honest. We would rather publish that number than the
+one it replaced.
+
+\ifpreliminary
+The immediate work is regeneration: every quantitative claim in this draft predates the
+de-leakage and must be reproduced on the corrected generator before any of it is relied
+upon. That includes the per-component ablations, which are withdrawn rather than
+softened, and the seed grid needed to bring the reported dispersion in line with the
+run-to-run variance of Section~\ref{sec:limits}.
+\else
+Beyond the results reported here, the open work is threefold.
+\fi
+
+Beyond that, three directions. A second, independently constructed synthetic stream
+tests whether the conclusions survive a generator we did not write --- the sharpest
+available check against results that are properties of our own simulator. The AIT
+corpus offers the scaled full-chain evaluation, with eight independent testbeds
+amounting to a cross-testbed generalisation study and real JA3 recoverable from packet
+captures. And running LANL as the explicit ``configuration node removed'' arm, under
+the split conventions the literature has settled on, would make the degradation legible
+in the terms the community already reads --- turning the one corpus on which our
+architecture cannot be shown at its best into the cleanest available demonstration of
+why its distinguishing component is there.

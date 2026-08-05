@@ -321,12 +321,17 @@ tabelle della relazione tecnica si rigenerano (multi-seed) col profilo `regen-re
 
 Da leggere prima di trattare le metriche come garanzie di produzione:
 
-- **Validità esterna.** Le metriche pubblicate sono su stream **sintetico**. Esiste un harness
-  *faithful* event-streaming su **LANL auth** (`tests/eval_lanl.py`, profilo `eval-lanl`, con
-  gating `has_config` per il percorso legacy senza nodo config), ma i risultati non sono ancora
-  consolidati come publication-grade: la validità esterna su dataset reali (LANL, DARPA OpTC,
-  CIC-IDS) e l'idoneità di un dataset host-to-host a un modello ZTA event-streaming restano
-  **lavoro futuro**.
+- **Validità esterna.** Le metriche pubblicate sono su stream **sintetico**. Selezione dei
+  dataset reali e mapping campo-per-campo sulla catena a 5 nodi in
+  👉 [`docs/datasets.md`](docs/datasets.md). In sintesi: **nessun dataset ZTA pubblico
+  esiste** e nessuno consegna insieme identità utente e fingerprint TLS. **PicoDomain** è
+  l'unico corpus in cui tutti e 5 i nodi poggiano su campi reali (`ssl.log` porta `ja3`):
+  harness `tests/eval_picodomain.py` + `tests/datasets/picodomain.py`, profilo
+  `eval-picodomain`, contratto verificato da `tests/test_picodomain_mapping.py`. Esiste anche
+  un harness su **LANL auth** (`tests/eval_lanl.py`, profilo `eval-lanl`), ma lì il nodo config
+  degenera e la classe credential-theft **non è valutabile**: è di fatto l'ablazione «senza
+  nodo config», non un benchmark alla pari. Nessuno dei due ha ancora risultati
+  publication-grade.
 - **Anti-poisoning gate auto-deciso.** Memoria/vicinato si aggiornano solo per eventi
   *scorati* benigni. Conseguenze intrinseche: un attaccante stealthy scorato benigno
   **avvelena** la baseline; un benigno scorato anomalo non viene mai appreso (**starvation**).

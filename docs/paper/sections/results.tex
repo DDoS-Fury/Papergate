@@ -1,0 +1,161 @@
+\section{Comparison with the State of the Art}
+\label{sec:results}
+
+\ifpreliminary
+\noindent\fcolorbox{red!60!black}{red!5}{%
+\begin{minipage}{0.955\columnwidth}\footnotesize
+\textbf{Status of this section.} Tables~\ref{tab:baselines} and~\ref{tab:panelb}
+predate the generator de-leakage of Section~\ref{sec:setup} and are not reproducible
+from the current code; Table~\ref{tab:baselines} additionally mixes two protocols (the
+TGN row is a four-node per-cookie run, the baselines are five-node deployable runs).
+They are retained so the structure and the argument can be reviewed. The qualitative
+comparison of Table~\ref{tab:qualitative} does not depend on them.
+\end{minipage}}
+\vspace{2mm}
+\fi
+
+\subsection{Qualitative positioning}
+
+\begin{table*}[t]
+\centering
+\caption{Where this work sits relative to the temporal-graph lateral-movement
+literature. The task is shared; the substrate, the gate and the deployment regime are
+not. ``Continuous'' means events are consumed one at a time as they arrive, as opposed
+to being aggregated into fixed windows.}
+\label{tab:qualitative}
+\footnotesize
+\setlength{\tabcolsep}{3pt}
+\begin{tabular}{lccccccc}
+\toprule
+& Euler~\cite{euler} & Argus~\cite{argus} & LMDetect~\cite{lmdetect} & GFM~\cite{gfm} & Static GNN & IF / OC-SVM & \textbf{This work} \\
+\midrule
+Substrate            & auth log & auth log & auth log & auth log & ZTA stream & ZTA stream & \textbf{ZTA request stream} \\
+Node types           & host & host & host, user & host, user & 5 & --- (tabular) & \textbf{5, incl.\ client config} \\
+Client fingerprint node & no & no & no & no & yes & --- & \textbf{yes (JA3)} \\
+Temporal granularity & snapshots & snapshots & subgraphs & snapshots & none & none & \textbf{continuous, per event} \\
+Recurrent entity memory & via RNN & yes & no & no & no & no & \textbf{yes (GRU)} \\
+Inductive on unseen entities & partial & partial & partial & yes & yes & yes & \textbf{yes (hashed id.)} \\
+Learning regime      & one-class & one-class & supervised & pretrained & one-class & one-class & \textbf{one-class} \\
+Policy engine in the commit loop & no & no & no & no & n/a & n/a & \textbf{yes, and measured} \\
+Credential-reuse class evaluable & no & no & no & no & yes & yes & \textbf{yes} \\
+Deployable serving artefact & --- & --- & --- & --- & --- & --- & \textbf{yes (HTTP)} \\
+Primary evaluation corpus & LANL, OpTC & LANL, OpTC & LANL, OpTC & LANL, OpTC & \multicolumn{3}{c}{synthetic ZTA stream $+$ PicoDomain} \\
+\bottomrule
+\end{tabular}
+\end{table*}
+
+Table~\ref{tab:qualitative} states the position. The four reference systems share a
+substrate --- a host-to-host authentication log --- and consequently share a ceiling:
+none of them can represent a familiar principal arriving under an unfamiliar client
+configuration, because there is no node for the configuration. They also share a
+benchmark, which makes them mutually comparable and makes us not comparable with them:
+LANL carries no client fingerprint, so running on it would mean evaluating our
+architecture with its distinguishing component disabled. We do exactly that in
+Section~\ref{sec:external}, and treat it as an ablation rather than as a comparison.
+
+Two further axes are worth naming. The snapshot-based systems discretise time into
+windows; a PDP cannot wait for a window to close. And none of the four reports results
+under a commit gate held by an external decision authority --- the question of what
+enters the baseline does not arise when the model is evaluated offline over a fixed
+graph, but it is the first question in deployment.
+
+\subsection{Against non-temporal and non-relational baselines}
+
+\begin{table*}[t]
+\centering
+\caption{Synthetic stream. \PanelAsettings. All baselines receive the \emph{same}
+tabular signals as the TGN --- the causal history counters and the same precursor prior
+--- so the gap isolates the temporal-relational machinery rather than the counters.
+$^{\dagger}$ spurious: a permissive threshold over a chance-level ranking is not
+detection. $^{\ddagger}$ \emph{supervised}: sees the labels, reference upper bound, not
+a comparable baseline.
+\prelim{\textbf{Preliminary: not reproducible from HEAD; mixed protocol.}}}
+\label{tab:baselines}
+\footnotesize
+\begin{tabular}{lccccc}
+\toprule
+Model & Aggregate AUC & Aggregate AP & \textbf{Lateral AUC} & Lateral Rec.\ @1\% FPR & Aggregate Rec.\ @1\% FPR \\
+\midrule
+Isolation Forest      & \AggAucIF    & \AggApIF    & \LatAucIF    & \LatRecIF & \AggRecIF \\
+One-Class SVM         & \AggAucOCSVM & \AggApOCSVM & \LatAucOCSVM & \LatRecOCSVM & \AggRecOCSVM \\
+Static GNN (no temporal memory) & \AggAucGNN & \AggApGNN & \LatAucGNN & \LatRecGNN$^{\dagger}$ & \AggRecGNN \\
+\textbf{TGN (this work)} & \textbf{\AggAucTGN} & \textbf{\AggApTGN} & \textbf{\LatAucTGN} & \textbf{\LatRecTGN} & \textbf{\AggRecTGN} \\
+\midrule
+\textit{XGBoost}$^{\ddagger}$ & \textit{\AggAucXGB} & \textit{\AggApXGB} & \textit{\LatAucXGB} & \textit{\LatRecXGB} & \textit{\AggRecXGB} \\
+\bottomrule
+\end{tabular}
+\end{table*}
+
+The comparison that carries the argument is the static GNN
+(Table~\ref{tab:baselines}). It has the same graph structure, the same causal history
+counters and the same precursor prior; it lacks only the recurrent memory and the
+temporal neighbourhood. On lateral movement it sits at chance (\LatAucGNN), while the
+TGN reaches \LatAucTGN. The lateral signal therefore lives in the temporal machinery,
+not in the counters --- which every baseline has. Its apparent recall (\LatRecGNN) is
+an artefact of a permissive threshold over a chance-level ranking and should not be
+read as detection.
+
+The tabular one-class detectors behave as expected: they do well on the classes that a
+rule engine also handles and poorly on lateral movement, which by construction has no
+tabular signature. Supervised XGBoost, which sees the labels, is close to the TGN on
+ranking (\LatAucXGB{} vs \LatAucTGN) and well ahead on operating recall
+(\LatRecXGB{} vs \LatRecTGN) --- the gap that labels buy, and the honest measure of
+what the one-class regime costs.
+
+Aggregate recall at a global 1\% FPR threshold remains low for every unsupervised
+method, because a single global threshold is dominated by the easy classes. The
+defensible signal here is the ranking quality (lateral AUC), not the recall at that
+threshold; converting ranking into operating recall is what the cost-sensitive routing
+below is for.
+
+\subsection{The contribution of the configuration node}
+
+\begin{table}[t]
+\centering
+\caption{Four-node chain versus five-node chain with the configuration node, same
+stream. \PanelBsettings. $^{\dagger}$ within multi-seed noise; $^{\ddagger}$ within
+run-to-run noise (Section~\ref{sec:limits}), \emph{not established}.
+\prelim{\textbf{Preliminary: not reproducible from HEAD.}}}
+\label{tab:panelb}
+\footnotesize
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{lccc}
+\toprule
+Metric & 4 nodes & \textbf{5 nodes} & $\Delta$ \\
+\midrule
+Aggregate AUC        & \BaggAucIII & \BaggAucIV & \BaggAucD \\
+Aggregate AP         & \BaggApIII  & \BaggApIV  & \BaggApD \\
+Aggregate recall (routed) & \BaggRecIII & \BaggRecIV & \BaggRecD \\
+Lateral AUC          & \BlatAucIII & \BlatAucIV & \BlatAucD \\
+Lateral AP           & \BlatApIII  & \BlatApIV  & \BlatApD \\
+Lateral recall (routed) & \BlatRecIII & \textbf{\BlatRecIV} & \textbf{\BlatRecD} \\
+Benign FPR (routed)  & \BfprIII    & \BfprIV    & \BfprD \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Table~\ref{tab:panelb} isolates the configuration node by ablating it on the same
+stream. The result is not a uniform win and we do not present it as one. Aggregate AUC
+is unchanged, and the lateral AUC delta (\BlatAucD) falls inside the run-to-run
+variance we characterise in Section~\ref{sec:limits} --- it is \textbf{not
+established}. What does move, and by enough to survive that noise, is the operating
+recall on lateral movement (\BlatRecD), bought at a higher benign false-positive rate
+(\BfprD). On a theft-rich stream the ablation of the configuration node costs
+\TheftRecallDelta{} of recall on credential reuse and \TheftLateralDelta{} on lateral
+movement (\TheftSettings).
+
+The stronger argument for the node is not the delta but the expressiveness: on a
+four-node chain the credential-reuse class has no edge on which to be anomalous. The
+measured recall gain is evidence that the edge is used; the architectural point is that
+without it the class is not merely harder, it is unrepresentable.
+
+\subsection{What we do not claim}
+
+Per-component ablation deltas --- for the hashed identity, the history counters, the
+precursor prior and the structural head --- are \textbf{withdrawn}. Two mutually
+contradictory series existed in our own records for the same quantities, neither backed
+by a run log, and the hypothesis that explained the dominance of the history features
+in the older series was a $\Delta t$ shortcut that has since been removed. They will be
+regenerated as per-seed paired deltas with a signed-rank test and bootstrap intervals.
+Until then, no claim about the contribution of an individual component is supported,
+and we make none.
