@@ -1,0 +1,9 @@
+# tectonic build artefacts
+main.pdf
+main.aux
+main.log
+main.bbl
+main.blg
+main.out
+main.xdv
+main.synctex.gz

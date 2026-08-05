@@ -1,0 +1,100 @@
+\documentclass[journal,twocolumn]{IEEEtran}
+
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{graphicx}
+\usepackage{xcolor}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta,positioning,fit,backgrounds}
+\usepackage[hidelinks]{hyperref}
+\usepackage{url}
+
+% --- Preliminary-draft switch --------------------------------------------------------
+% While \preliminarytrue, every quantitative claim in this document is a placeholder
+% carried from runs that predate the generator de-leakage. Flip to \preliminaryfalse
+% only after results.tex has been regenerated. See paper/PROVENANCE.md.
+\newif\ifpreliminary
+\preliminarytrue
+
+\ifpreliminary
+  \newcommand{\prelim}[1]{#1}
+  \newcommand{\prelimnote}{\emph{Preliminary: pending regeneration.}}
+\else
+  \newcommand{\prelim}[1]{}
+  \newcommand{\prelimnote}{}
+\fi
+
+\input{results}
+
+\newcommand{\sys}{Graphagate}
+
+\begin{document}
+
+\title{Beyond the Authentication Graph: A Five-Node Temporal Graph Network
+for Lateral Movement and Credential Reuse in Zero-Trust Access Streams}
+
+\author{%
+  \IEEEauthorblockN{Author names withheld for review}%
+  \thanks{Manuscript draft, \today. Source, synthetic generator, dataset adapters and
+  leakage audit are released with the paper.}%
+}
+
+\maketitle
+
+\ifpreliminary
+\begin{center}
+\fcolorbox{red!60!black}{red!6}{%
+  \begin{minipage}{0.94\columnwidth}\small
+  \textbf{Preliminary draft.} Every figure in Section~\ref{sec:results} is a
+  placeholder carried from runs that predate the generator de-leakage of
+  2026-08-03 and is \emph{not} reproducible from the current code. The structure,
+  the protocol and the qualitative claims are final; the numbers are not.
+  Provenance and the regeneration procedure are in \texttt{paper/PROVENANCE.md}.
+  \end{minipage}}
+\end{center}
+\vspace{2mm}
+\fi
+
+\begin{abstract}
+Detecting lateral movement as anomalous-edge detection over a temporal graph of
+authentication events is an established line of work. We argue that the substrate,
+not the task, is where the remaining headroom lies. A Zero-Trust policy decision
+point observes strictly more than a host-to-host authentication log: for every
+request it sees the client network origin, the client's TLS configuration
+fingerprint, the device posture identity, the authenticated principal and the
+requested asset. We model this as a five-node causal chain per request and evaluate
+a Temporal Graph Network over it under a protocol that keeps the deployment honest:
+one-class training on benign traffic only, event-by-event chronological scoring, and
+a memory-commit gate driven by an \emph{external} policy engine rather than by the
+model's own verdict. Two properties follow from the extra nodes. Credential reuse
+from an unfamiliar client tool becomes expressible as a broken
+configuration-to-principal binding --- a class that is not representable on a
+host-to-host graph at all. And the anti-poisoning gate becomes measurable as a
+system property, because the entity memory advances only on events the policy engine
+admits. We further report a permanent label-leakage audit for the synthetic
+generator, and a case study on PicoDomain, the one public corpus we found in which
+all five nodes are backed by real fields --- its \texttt{ssl.log} carries JA3
+fingerprints alongside Kerberos principals.
+\end{abstract}
+
+\begin{IEEEkeywords}
+Zero Trust architecture, temporal graph networks, lateral movement detection,
+anomaly detection, credential theft, JA3, streaming inference, data poisoning.
+\end{IEEEkeywords}
+
+\input{sections/introduction}
+\input{sections/related}
+\input{sections/problem}
+\input{sections/approach}
+\input{sections/setup}
+\input{sections/results}
+\input{sections/external}
+\input{sections/limitations}
+\input{sections/conclusion}
+
+\bibliographystyle{IEEEtran}
+\bibliography{refs}
+
+\end{document}

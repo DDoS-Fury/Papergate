@@ -1,0 +1,81 @@
+\section{Limitations}
+\label{sec:limits}
+
+We list these at the level of detail we would want from a paper we were reviewing.
+
+\subsection{Run-to-run variance exceeds the published error bars}
+
+Two runs of the \emph{same} configuration at the \emph{same} seed, on an identical
+stream with identical positive counts, differed by \RunToRunAuc{} in lateral AUC and
+\RunToRunRecall{} in lateral recall. The dispersions we report
+(\PublishedSdAuc{} on AUC, \PublishedSdRecall{} on recall) come from three seeds at one
+run each and therefore conflate between-seed with run-to-run variance and
+\emph{underestimate} the true error. The direct consequence is stated in
+Section~\ref{sec:results}: the headline lateral-AUC delta from the configuration node
+sits inside this noise and is not established. Full seeding and deterministic
+algorithms are now in place; the grid of at least five seeds by three replicates has
+not yet been run.
+
+\subsection{The primary evaluation is synthetic}
+
+With the real-data results withdrawn pending regeneration, the synthetic stream is the
+principal exposure of this work. We have tried to make that exposure inspectable rather
+than deniable --- the leakage audit of Section~\ref{sec:setup} is permanent, runs on
+every generator change, and grants no exemption to the two classes the contribution
+rests on. It bounds the ways a generator can make its own task trivial; it cannot
+establish that the generator resembles a real enterprise. PicoDomain
+(Section~\ref{sec:external}) is a corrective, not a substitute.
+
+\subsection{Operating recall on lateral movement is not solved}
+
+Cost-sensitive routing converts ranking quality into operating recall, but the result
+remains a trade-off dial, not a closed problem: recall rises with the benign
+false-positive rate, and the deployment chooses the point. We report both endpoints
+rather than the flattering one.
+
+\subsection{The bounded-state claim is narrower than it sounds}
+
+Constant-time lookup and bounded memory hold for the \emph{tensor} buffers --- entity
+memory, neighbour ring buffer, static features --- which are pre-allocated at fixed
+size. They do not hold for the whole system. The interaction counters and alert state
+are unbounded dictionaries that grow with every committed pair and are persisted in the
+checkpoint. Eviction is not constant-time: selecting a victim scans the capacity, and
+invalidating inbound references scans the neighbour buffer. Measured latency is
+$P_{50} \approx \LatencyPFifty$\,ms / $P_{99} \approx \LatencyPNinetyNine$\,ms
+end-to-end, with five neighbourhood expansions and five encoder passes per request.
+This is a known scalability ceiling and the system is presented at that ceiling.
+
+\subsection{The poisoning gate has two residual failure modes}
+
+Both follow from the design rather than from an implementation gap. An adversary whose
+events the policy engine admits still enters the baseline. And an entity persistently
+scored anomalous is never learned, so a legitimate change in behaviour can starve.
+Mitigation is delegated to the orchestrator: the policy engine as the decision
+authority, plus a short grace period for newly admitted entities.
+
+\subsection{The precursor is a heuristic}
+
+The kill-chain prior assumes lateral movement follows reconnaissance noisy enough to
+trip a sensor on the same origin. It holds in the generator. An adversary who skips the
+noisy reconnaissance bypasses it. It is an honest additive prior, not a guarantee.
+
+\subsection{Cold start}
+
+A new entity has no habits to deviate from. In our stream every lateral event lands on
+an already-warm entity, so this is not the bottleneck here --- but in deployment a cold
+entity is uncovered until it accumulates interactions, and an adversary who knows this
+can exploit the window.
+
+\subsection{Fingerprint evasion}
+
+The configuration node detects an \emph{unfamiliar} client, not a malicious one. An
+adversary who faithfully clones the victim's TLS stack presents a familiar fingerprint
+and defeats the mechanism. The node raises the cost of credential reuse; it does not
+eliminate the class.
+
+\subsection{The serving endpoints are unauthenticated}
+
+The commit and score endpoints carry no authentication: anyone who reaches the service
+can alter its state and bypass the gate. The design assumes a trusted orchestrator on a
+private network. This is a deployment prerequisite, not a residual risk, and we state
+it because the anti-poisoning argument of Section~\ref{sec:problem} is void without it.

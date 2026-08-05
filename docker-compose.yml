@@ -129,6 +129,25 @@ services:
               "--train-frac", "0.3",
               "--eval-batch-size", "1024"]
 
+  # External validity su telemetria REALE con tutti e 5 i nodi popolati (ssl.log porta
+  # ja3): PicoDomain. Prerequisito: ./data contiene Zeek_Logs.7z estratto in ./data/logs
+  # e "Red Log.xlsx". Dataset: https://github.com/iHeartGraph/PicoDomain
+  eval-picodomain:
+    <<: *base
+    profiles: ["eval-picodomain"]
+    container_name: graphagate-eval-picodomain
+    volumes:
+      - ./public:/app/public
+      - ./src:/app/src
+      - ./tests:/app/tests
+      - ./data:/data
+    entrypoint: ["python"]
+    command: ["/app/tests/eval_picodomain.py",
+              "--log-dir", "/data/logs",
+              "--red-log", "/data/Red Log.xlsx",
+              "--epochs", "15",
+              "--eval-batch-size", "1024"]
+
   # Ablation study: full vs no-struct-head vs no-hashed-identity (save=False, non
   # tocca gli artifact in public/). Il contributo della parte temporale è invece
   # isolato dalla baseline Static GNN.

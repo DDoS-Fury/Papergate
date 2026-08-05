@@ -1,0 +1,126 @@
+\section{External Validity}
+\label{sec:external}
+
+\subsection{A negative result about the available corpora}
+
+We surveyed the public datasets that could plausibly host a five-node ZTA chain and
+report two findings that we believe are useful independently of this system.
+
+\textbf{No public dataset is built for Zero Trust or continuous authorization.} The
+ZTA literature on trust scoring and policy decision points is evaluated almost
+entirely on bespoke, unreleased simulations. There is no shared benchmark, and that is
+why our primary evaluation is synthetic.
+
+\textbf{No public dataset delivers user identity and TLS client fingerprints together
+as given fields.} This splits the candidate space cleanly. Authentication-graph
+corpora --- LANL~\cite{lanl}, DARPA OpTC~\cite{optc}, CERT~\cite{cert} --- are large
+and carry lateral-movement ground truth, but have no client fingerprint whatsoever.
+Testbed corpora that ship raw packet captures --- AIT~\cite{ait},
+CIC-IDS2017~\cite{cicids} --- allow real JA3 to be recomputed, but either lack an
+identity layer entirely (CIC-IDS2017 has no user field, which is fatal for a ZTA
+framing) or lack a lateral-movement label (AIT labels scanning through exfiltration,
+not movement).
+
+One corpus sits in the intersection.
+
+\subsection{PicoDomain}
+
+PicoDomain~\cite{picodomain} is a 16\,MB, \PicoSpan-day capture of a Windows-domain
+intrusion across five workstations and a domain controller, released as Zeek JSON logs
+with a manually recorded red-team log. It is the only public corpus we found in which
+all five nodes are backed by a real field, and the reason is its
+\texttt{ssl.log}: \PicoSSLrecords{} records, \emph{all} of them carrying a
+\texttt{ja3} column, over \PicoJAthree{} distinct fingerprints. Its
+\texttt{kerberos.log} \texttt{client} field simultaneously yields human principals and
+machine accounts, i.e.\ user and device identity from one field.
+
+\begin{table}[t]
+\centering
+\caption{PicoDomain mapped onto the five-node chain. Every node is backed by a real
+field; none is synthesised.}
+\label{tab:picomap}
+\footnotesize
+\begin{tabular}{@{}ll@{}}
+\toprule
+Node & Zeek field \\
+\midrule
+source   & \texttt{id.orig\_h} \\
+config   & \texttt{ssl.log:ja3} \\
+device   & Kerberos machine account \texttt{HOST\$}, \texttt{ntlm:hostname} \\
+user     & \texttt{kerberos:client} (non-machine), \texttt{ntlm:username} \\
+resource & \texttt{smb\_mapping:path}, \texttt{smb\_files:name}, \\
+         & \texttt{http:uri}, \texttt{dce\_rpc:endpoint} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The red-team log covers the full chain we care about: a trojanised archive, privilege
+escalation, \emph{Mimikatz} credential dumping, domain enumeration, then remote
+execution on three further hosts via DCOM and WMI, and finally a Meterpreter session
+under a different account. Lateral movement and credential reuse are both present.
+
+\subsection{What is observed and what is reconstructed}
+
+We are explicit about the weakest joint, because it is the one a reviewer should press
+on. Zeek's \texttt{uid} identifies a \emph{connection}, and the overlap between the
+\texttt{uid} sets of \texttt{ssl} and \texttt{kerberos}/\texttt{ntlm} is exactly
+\PicoUidOverlap: the TLS handshake and the authentication happen on different
+connections. \textbf{The \textit{config}\,$\rightarrow$\,\textit{user} binding --- the
+edge that carries our credential-reuse class --- is therefore not observed in this
+dataset. It is reconstructed}, per source address, as the last identity and last
+fingerprint seen within a time-to-live.
+
+The time-to-live is set to \PicoTTL~s, the default Kerberos ticket lifetime, i.e.\ the
+window over which the domain itself treats a logon session as valid. It is chosen for
+that reason rather than tuned against a metric, but coverage depends on it and the
+dependence belongs in any result reported on this corpus: user-binding coverage is
+\PicoCovUserShortest{} at 900\,s, \PicoCovUserShort{} at 3600\,s and \PicoCovUser{} at
+\PicoTTL~s, with device and configuration coverage at \PicoCovDevice{} and
+\PicoCovConfig{} respectively. Events that cannot be attributed fall back to
+\emph{per-address} sentinel nodes rather than a shared ``unknown'' node, so an
+unattributed event never inherits another entity's memory.
+
+The resulting stream carries \PicoEvents{} access events over \PicoNodes{} nodes
+(\PicoUsers{} users, \PicoDevices{} devices, \PicoSources{} sources, \PicoConfigs{}
+configurations, \PicoResources{} resources), with \PicoNlateral{} lateral,
+\PicoNtheft{} credential-reuse and \PicoNctx{} contextual events --- an anomalous
+fraction of \PicoAnomFrac. Labels are derived by matching each access event against a
+red-team row within $\pm90$\,s on host or principal, with the action text mapped to our
+taxonomy by a published regular-expression table. The authors state the red-team
+timestamps are accurate to $\pm1$ minute; this is an approximate labelling of a
+hand-written log, and must be read as one.
+
+At eight source addresses and \PicoSpan{} days, PicoDomain is a \textbf{case study, not
+a headline benchmark}. Variance over \PicoNlateral{} lateral events is high, and the
+policy class is not evaluable at all, since the corpus carries no roles, clearances or
+asset classification. Its value is qualitative and specific: it is existence proof that
+the five-node chain is observable in real enterprise telemetry, and the only public
+setting where the configuration node can be exercised on real fingerprints.
+
+\subsection{LANL as an ablation, not a peer benchmark}
+
+Omitting LANL from a lateral-movement paper invites an obvious question, so we state
+our position. On LANL the source and device nodes both collapse onto the computer
+identifier; the internal/external flag becomes constant; the configuration node
+degenerates to the (authentication type, logon type) pair, which is low-cardinality and
+heavily null; the resource is host-granular with no sensitivity metadata; and every
+static attribute must be synthesised. \textbf{The credential-reuse class --- the reason
+the configuration node exists --- is not evaluable on LANL at all.}
+
+The honest use of the corpus is therefore as the ``configuration node removed'' arm of
+our own architecture, run under the split conventions established in the
+literature~\cite{gfm} so the degradation is legible. That is future work, and the
+harness for it exists. What we do not do is present a LANL number beside Euler's and
+Argus's as though it measured the same system: it would measure our architecture with
+its distinguishing component disabled.
+
+\subsection{Next}
+
+The scaled full-chain evaluation belongs on the AIT Log Data Set~\cite{ait}: eight
+independent testbeds, real client addresses with a real RFC1918 boundary, real
+principals across SSH, webmail and audit logs, real request URIs, and raw packet
+captures from which genuine JA3 fingerprints can be recomputed. Eight independent
+chronological streams amount to a cross-testbed generalisation study for a streaming
+inductive model --- an experimental design none of the snapshot-based systems can
+offer. Its gap is the lateral-movement label, which an attack-only corpus from the same
+testbed lineage could supply by overlay.

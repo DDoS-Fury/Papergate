@@ -1,0 +1,70 @@
+\section{Introduction}
+\label{sec:intro}
+
+A Zero-Trust architecture (ZTA) replaces the perimeter with per-request
+authorization: every access is evaluated against identity, device posture and
+resource sensitivity, continuously, for the lifetime of a session~\cite{nist800207}.
+This shifts the detection problem. The question is no longer whether a packet crossed
+a boundary, but whether \emph{this} principal, arriving from \emph{this} client, on
+\emph{this} device, has any history of touching \emph{that} asset.
+
+Lateral movement is the class for which that question is hardest and matters most. An
+attacker who has obtained valid credentials generates traffic that is, feature by
+feature, indistinguishable from legitimate traffic: the request is authenticated, the
+policy permits it, no sensor fires. What separates it from benign activity is
+relational and temporal --- the pair has no history, and the access follows a
+reconnaissance burst on the same origin. Detecting it as anomalous-edge detection over
+a temporal graph is by now a well-established formulation, with Euler~\cite{euler} and
+Argus~\cite{argus} as the reference systems and the LANL authentication
+corpus~\cite{lanl} as the de-facto benchmark. \textbf{We do not claim priority on the
+task.} We claim that the substrate those systems operate on discards signal that a ZTA
+policy decision point (PDP) already has.
+
+The gap is concrete. A host-to-host authentication log records that computer $A$
+authenticated to computer $B$ as user $u$. A ZTA request carries, in addition, the
+client's network origin, the TLS fingerprint of the tool that issued it, the
+attested device identity, and the specific asset requested. Collapsing those into
+$(A, B, u)$ makes one attack class \emph{inexpressible}: an adversary who replays a
+stolen credential from their own machine produces a request whose principal is
+familiar and whose client configuration is not. On an authentication graph there is
+no node for that discrepancy to live on.
+
+\subsection*{Contributions}
+
+\begin{enumerate}
+  \item \textbf{A five-node causal chain per request.} We decompose each ZTA access
+  into \textit{source} $\rightarrow$ \textit{config} $\rightarrow$ \textit{device}
+  $\rightarrow$ \textit{user} $\rightarrow$ \textit{resource}, with an explicit
+  \textit{config}\,$\rightarrow$\,\textit{user} binding edge. The \textit{config}
+  node --- keyed by the client's TLS fingerprint --- is what makes credential reuse
+  from an unfamiliar tool a first-class, detectable event
+  (Section~\ref{sec:approach}).
+
+  \item \textbf{An anti-poisoning gate that is measured as such.} Entity memory and
+  temporal neighbourhoods advance only on events an \emph{external} policy engine
+  admits, never on the model's own verdict. A detector that decides what to remember
+  poisons itself; we report all figures under the external gate and state plainly
+  what the self-gated mode costs (Section~\ref{sec:problem}).
+
+  \item \textbf{A leakage audit as a first-class artefact.} Enriching a synthetic
+  generator silently made our own task trivial: a single mislabelled feature column
+  reached AUC \FloorLatPre{} on lateral movement by itself. We ship a permanent
+  audit that bounds single-feature separability, forbids exact-value fingerprints and
+  equalises destination marginals, with \emph{no exemptions} for the two classes the
+  contribution rests on (Section~\ref{sec:setup}).
+
+  \item \textbf{An external-validity study on real telemetry with all five nodes
+  populated.} We survey the public corpora and report a negative result that shapes
+  the field: no public dataset is built for Zero Trust, and none delivers user
+  identity and TLS fingerprints together as given fields. PicoDomain~\cite{picodomain}
+  comes closest --- we release the adapter, measure the binding coverage it achieves,
+  and state exactly which parts of the chain are reconstructed rather than observed
+  (Section~\ref{sec:external}).
+\end{enumerate}
+
+Section~\ref{sec:related} positions the work against the temporal-graph lateral
+movement literature. Section~\ref{sec:problem} states the threat model and the
+learning problem, Section~\ref{sec:approach} the architecture,
+Section~\ref{sec:setup} the protocol, Section~\ref{sec:results} the comparison
+against non-relational and non-temporal baselines, and Section~\ref{sec:limits} the
+limitations we consider material.

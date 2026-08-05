@@ -1,0 +1,100 @@
+\section{Threat Model and Problem Statement}
+\label{sec:problem}
+
+\subsection{Setting}
+
+A PDP receives a stream of access requests $e_1, e_2, \dots$ in arrival order. Request
+$e_i$ at time $t_i$ carries a client network origin $s_i$, a TLS configuration
+fingerprint $c_i$, a device identity $d_i$, an authenticated principal $u_i$, a
+requested resource $r_i$, and a feature vector $m_i \in \mathbb{R}^{10}$ (request
+method, sensor state, TLS-trust bit, request volume, inter-arrival gap). The detector
+must emit a score $a_i \in [0,1]$ using only $e_1, \dots, e_i$ --- no future events, no
+batch. This is not a modelling preference: at decision time the future does not exist.
+
+Two consequences are enforced throughout. Response-side fields are excluded from
+$m_i$, because an HTTP status or a response size is not available when the decision is
+made; we removed both after finding they acted as near-deterministic label channels.
+And the evaluation replays the test stream event by event, never scoring an event
+against a memory that has already ingested it.
+
+\subsection{Attacker}
+
+The adversary has obtained valid credentials --- by phishing, by dumping them from a
+compromised host, or by session theft --- and issues requests that the policy engine
+\emph{permits}. They may run their own tooling, from their own machine, on their own
+network. They may probe before moving. They are assumed \emph{not} to have cloned the
+victim's TLS stack, device attestation and access habits simultaneously; an adversary
+who has done all three is out of scope, and we say so in Section~\ref{sec:limits}.
+
+We target four classes:
+
+\begin{itemize}
+  \item \textbf{Policy violation} --- role, clearance or tier insufficient. Owned by
+  the policy engine, which blocks it upstream. Reported for completeness; it is not a
+  contribution of the model.
+  \item \textbf{Contextual} --- broken TLS trust, IDS alerts. Largely caught by rules
+  (a rule baseline takes roughly 97\% of it). Also not where the value is.
+  \item \textbf{Lateral movement} --- authorized but non-habitual. Feature-identical to
+  benign traffic by construction. \emph{The genuine target.}
+  \item \textbf{Credential reuse} --- a known principal's credentials arriving from a
+  client configuration that principal has never used. Policy-clean and signal-clean;
+  visible only on the \textit{config}\,$\rightarrow$\,\textit{user} binding.
+\end{itemize}
+
+The last two are what the architecture is for, and they are the two for which the
+leakage audit of Section~\ref{sec:setup} permits no exemptions.
+
+\subsection{Learning regime}
+
+Training is \textbf{one-class / semi-supervised}, not unsupervised, and we are precise
+about this because the distinction is routinely blurred. Labels are used in exactly two
+places: to select the training set (benign events only) and to calibrate the operating
+threshold on a validation slice. No label ever enters the computation of a test score.
+The primary threshold is additionally \emph{label-free}: a quantile of the
+signal-clean benign score distribution at a target false-positive rate. A
+cost-sensitive threshold, which does require labelled lateral events in the validation
+window, is reported separately and only as a declared upper bound.
+
+\subsection{The commit gate}
+
+\begin{figure}[t]
+\centering
+\begin{tikzpicture}[
+  font=\sffamily\scriptsize,
+  box/.style={draw, rounded corners=2pt, align=center, inner sep=3.5pt, minimum height=6mm},
+  fl/.style={->, >=Stealth, semithick}
+]
+\node[box, fill=blue!8] (ev) {access request $e_i$};
+\node[box, fill=orange!10, below=5mm of ev] (score) {score $a_i$ \\ \textit{(memory read only)}};
+\node[box, fill=green!10, below=5mm of score] (opa) {policy engine};
+\node[box, fill=gray!10, below left=6mm and -6mm of opa] (upd) {commit: \\ memory $+$ neighbours};
+\node[box, fill=red!8, below right=6mm and -6mm of opa] (noupd) {\textbf{no} commit};
+\draw[fl] (ev) -- (score);
+\draw[fl] (score) -- node[right, font=\sffamily\tiny] {$a_i$ advisory} (opa);
+\draw[fl] (opa) -- node[left, font=\sffamily\tiny, pos=0.6] {ALLOW} (upd);
+\draw[fl] (opa) -- node[right, font=\sffamily\tiny, pos=0.6] {DENY} (noupd);
+\end{tikzpicture}
+\caption{The measured protocol. The model scores against memory but never decides what
+enters it; the external policy engine does. The score is returned to the engine as
+advice and may be overridden in either direction.}
+\label{fig:gate}
+\end{figure}
+
+A streaming detector with a learned baseline faces a circularity: to stay current it
+must absorb new traffic, and if it absorbs traffic it itself judged benign, a patient
+adversary can walk the baseline to wherever they like. The usual framing treats this as
+an accepted risk. We treat it as a protocol requirement (Fig.~\ref{fig:gate}): the
+memory and the temporal neighbour store advance \textbf{only} on events the external
+policy engine admits.
+
+The distinction between the model's own threshold and the commit gate is not cosmetic.
+A model that decides what to remember drifts, and the false-positive rate runs away. All
+figures in this paper are produced under the external gate. A self-gated mode exists in
+the implementation, for deployments without a policy engine in the loop, and it is
+\emph{not} the protocol under which anything here was measured.
+
+Two residual exposures follow directly and are not solved: an adversary whose events
+the policy engine admits still poisons the baseline, and a benign entity persistently
+scored anomalous is never learned (starvation). Both are pushed to the orchestrator ---
+the engine is the decision authority, and a short grace period for newly admitted
+entities mitigates the second.
