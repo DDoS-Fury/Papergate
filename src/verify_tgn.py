@@ -25,7 +25,7 @@ import torch
 from graphagate.config import TGN_CHECKPOINT_PATH, TGN_STATS_PATH
 from graphagate.serve_tgn import load_model, score_event
 
-KEY_USER = 0          # a preregistered user entity
+KEY_USER = "user_0000"  # a preregistered user entity
 KEY_DEVICE = "ck:verify-device"                # admitted dynamically on first use
 KEY_SOURCE = "src:10.99.99.1"                  # namespaced source key, admitted on first use
 KEY_DST = "/api/v1/reactor-parameters"         # a preregistered resource entity URI

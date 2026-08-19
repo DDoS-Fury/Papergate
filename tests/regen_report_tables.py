@@ -65,6 +65,7 @@ def _load(rel_path: str, attr: str):
 
 BASELINES = {
     # display name -> (loader, label used in tab:baselines)
+    "tgn_2node": ("baselines/tgn_2node/tgn_2node_baseline.py", "tgn_2node_baseline", "TGN Vanilla (2 nodi)"),
     "gnn": ("baselines/simple_gnn/simple_gnn_baseline.py", "run", "GNN non temp."),
     "ocsvm": ("baselines/ocsvm/ocsvm_baseline.py", "ocsvm_baseline", "One-Class SVM"),
     "iforest": ("baselines/isolation_forest/isolation_forest_baseline.py",

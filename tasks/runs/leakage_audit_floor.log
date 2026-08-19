@@ -1,0 +1,19 @@
+==================================================
+LEAKAGE AUDIT & SINGLE-FEATURE FLOOR REPORT
+==================================================
+Date: 2026-08-19
+Seeds: [42, 7, 123]
+Events: 40,000 per seed
+Generator: v4 de-leaked synthetic generator
+
+Single-feature max AUC floor (post-deleakage):
+  - Policy violations (all features including declared risk): 0.858 (seeds: [0.862, 0.833, 0.880])
+  - Contextual recon (all features including IDS sensors): 0.899 (seeds: [0.897, 0.902, 0.899])
+  - Lateral movement (strictly no exemptions): 0.603 (seeds: [0.600, 0.596, 0.613])
+  - Credential theft (strictly no exemptions): 0.725 (seeds: [0.696, 0.739, 0.740])
+  - Exfiltration (massive transfer): 0.574 (seeds: [0.542, 0.579, 0.600])
+  - Benign human error (denied): 0.560 (seeds: [0.542, 0.551, 0.587])
+
+Result: All 14/14 tests in tests/test_leakage_audit.py PASS.
+Zero exact-value fingerprints, destination marginal matches benign law.
+==================================================

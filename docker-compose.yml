@@ -56,6 +56,18 @@ services:
   # vivono in tests/ (non copiata nell'immagine): la si monta come volume e si
   # sovrascrive l'entrypoint `python -m` con `python <path>`.
 
+  # TGN Vanilla 2 nodi (User -> Resource): ablation a 2 nodi della scomposizione ZTA.
+  baseline-tgn-2node:
+    <<: *base
+    profiles: ["baseline-tgn-2node"]
+    container_name: graphagate-baseline-tgn-2node
+    volumes:
+      - ./public:/app/public
+      - ./src:/app/src
+      - ./tests:/app/tests
+    entrypoint: ["python"]
+    command: ["/app/tests/baselines/tgn_2node/tgn_2node_baseline.py"]
+
   # Isolation Forest (sklearn): non-relazionale, solo feature statiche per-evento.
   baseline-iforest:
     <<: *base

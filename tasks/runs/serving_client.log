@@ -1,0 +1,20 @@
+==================================================
+TEST CLIENT REPORT (Docker serve-tgn REST API)
+==================================================
+Date: 2026-08-19
+Host: localhost:8888
+Duration: 10s
+Total Events Processed: 665
+Power Consumed: 0.000322 kWh (0.000106 kg CO2)
+RAM Usage: 18.4%
+VRAM Usage: 2755.8 MB / 16303.0 MB
+Latency (ms) - P50: 9.81 | P90: 11.01 | P99: 12.33
+Overall Accuracy: 42.56%
+Anomalies - Precision: 0.3054 | Recall: 0.8626 | F1 Score: 0.4511
+
+Accuracy by Event Type (Recall for anomalies, Specificity for benign):
+ - Benign: 126/483 (26.09%)
+ - Policy: 56/64 (87.50%)
+ - Contextual: 56/56 (100.00%)
+ - Lateral: 41/58 (70.69%)
+==================================================

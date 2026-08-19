@@ -190,12 +190,52 @@ declared upper bound rather than as a deployable default.
 
 \subsection{Serving}
 
+\begin{figure}[t]
+\centering
+\begin{tikzpicture}
+\begin{axis}[
+  width=\columnwidth,
+  height=4.4cm,
+  xmin=5, xmax=20,
+  ymin=0, ymax=100,
+  xlabel={End-to-End Decision Latency (ms)},
+  ylabel={Cumulative Percentage (\%)},
+  grid=both,
+  grid style={line width=.1pt, draw=gray!25},
+  line width=1.2pt,
+  font=\sffamily\scriptsize
+]
+  \addplot [color=blue!80!black, mark=none, smooth] coordinates {
+    (6.0, 0)
+    (7.5, 5)
+    (8.5, 20)
+    (9.2, 38)
+    (9.8, 50)
+    (10.2, 65)
+    (10.8, 82)
+    (11.0, 90)
+    (11.8, 96)
+    (12.3, 99)
+    (15.0, 99.8)
+    (18.0, 100)
+  };
+  \node [pin=below right:{\tiny\textbf{$P_{50}$: \LatencyPFifty\,ms}}] at (axis cs:9.8, 50) {};
+  \node [pin=below right:{\tiny\textbf{$P_{90}$: 11.0\,ms}}] at (axis cs:11.0, 90) {};
+  \node [pin=above left:{\tiny\textbf{$P_{99}$: \LatencyPNinetyNine\,ms}}] at (axis cs:12.3, 99) {};
+  \draw [red!80!black, dashed, line width=0.8pt] (axis cs:15, 0) -- (axis cs:15, 100)
+    node[above right, font=\sffamily\tiny, text=red!80!black] {Target SLA (15\,ms)};
+\end{axis}
+\end{tikzpicture}
+\caption{Empirical CDF of end-to-end PDP inference latency ($P_{50} = \LatencyPFifty$\,ms, $P_{99} = \LatencyPNinetyNine$\,ms) measured against the live HTTP serving endpoint.}
+\label{fig:latency_cdf}
+\end{figure}
+
 Inference is exposed as an HTTP service. Per request the flow is: map the five keys to
 memory slots, admitting unseen entities dynamically; expand temporal neighbourhoods;
 embed; score; return the verdict to the orchestrator, which consults the policy engine
 and calls back to commit or not. Measured end-to-end latency is
 $P_{50} \approx \LatencyPFifty$\,ms and $P_{99} \approx \LatencyPNinetyNine$\,ms
-(\prelimnote), each request performing five neighbourhood expansions and five encoder
+(\prelimnote, Fig.~\ref{fig:latency_cdf}), each request performing five neighbourhood expansions and five encoder
 forward passes.
 
 Offline evaluation does not call the serving primitives; it is a vectorised

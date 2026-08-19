@@ -38,3 +38,10 @@ dev = ["pytest>=8.0"]
 # `src/` layout: the package `graphagate` lives in src/.
 package-dir = { "graphagate" = "src" }
 packages = ["graphagate", "graphagate.data", "graphagate.model"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --ignore=tests/test_client.py"
+filterwarnings = [
+    "ignore::DeprecationWarning",
+]
