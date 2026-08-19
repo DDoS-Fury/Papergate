@@ -629,13 +629,10 @@ class ZTAStreamSimulator:
         u = incident["victim"]
         role, clr = self.user_roles[u], self.user_clearances[u]
         # The attacker holds the victim's credentials: OPA's role/clearance/category
-        # checks all pass. Prefer protected routes (the loot) over public ones.
-        sensitive = self._sensitive_actions(role)
-        if sensitive:
-            res_idx, method = self._zipf_choice(sensitive, ("sens", role))
-        else:
-            valid = self._policy_valid_actions(role)
-            res_idx, method = (self._zipf_choice(valid, ("valid", role)) if valid else (0, 0))
+        # checks all pass. Destination is drawn from valid actions for the role so attack
+        # and benign traffic share the same destination marginal (no risk shortcut).
+        valid = self._policy_valid_actions(role)
+        res_idx, method = (self._zipf_choice(valid, ("valid", role)) if valid else (0, 0))
         # Byte volumes are drawn from the SAME laws as benign traffic. Credential theft is
         # policy-clean and signal-clean by construction — only the broken
         # ip -> config -> device -> user binding exposes it. Constant byte values here used
@@ -689,7 +686,7 @@ class ZTAStreamSimulator:
             return 600.0  # Slow night traffic
 
     def step(self) -> dict:
-        self.t += int(np.random.exponential(scale=self._current_interarrival_scale()))
+        self.t += max(1, int(np.random.exponential(scale=self._current_interarrival_scale())))
         self.step_count += 1
 
         # Credential-theft incidents: requests from a never-seen attacker IP + device as
@@ -880,8 +877,13 @@ class ZTAStreamSimulator:
                     s3 = 1.0 if np.random.rand() > 0.90 else 0.0  # 10%
                     etype = 3
                     if random.random() < 0.5:  # stolen identity inside the message
-                        u_role = random.choice([r for r in ROLES if r != u_role])
-                        u_clearance = ROLE_CLEARANCE[u_role]  # spoofed role's clearance
+                        allowed_roles = [
+                            r for r in ROLES
+                            if r != u_role and self.policy_allows(r, method, self.resource_uris[res_idx])
+                        ]
+                        if allowed_roles:
+                            u_role = random.choice(allowed_roles)
+                            u_clearance = ROLE_CLEARANCE[u_role]  # spoofed role's clearance
                     if random.random() < _P_LATERAL_NEW_CONFIG:
                         # a new tool on this device: a config it has never presented
                         config = self._new_tool_config(machine)
@@ -942,11 +944,16 @@ class ZTAStreamSimulator:
         
         new_feat = torch.zeros(1, 16)
         new_feat[0, 14] = 1.0  # trust score
-        new_feat[0, 3] = self.num_resources / max(1.0, float(self.num_resources))
+        new_feat[0, 3] = 0.0  # slot [3] left at 0.0 to prevent label leakage (regression invariant)
         if self.use_resource_risk:
             new_feat[0, 4] = risk
             
         self.node_features = torch.cat([self.node_features, new_feat], dim=0)
+        
+        # Expand Zipf popularity weights for the newly added resource
+        new_rank = float(len(self._res_pop_weight))
+        new_weight = np.array([1.0 / ((new_rank + 1.0) ** 1.2)], dtype=np.float64)
+        self._res_pop_weight = np.concatenate([self._res_pop_weight, new_weight])
         
         self.num_resources += 1
         self.num_nodes += 1
@@ -954,7 +961,14 @@ class ZTAStreamSimulator:
         # Invalidate caches so the new resource is picked up
         self._valid_cache.clear()
         self._violation_cache.clear()
+        self._sensitive_cache.clear()
+        self._user_action_cache.clear()
         self._zipf_probs.clear()
+        self._all_actions = [
+            (r, m) for r, u in enumerate(self.resource_uris) for m in self.route_methods[u]
+        ]
+        if hasattr(self, "_anon_actions"):
+            del self._anon_actions
 
 
 @dataclass

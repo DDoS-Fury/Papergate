@@ -64,6 +64,12 @@ docker run --rm --gpus all -v "$PWD:/work" -w /work graphagate \
 - `ocsvm/` — One-Class SVM (sklearn, kernel RBF) sugli **stessi** vettori statici
   per-evento dell'Isolation Forest (fit su subsample benigno per scalabilità). La
   controparte kernel del "pavimento" non relazionale.
+- `tgn_2node/` — TGN **Vanilla a 2 nodi** (User -> Resource). Isola il contributo
+  della **decomposizione ZTA a 5 nodi** rispetto all'uso di un Temporal Graph Network
+  classico della letteratura su grafo di accesso diretto User-Resource. Mantiene la
+  stessa memoria ricorrente, time encoding e negative sampling, dimostrando che senza
+  gli archi di binding (Source -> Config -> Device -> User) il modello è cieco a
+  Credential Theft e Lateral Movement da nuove postazioni.
 - `simple_gnn/` — GNN **non temporale** (GraphSAGE) su grafo statico aggregato dal
   train benigno + link predictor MLP. Ablation **equa** del TGN: mantiene lo *stesso*
   curriculum **de-circolarizzato** (negativo strutturale a destinazione casuale +

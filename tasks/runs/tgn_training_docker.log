@@ -1,0 +1,39 @@
+==================================================
+TGN TRAINING REPORT (Docker graphagate-train-tgn)
+==================================================
+Date: 2026-08-19
+Hardware: NVIDIA GeForce RTX 5070 Ti (CUDA 13.2)
+Stream: ZTA Synthetic Stream v4 (5-node causal chain)
+Configuration:
+  - Events: 200,000
+  - Epochs: 15
+  - Seed: 42
+  - Mode: One-class semi-supervised (benign-only memory update)
+
+Results:
+  Test Stream | AUC: 0.8479 | AP: 0.8056
+  Routed decision | Precision: 0.8361 | Recall: 0.6079
+
+--- LATERAL RECALL: GLOBAL-FPR THRESHOLD  vs  COST-SENSITIVE ROUTING ---
+  before (global @FPR=0.01): lateral_recall=0.1576 | benign_fpr=0.0132
+  after  (routed cost-sensitive)       : lateral_recall=0.2376 | benign_fpr=0.0499
+  aggregate recall (global @FPR=0.01): 0.5650
+
+--- METRICHE PER TIPO DI ANOMALIA ---
+  policy     | OPA-owned   | n=3694 | AUC: 0.8484 | AP: 0.7056 | Recall@thr: 0.6508
+  contextual | rule-trivial | n=3801 | AUC: 0.9614 | AP: 0.9395 | Recall@thr: 0.9303
+  lateral    | rule-blind  | n=3821 | AUC: 0.7335 | AP: 0.3614 | Recall@thr: 0.2376
+  exfil      | volume-tell | n=  14 | AUC: 0.9995 | AP: 0.3182 | Recall@thr: 1.0000
+  benign-denied | OPA-owned   | n= 473 | AUC: 0.8527 | AP: 0.5243 | Recall@thr: 0.6617
+
+--- SCENARI v2 (goal a/b/c) ---
+  benign FPR  plain=0.0475 | roaming=0.0485 (n=2783) | wiped-cookie=nan (n=0)
+  lateral su device condivisi: recall@thr=0.2843 (n=985)
+
+--- BASELINE A REGOLE (signal-only) ---
+  Precision: 1.0000 | Recall: 0.3463 | Recall policy: 0.0000 | Recall contextual: 0.9616 | Recall lateral: 0.1131
+
+Artifacts:
+  Saved checkpoint -> public/tgn_checkpoint.pt
+  Saved stats      -> public/tgn_stats.json
+==================================================

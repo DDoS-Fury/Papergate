@@ -1,14 +1,15 @@
-# Build the paper. Requires tectonic (brew install tectonic) — it fetches IEEEtran and
-# runs the LaTeX/BibTeX passes itself, so no TeX Live installation is needed.
-
-TECTONIC ?= tectonic
+PDFLATEX ?= pdflatex
+BIBTEX ?= bibtex
 
 .PHONY: all check clean
 
 all: main.pdf
 
 main.pdf: main.tex results.tex refs.bib $(wildcard sections/*.tex)
-	$(TECTONIC) -X compile main.tex --keep-intermediates --keep-logs --synctex
+	$(PDFLATEX) -interaction=nonstopmode main.tex
+	$(BIBTEX) main
+	$(PDFLATEX) -interaction=nonstopmode main.tex
+	$(PDFLATEX) -interaction=nonstopmode main.tex
 
 # Guard for tasks/lessons.md L5: no literal three-decimal figure may appear outside
 # results.tex, so regenerating the numbers is always a one-file edit.

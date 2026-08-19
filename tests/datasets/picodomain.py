@@ -137,12 +137,25 @@ def _ts(row: dict) -> float:
 def _norm_principal(client: str) -> tuple[str | None, str | None]:
     """``kerberos.log:client`` → ``(user, device)``, realm-normalised.
 
-    ``HR-WIN7-1$/G.LAB`` is a *machine* account (device); ``jdoe/G.LAB`` is a user. The
-    realm appears as ``G.LAB``, ``g.lab`` and truncated ``G`` in the same capture, so the
-    principal is lower-cased and the realm dropped — without this, one entity occupies
-    three memory slots.
+    ``HR-WIN7-1$/G.LAB`` is a *machine* account (device); ``jdoe/G.LAB`` is a user.
+    SPNs like ``HOST/HR-WIN7-1.G.LAB`` or ``cifs/HR-WIN7-1`` map to the target device.
+    The realm is dropped and identities lower-cased so one entity occupies a single memory slot.
     """
-    name = client.split("/")[0].strip().lower()
+    if not client:
+        return None, None
+    raw = client.strip()
+    if "/" in raw:
+        service, rest = raw.split("/", 1)
+        service = service.strip().lower()
+        target = rest.split("@")[0].split(".")[0].strip().lower()
+        if service in {"host", "cifs", "http", "ldap", "rpc", "wsman", "restrictedadmin"} and target:
+            return None, target
+        if service.endswith("$"):
+            return None, service[:-1]
+        if service == "krbtgt":
+            return None, None
+        return service, None
+    name = raw.split("@")[0].strip().lower()
     if not name:
         return None, None
     if name.endswith("$"):

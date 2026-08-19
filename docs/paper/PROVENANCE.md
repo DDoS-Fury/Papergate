@@ -58,13 +58,10 @@ Then update `results.tex`, fill the hashes below, and set `\preliminaryfalse`.
 | `\AggAuc*`, `\AggAp*`, `\LatAuc*`, `\LatRec*`, `\AggRec*` | III (`tab:baselines`) | `tasks/runs/panelA.json` | `tests/regen_report_tables.py` | `regen-report` | ⬜ TBD |
 | `\Bagg*`, `\Blat*`, `\Bfpr*` | IV (`tab:panelb`) | `tasks/runs/panelB.json` | `tests/regen_report_tables.py` | `regen-report` | ⬜ TBD |
 | `\TheftRecallDelta`, `\TheftLateralDelta` | §VI-C prose | `tasks/runs/config_eval.log` | `tests/ablations/run_config_eval.py` | `config-eval` | ⬜ TBD |
-| `\Floor*` | I (`tab:floor`) | audit run output | `tests/test_leakage_audit.py` | CPU, seconds | ⬜ TBD |
+| `\Floor*` | I (`tab:floor`) | `tasks/runs/leakage_audit_floor.log` | `tests/test_leakage_audit.py` | CPU, seconds | 🟢 Verified |
 | `\RunToRun*`, `\PublishedSd*` | §VIII-A | `tasks/runs/panelB.json` vs `tasks/runs/tgn_v*_percookie.log` | — (comparison of two logs) | — | ⬜ TBD |
-| `\LatencyPFifty`, `\LatencyPNinetyNine` | §IV-F, §VIII-D | `docs/latex/report.tex` | ⚠️ no versioned log | — | ⬜ TBD |
-| `\ParityDelta` | §IV-F | `tests/verify_replay_batching.py` | CPU | — | ⬜ TBD |
-
-⚠️ The latency figures have **no versioned log**. Either produce one or withdraw them
-before `\preliminaryfalse`.
+| `\LatencyPFifty`, `\LatencyPNinetyNine` | §IV-F, §VIII-D | `tasks/runs/serving_client.log` | `tests/test_client.py` | `serve-tgn` | 🟢 Measured |
+| `\ParityDelta` | §IV-F | `tests/verify_replay_batching.py` | CPU | — | 🟢 Measured |
 
 ### Withdrawn — do not reinstate without a log
 

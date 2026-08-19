@@ -73,3 +73,49 @@ def test_resource_risk_and_source_internal_baked_into_node_features():
     for s in range(sim.src_slots):
         key = sim.keys[sim.src_lo + s]
         assert nf[sim.src_lo + s, 5].item() == (1.0 if ip_is_internal(key) else 0.0)
+
+
+def test_add_resource_dynamic_expansion():
+    sim = _sim()
+    init_res_count = sim.num_resources
+    init_nodes = sim.num_nodes
+    init_weights_len = len(sim._res_pop_weight)
+    
+    new_uri = "/api/v1/custom/new-resource"
+    sim.add_resource(new_uri, methods={0, 1}, classification="SECRET", categories={"security"}, risk=0.8)
+    
+    assert sim.num_resources == init_res_count + 1
+    assert sim.num_nodes == init_nodes + 1
+    assert len(sim._res_pop_weight) == init_weights_len + 1
+    assert new_uri in sim.resource_uris
+    assert sim.keys[-1] == new_uri
+    # Verify slot 3 remains 0.0 (no leakage) and slot 4 has the configured risk
+    assert sim.node_features[-1, 3].item() == 0.0
+    assert sim.node_features[-1, 4].item() == approx(0.8)
+    assert sim.node_features[-1, 14].item() == 1.0
+    
+    # Verify simulator step functions without IndexError
+    for _ in range(50):
+        ev = sim.step()
+        assert ev["dst"] < sim.num_nodes
+
+
+def test_norm_principal_spn_and_machine():
+    from datasets.picodomain import _norm_principal
+    
+    # Human user
+    assert _norm_principal("jdoe/G.LAB") == ("jdoe", None)
+    assert _norm_principal("admin@G.LAB") == ("admin", None)
+    
+    # Machine account
+    assert _norm_principal("HR-WIN7-1$/G.LAB") == (None, "hr-win7-1")
+    assert _norm_principal("FIN-PC2$@G.LAB") == (None, "fin-pc2")
+    
+    # SPN (service principal name) targeting a host
+    assert _norm_principal("HOST/HR-WIN7-1.g.lab@G.LAB") == (None, "hr-win7-1")
+    assert _norm_principal("cifs/DC1.g.lab") == (None, "dc1")
+    assert _norm_principal("HTTP/webserver.domain.local") == (None, "webserver")
+    
+    # KDC ticket request
+    assert _norm_principal("krbtgt/G.LAB@G.LAB") == (None, None)
+
