@@ -376,9 +376,46 @@ docker run --rm --gpus all -v "$PWD/public:/app/public" graphagate              
 docker run --rm --gpus all -v "$PWD/public:/app/public" graphagate graphagate.verify_tgn
 ```
 
+## Compilazione del Paper Scientifico
+
+Il manoscritto accademico in formato IEEEtran (`docs/paper/main.tex`) può essere compilato automaticamente tramite gli script dedicati in `scripts/`, che rilevano il motore LaTeX installato (`pdflatex`, `latexmk`, `xelatex`, `lualatex`, `tectonic` o fallback Docker `texlive/texlive`), risolvono la bibliografia con BibTeX e rimuovono i file intermedi di build.
+
+### Da PowerShell (Windows)
+
+```powershell
+# Compilazione automatica + pulizia dei file intermedi (.aux, .log, .bbl, ecc.)
+.\scripts\build_paper.ps1
+
+# Per forzare un motore specifico (es. pdflatex) o mantenere i file intermedi
+.\scripts\build_paper.ps1 -Engine pdflatex -KeepAux
+
+# Solo pulizia dei file temporanei
+.\scripts\build_paper.ps1 -CleanOnly
+```
+
+### Da Bash (Linux / macOS / WSL)
+
+```bash
+# Rendere eseguibile lo script (la prima volta)
+chmod +x ./scripts/build_paper.sh
+
+# Compilazione automatica + pulizia
+./scripts/build_paper.sh
+
+# Per forzare un motore specifico o mantenere i file intermedi
+./scripts/build_paper.sh --engine pdflatex --keep-aux
+
+# Solo pulizia dei file temporanei
+./scripts/build_paper.sh --clean-only
+```
+
+Il PDF generato finale viene salvato direttamente in `docs/paper/main.pdf`.
+
 ## Project layout
 
 ```
+docs/paper/                  # Manoscritto accademico IEEEtran (main.tex, results.tex, refs.bib)
+scripts/                     # Script di utilità e build (build_paper.ps1, build_paper.sh)
 src/config.py                # TGN hyper-parameters and artifact paths
 src/data/stream_synthetic.py # streaming mock data generator (policy / contextual / lateral anomalies)
 src/model/tgn.py             # TGN architecture: TGNMemory + identity + GNN + dual scorer

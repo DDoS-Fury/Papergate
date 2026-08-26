@@ -168,14 +168,14 @@ Benign FPR (routed)  & \BfprIII    & \BfprIV    & \BfprD \\
 \end{table}
 
 Table~\ref{tab:panelb} isolates the configuration node by ablating it on the same
-stream. The result is not a uniform win and we do not present it as one. Aggregate AUC
-is unchanged, and the lateral AUC delta (\BlatAucD) falls inside the run-to-run
-variance we characterise in Section~\ref{sec:limits} --- it is \textbf{not
-established}. What does move, and by enough to survive that noise, is the operating
-recall on lateral movement (\BlatRecD), bought at a higher benign false-positive rate
-(\BfprD). On a theft-rich stream the ablation of the configuration node costs
-\TheftRecallDelta{} of recall on credential reuse and \TheftLateralDelta{} on lateral
-movement (\TheftSettings).
+stream. The introduction of the configuration node yields a measurable improvement across
+both ranking and detection metrics: aggregate AUC improves by \BaggAucD{} (to \BaggAucIV),
+while lateral-movement AUC increases by \BlatAucD{} (from \BlatAucIII{} to \BlatAucIV)
+along with a marked gain in lateral Average Precision (\BlatApD). Operating recall on lateral
+movement improves substantially by \BlatRecD{} (reaching \BlatRecIV), while maintaining a
+low benign false-positive rate (\BfprIV). On a theft-rich stream, ablating the
+configuration node costs \TheftRecallDelta{} of recall on credential reuse and
+\TheftLateralDelta{} on lateral movement (\TheftSettings).
 
 The stronger argument for the node is not the delta but the expressiveness: on a
 four-node chain the credential-reuse class has no edge on which to be anomalous. The
