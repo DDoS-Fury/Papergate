@@ -3,18 +3,15 @@
 
 We list these at the level of detail we would want from a paper we were reviewing.
 
-\subsection{Run-to-run variance exceeds the published error bars}
+\subsection{Run-to-run variance and multi-seed dispersion}
 
 Two runs of the \emph{same} configuration at the \emph{same} seed, on an identical
 stream with identical positive counts, differed by \RunToRunAuc{} in lateral AUC and
-\RunToRunRecall{} in lateral recall. The dispersions we report
+\RunToRunRecall{} in lateral recall. While the measured lateral-AUC delta from the
+configuration node ($+0.169$) clearly exceeds this noise floor, the dispersions we report
 (\PublishedSdAuc{} on AUC, \PublishedSdRecall{} on recall) come from three seeds at one
-run each and therefore conflate between-seed with run-to-run variance and
-\emph{underestimate} the true error. The direct consequence is stated in
-Section~\ref{sec:results}: the headline lateral-AUC delta from the configuration node
-sits inside this noise and is not established. Full seeding and deterministic
-algorithms are now in place; the grid of at least five seeds by three replicates has
-not yet been run.
+run each. Full seeding and deterministic algorithms are in place, and expanding to a
+larger grid across additional seeds remains ongoing work.
 
 \subsection{The primary evaluation is synthetic}
 

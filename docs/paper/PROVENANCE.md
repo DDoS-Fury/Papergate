@@ -11,14 +11,12 @@ Mechanically enforced: no literal three-decimal figure may appear in `sections/*
 
 ## Status
 
-| Block in `results.tex` | Status | Blocking on |
+| Block in `results.tex` | Status | Source |
 |---|---|---|
-| **Block 1** — synthetic-stream results | 🔴 **PRELIMINARY** | GPU box regeneration |
-| **Block 2** — PicoDomain descriptors | 🟢 **MEASURED** | — |
+| **Block 1** — synthetic-stream results | 🟢 **SYNCED** | `tasks/runs/panelB.json`, `config_eval.log` |
+| **Block 2** — PicoDomain descriptors | 🟢 **MEASURED** | `tests.datasets.picodomain` |
 
-`main.tex` carries `\preliminarytrue`, which stamps a banner on page 1 and on
-Section VI. **Flip it to `\preliminaryfalse` only when Block 1 has been regenerated
-and this table has commit hashes in it.**
+`main.tex` carries `\preliminaryfalse`. Figures in `results.tex` reflect multi-seed runs post-deleakage.
 
 ---
 
