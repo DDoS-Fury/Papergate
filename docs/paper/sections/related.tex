@@ -51,6 +51,22 @@ authority on what enters its own baseline. We make that explicit and measure und
 PDP proposals are evaluated almost exclusively on bespoke, unreleased simulations ---
 a gap we confirm empirically in Section~\ref{sec:external}.
 
+Two recent systems combine Zero Trust with graph neural networks directly and are the
+closest work by framing. \textbf{TrustGraph}~\cite{trustgraph} builds a heterogeneous
+graph from windowed microservice telemetry --- logs, metrics, traces, authentication
+records --- scores it by reconstruction error, and feeds the result through a
+temporal-decay trust equation into closed-loop policy enforcement, evaluated on
+TrainTicket, Sock Shop and DeathStarBench. \textbf{ZT-GSAD}~\cite{ztgsad} applies
+GraphSAGE under zero-trust principles to a graph of financial transactions --- accounts,
+projects, suppliers --- for fraud detection. Neither operates on an authentication or
+access-request stream, neither has a node for the client's TLS configuration, and
+neither targets lateral movement or credential reuse: TrustGraph's substrate is
+service-mesh telemetry scored over temporal windows rather than per event, and ZT-GSAD's
+is transaction records scored as a graph-classification problem. Neither reports a
+mechanism that gates what a detector learns from, since neither treats its own baseline
+as a target the traffic it scores could poison. The overlap is the framing --- Zero
+Trust plus a graph neural network --- not the substrate, the task, or the protocol.
+
 \subsection{Client fingerprinting}
 
 JA3~\cite{ja3} hashes the ordered parameters of a TLS \texttt{ClientHello} into a

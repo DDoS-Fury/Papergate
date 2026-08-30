@@ -11,12 +11,21 @@ Mechanically enforced: no literal three-decimal figure may appear in `sections/*
 
 ## Status
 
-| Block in `results.tex` | Status | Source |
+| Block in `results.tex` | Status | Blocking on |
 |---|---|---|
-| **Block 1** — synthetic-stream results | 🟢 **SYNCED** | `tasks/runs/panelB.json`, `config_eval.log` |
+| **Block 1** — synthetic-stream results | 🔴 **PRELIMINARY** | GPU box regeneration (`regen-report`/`config-eval`, see below) |
 | **Block 2** — PicoDomain descriptors | 🟢 **MEASURED** | `tests.datasets.picodomain` |
+| **Block 3** — PicoDomain model evaluation | 🟢 **MEASURED** (single run) | `tests/eval_picodomain.py`, see below |
 
-`main.tex` carries `\preliminaryfalse`. Figures in `results.tex` reflect multi-seed runs post-deleakage.
+`main.tex` carries `\preliminarytrue`, which stamps a banner on page 1 and on the
+affected tables/figures. **Flip it to `\preliminaryfalse` only when Block 1 has been
+regenerated and this table has commit hashes in it.**
+
+> 2026-08-30: this row was briefly (commit `a11ed74`) marked "🟢 SYNCED" and the flag
+> flipped to `\preliminaryfalse` without any accompanying regeneration — no new
+> `tasks/runs/` artifact exists for that commit, and `results.tex`/`sections/*.tex`
+> still carry the same `\prelim{}`-flagged, pre-de-leakage, mixed-protocol numbers
+> described below. Reverted; see `tasks/todo.md` 2026-08-30 audit section.
 
 ---
 
@@ -29,7 +38,8 @@ Two independent problems, both documented in `tasks/todo.md` §6 and §7:
    produced them were clean *on the lateral class* — `AUC(node_feat[dst,3])` on lateral
    was 0.4899 on the pre-leak generator, i.e. chance, so the reported lateral AUC was
    genuinely earned — but the de-leaked task is measurably harder (single-feature floor
-   on lateral: 0.920 → 0.567), so the numbers will move.
+   on lateral: 0.920 → 0.603, per `tasks/runs/leakage_audit_floor.log`), so the numbers
+   will move.
 2. **Panel A mixes protocols.** The TGN row comes from a v3 per-cookie run; every
    baseline row comes from a v4 deployable run. The driver has been corrected
    (`run_panel_a_tgn` now runs the TGN under the baseline protocol), but the versioned
@@ -55,9 +65,9 @@ Then update `results.tex`, fill the hashes below, and set `\preliminaryfalse`.
 |---|---|---|---|---|---|
 | `\AggAuc*`, `\AggAp*`, `\LatAuc*`, `\LatRec*`, `\AggRec*` | III (`tab:baselines`) | `tasks/runs/panelA.json` | `tests/regen_report_tables.py` | `regen-report` | ⬜ TBD |
 | `\Bagg*`, `\Blat*`, `\Bfpr*` | IV (`tab:panelb`) | `tasks/runs/panelB.json` | `tests/regen_report_tables.py` | `regen-report` | ⬜ TBD |
-| `\TheftRecallDelta`, `\TheftLateralDelta` | §VI-C prose | `tasks/runs/config_eval.log` | `tests/ablations/run_config_eval.py` | `config-eval` | ⬜ TBD |
+| `\TheftRecallDelta`, `\TheftLateralDelta`, `\TheftRecOn/Off`, `\TheftAucOn/Off`, `\TheftN` | §VI-C prose | `tasks/runs/config_eval.log` | `tests/ablations/run_config_eval.py` | `config-eval` | ⬜ TBD |
 | `\Floor*` | I (`tab:floor`) | `tasks/runs/leakage_audit_floor.log` | `tests/test_leakage_audit.py` | CPU, seconds | 🟢 Verified |
-| `\RunToRun*`, `\PublishedSd*` | §VIII-A | `tasks/runs/panelB.json` vs `tasks/runs/tgn_v*_percookie.log` | — (comparison of two logs) | — | ⬜ TBD |
+| `\RunToRun*`, `\PublishedSd*` | §VIII-A | `tasks/runs/panelB.json` vs `tasks/runs/tgn_v*_percookie.log` | — (comparison of two logs) | n/a | 🟢 static (both logs exist and are read directly; no regeneration is owed — the "commit" column is n/a, not pending) |
 | `\LatencyPFifty`, `\LatencyPNinetyNine` | §IV-F, §VIII-D | `tasks/runs/serving_client.log` | `tests/test_client.py` | `serve-tgn` | 🟢 Measured |
 | `\ParityDelta` | §IV-F | `tests/verify_replay_batching.py` | CPU | — | 🟢 Measured |
 
@@ -100,3 +110,33 @@ command with `--bind-ttl 3600` and `--bind-ttl 900`. `\PicoSSLrecords`,
 inspection recorded in `docs/datasets.md` §3.1 and §3.3.
 
 These values stand independently of the Block 1 regeneration.
+
+---
+
+## Block 3 — PicoDomain model evaluation
+
+Produced 2026-08-30, GPU (`docker compose --profile eval-picodomain up`), commit
+`a11ed74`. Log: `tasks/runs/picodomain_eval_docker.log`. Single run — no seed sweep, no
+hyperparameter search on this corpus (same config as the synthetic Panel A/B run).
+
+```
+aggregate AUC=0.6658 AP=0.1370
+lateral    AUC=0.6402 AP=0.0597 n=356
+theft      AUC=0.6957 AP=0.0222 n=102
+contextual AUC=0.6810 AP=0.0729 n=397
+```
+
+**Recall-at-threshold is withdrawn from this block, deliberately.** The chronological
+70/10/20 split is by event count; PicoDomain's red-team campaign is concentrated in the
+last ~16% of the stream (first lateral event at index fraction 0.843, first theft at
+0.842), so the validation window (indices 70-80%) contains zero lateral and zero theft
+events — training is 100% benign in the first 70%, which is correct behaviour for
+one-class training, not a defect. Any threshold fit on that validation window is
+calibrated against zero positive examples and is uninformative by construction; the
+`recall@thr=0.0000` figures in the raw log are an artifact of this, not a measurement of
+the model. AUC/AP are computed directly on the test-set ranking and do not depend on the
+threshold, so they are the only PicoDomain-model numbers reported in the paper. Do not
+add a recall figure for this block without first fixing the split (e.g. time-stratified
+rather than count-stratified) — a decision explicitly deferred, since the current split
+is the correct training protocol, only the wrong protocol for measuring recall on a
+single tail-concentrated campaign.

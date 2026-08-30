@@ -93,6 +93,23 @@ figures in this paper are produced under the external gate. A self-gated mode ex
 the implementation, for deployments without a policy engine in the loop, and it is
 \emph{not} the protocol under which anything here was measured.
 
+A precision about what \emph{external} means here: the commit gate does not query a
+live policy-engine process during training or evaluation. It gates on a deterministic
+function of the same edge signals a policy engine's own rules are written over --- an
+unfamiliar client fingerprint, a sensor/IDS flag --- documented in the release as an
+explicit ALLOW proxy (\texttt{signal\_dirty}, wired in \texttt{serve\_tgn.py} and shared
+by \texttt{train\_tgn.py}). We use the proxy rather than a live process because, in the
+deployment this evaluation targets, the policy engine's own decision is dominated by
+that same deterministic layer; the substitution is conservative rather than favourable
+to us, since it also commits signal-clean laterals a live engine would likewise admit,
+which inflates the residual poisoning surface the model must tolerate rather than hiding
+it. What distinguishes the protocol from the self-gated ablation, and what
+\emph{external} is meant to convey, is that commit decisions are driven by a signal
+outside the model's own score --- not that a live policy-engine process was queried per
+event. Wiring a live process into the loop is future work; the harness for it
+(\texttt{policy\_allows}, unit-tested in \texttt{tests/test\_policy\_blp.py}) already
+exists as a separate, evaluated component of the synthetic generator.
+
 Two residual exposures follow directly and are not solved: an adversary whose events
 the policy engine admits still poisons the baseline, and a benign entity persistently
 scored anomalous is never learned (starvation). Both are pushed to the orchestrator ---

@@ -88,6 +88,11 @@
 \newcommand{\TheftRecallDelta}{$+$0.108}
 \newcommand{\TheftLateralDelta}{$+$0.135}
 \newcommand{\TheftSettings}{3 seeds, 80\,000 events, 12 epochs, theft-rich stream}
+\newcommand{\TheftAucOn}{0.729\,$\pm$\,0.088}
+\newcommand{\TheftAucOff}{0.676\,$\pm$\,0.036}
+\newcommand{\TheftRecOn}{0.314\,$\pm$\,0.107}
+\newcommand{\TheftRecOff}{0.206\,$\pm$\,0.039}
+\newcommand{\TheftN}{452}
 
 % --- Run-to-run variance: same configuration, same seed, two runs --------------------
 \newcommand{\RunToRunAuc}{0.038}
@@ -137,3 +142,27 @@
 \newcommand{\PicoJAthree}{12}
 \newcommand{\PicoKrbCoverage}{23.4\%}
 \newcommand{\PicoUidOverlap}{0}
+
+% -------------------------------------------------------------------------------------
+% BLOCK 3 — MEASURED. PicoDomain model evaluation (real telemetry, real TGN).
+%
+% `tests/eval_picodomain.py` (docker-compose profile `eval-picodomain`), single run, no
+% seed sweep, default synthetic-tuned hyperparameters (epochs=15, cost_ratio default,
+% eval_batch_size=1024, chronological 70/10/20 split by event count). Log:
+% tasks/runs/picodomain_eval_docker.log. Recall-at-threshold is NOT reported: the entire
+% red-team campaign falls in the last ~16% of the stream by event index (first lateral/
+% theft event at 84.3%/84.2%), so the validation window (70-80%) contains zero lateral
+% and zero theft events and threshold calibration on it is uninformative by construction
+% -- not a model failure. AUC/AP, computed on the test-set ranking, do not depend on that
+% threshold and are reported as the case-study result.
+% -------------------------------------------------------------------------------------
+\newcommand{\PicoModelSettings}{single run, 15 epochs, default synthetic-tuned hyperparameters, chronological 70/10/20 split}
+\newcommand{\PicoModelAggAuc}{0.666}
+\newcommand{\PicoModelAggAp}{0.137}
+\newcommand{\PicoModelLatAuc}{0.640}
+\newcommand{\PicoModelLatAp}{0.060}
+\newcommand{\PicoModelTheftAuc}{0.696}
+\newcommand{\PicoModelTheftAp}{0.022}
+\newcommand{\PicoModelCtxAuc}{0.681}
+\newcommand{\PicoModelCtxAp}{0.073}
+\newcommand{\PicoModelCtxN}{397}  % test-split-only count; 15 of \PicoNctx fall in val
