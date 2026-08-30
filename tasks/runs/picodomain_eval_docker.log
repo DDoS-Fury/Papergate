@@ -1,0 +1,81 @@
+Attaching to graphagate-eval-picodomain
+ Container graphagate-eval-picodomain Starting 
+ Container graphagate-eval-picodomain Started 
+graphagate-eval-picodomain  | --- LOADING PICODOMAIN STREAM ---
+graphagate-eval-picodomain  | [picodomain] events=55436 nodes=625 (users=15 devices=13 sources=8 configs=20 resources=569)
+graphagate-eval-picodomain  | [picodomain] binding coverage: user=90.2% device=97.5% config=94.8%  ttl=36000s
+graphagate-eval-picodomain  | [picodomain] labels: benign=54566 contextual=412 lateral=356 theft=102  window=±90s
+graphagate-eval-picodomain  | 
+graphagate-eval-picodomain  | --- TRAIN + EVALUATE (PicoDomain external validity) ---
+graphagate-eval-picodomain  | Using injected dataset stream...
+graphagate-eval-picodomain  | Using device: cuda
+graphagate-eval-picodomain  | --- INIZIO ADDESTRAMENTO ONE-CLASS (solo traffico benigno) ---
+graphagate-eval-picodomain  | Epoch 01 | Train Loss: 2.1690
+graphagate-eval-picodomain  | Epoch 01/15 [train]:   0%|          | 0/194 [00:00<?, ?it/s]Epoch 01/15 [train]: 100%|##########| 194/194 [00:06<00:00, 28.25it/s, loss=1.5946]
+graphagate-eval-picodomain  | Epoch 02 | Train Loss: 1.9172
+graphagate-eval-picodomain  | Epoch 02/15 [train]:   0%|          | 0/194 [00:00<?, ?it/s]Epoch 02/15 [train]: 100%|##########| 194/194 [00:06<00:00, 29.13it/s, loss=1.2526]
+graphagate-eval-picodomain  | Epoch 03 | Train Loss: 1.5268
+graphagate-eval-picodomain  | Epoch 03/15 [train]:   0%|          | 0/194 [00:00<?, ?it/s]Epoch 03/15 [train]: 100%|##########| 194/194 [00:06<00:00, 29.28it/s, loss=0.8696]
+graphagate-eval-picodomain  | Epoch 04/15 [train]:   0%|          | 0/194 [00:00<?, ?it/s]Epoch 04/15 [train]: 100%|##########| 194/194 [00:06<00:00, 29.37it/s, loss=0.3353]
+graphagate-eval-picodomain  | Epoch 04 | Train Loss: 0.8263
+graphagate-eval-picodomain  | Epoch 05/15 [train]:   0%|          | 0/194 [00:00<?, ?it/s]Epoch 05/15 [train]: 100%|##########| 194/194 [00:06<00:00, 29.46it/s, loss=0.3632]
+graphagate-eval-picodomain  | Epoch 05 | Train Loss: 0.8131
+graphagate-eval-picodomain  | Epoch 06/15 [train]:   0%|          | 0/194 [00:00<?, ?it/s]Epoch 06/15 [train]: 100%|##########| 194/194 [00:06<00:00, 29.24it/s, loss=0.3203]
+graphagate-eval-picodomain  | Epoch 06 | Train Loss: 0.5445
+graphagate-eval-picodomain  | Epoch 07 | Train Loss: 0.5678
+graphagate-eval-picodomain  | Epoch 07/15 [train]:   0%|          | 0/194 [00:00<?, ?it/s]Epoch 07/15 [train]: 100%|##########| 194/194 [00:06<00:00, 28.94it/s, loss=0.3137]
+graphagate-eval-picodomain  | Epoch 08 | Train Loss: 0.4013
+graphagate-eval-picodomain  | Epoch 08/15 [train]:   0%|          | 0/194 [00:00<?, ?it/s]Epoch 08/15 [train]: 100%|##########| 194/194 [00:06<00:00, 28.82it/s, loss=0.2596]
+graphagate-eval-picodomain  | Epoch 09/15 [train]:   0%|          | 0/194 [00:00<?, ?it/s]Epoch 09/15 [train]: 100%|##########| 194/194 [00:06<00:00, 28.79it/s, loss=0.2225]
+graphagate-eval-picodomain  | Epoch 09 | Train Loss: 0.4775
+graphagate-eval-picodomain  | Epoch 10/15 [train]:   0%|          | 0/194 [00:00<?, ?it/s]Epoch 10/15 [train]: 100%|##########| 194/194 [00:06<00:00, 29.33it/s, loss=0.2376]
+graphagate-eval-picodomain  | Epoch 10 | Train Loss: 0.3619
+graphagate-eval-picodomain  | Epoch 11/15 [train]:   0%|          | 0/194 [00:00<?, ?it/s]Epoch 11/15 [train]: 100%|##########| 194/194 [00:06<00:00, 29.24it/s, loss=0.2551]
+graphagate-eval-picodomain  | Epoch 11 | Train Loss: 0.3833
+graphagate-eval-picodomain  | Epoch 12 | Train Loss: 0.3379
+graphagate-eval-picodomain  | Epoch 12/15 [train]:   0%|          | 0/194 [00:00<?, ?it/s]Epoch 12/15 [train]: 100%|##########| 194/194 [00:06<00:00, 28.91it/s, loss=0.2926]
+graphagate-eval-picodomain  | Epoch 13/15 [train]:   0%|          | 0/194 [00:00<?, ?it/s]Epoch 13/15 [train]: 100%|##########| 194/194 [00:06<00:00, 29.47it/s, loss=0.2926]
+graphagate-eval-picodomain  | Epoch 13 | Train Loss: 0.3004
+graphagate-eval-picodomain  | Epoch 14 | Train Loss: 0.3182
+graphagate-eval-picodomain  | Epoch 14/15 [train]:   0%|          | 0/194 [00:00<?, ?it/s]Epoch 14/15 [train]: 100%|##########| 194/194 [00:06<00:00, 29.45it/s, loss=0.2798]
+graphagate-eval-picodomain  | Epoch 15 | Train Loss: 0.2821
+graphagate-eval-picodomain  | 
+graphagate-eval-picodomain  | --- CALIBRAZIONE SOGLIA (su flusso di validazione benigno) ---
+graphagate-eval-picodomain  | Epoch 15/15 [train]:   0%|          | 0/194 [00:00<?, ?it/s]Epoch 15/15 [train]: 100%|##########| 194/194 [00:06<00:00, 29.21it/s, loss=0.3339]
+graphagate-eval-picodomain  | Calibrazione pass A (replay val, no soglia):   0%|          | 0/5543 [00:00<?, ?it/s]Calibrazione pass A (replay val, no soglia): 100%|##########| 5543/5543 [00:00<00:00, 43971.54it/s]
+graphagate-eval-picodomain  | Calibrazione pass B (replay val, gate di test):   0%|          | 0/5543 [00:00<?, ?it/s]Calibrazione pass B (replay val, gate di test): 100%|##########| 5543/5543 [00:00<00:00, 47390.80it/s]
+graphagate-eval-picodomain  | Benign val score: mean=0.1768 p95=1.0000
+graphagate-eval-picodomain  | threshold_dirty@FPR=0.01: 1.0000 | threshold_clean_unsup@FPR=0.01: 1.0000 [PRIMARY, label-free] | threshold_clean@cost_ratio=20.0: 1.0000 [SUPERVISED upper bound — requires labelled lateral movement in the validation window; clean cal: n_benign=5528 n_lateral=0]
+graphagate-eval-picodomain  | 
+graphagate-eval-picodomain  | --- INIZIO FASE DI INFERENZA / ANOMALY DETECTION (batch=1024) ---
+graphagate-eval-picodomain  | 
+graphagate-eval-picodomain  | [!] eval_batch_size=1024 > 1: i punteggi sono l'APPROSSIMAZIONE BATCHATA (veloce, ma NON identica al serving sequenziale: staleness intra-batch). Per numeri finali / da pubblicare usa eval_batch_size=1.
+graphagate-eval-picodomain  | Inferenza (replay test):   0%|          | 0/11088 [00:00<?, ?it/s]Inferenza (replay test): 100%|##########| 11088/11088 [00:00<00:00, 49273.86it/s]
+graphagate-eval-picodomain  | Test Stream | AUC: 0.6658 | AP: 0.1370
+graphagate-eval-picodomain  | Routed decision | Precision: 0.0000 | Recall: 0.0000
+graphagate-eval-picodomain  | 
+graphagate-eval-picodomain  | --- LATERAL RECALL: GLOBAL-FPR THRESHOLD  vs  COST-SENSITIVE ROUTING ---
+graphagate-eval-picodomain  |   before (global @FPR=0.01): lateral_recall=0.0000 | benign_fpr=0.0000
+graphagate-eval-picodomain  |   after  (routed cost-sensitive)       : lateral_recall=0.0000 | benign_fpr=0.0000
+graphagate-eval-picodomain  |   aggregate recall (global @FPR=0.01): 0.0000
+graphagate-eval-picodomain  | 
+graphagate-eval-picodomain  | --- METRICHE PER TIPO DI ANOMALIA ---
+graphagate-eval-picodomain  |   contextual | rule-trivial | n= 397 | AUC: 0.6810 | AP: 0.0729 | Recall@thr: 0.0000
+graphagate-eval-picodomain  |   lateral    | rule-blind  | n= 356 | AUC: 0.6402 | AP: 0.0597 | Recall@thr: 0.0000
+graphagate-eval-picodomain  |   cred-theft | rule-blind  | n= 102 | AUC: 0.6957 | AP: 0.0222 | Recall@thr: 0.0000
+graphagate-eval-picodomain  | 
+graphagate-eval-picodomain  | --- LATERAL: COLD-START CONDITIONING ---
+graphagate-eval-picodomain  |   warmed src (has benign history): n= 356 | recall@thr=0.0000 | AUC=0.6402
+graphagate-eval-picodomain  |   cold   src (no history yet)     : n=   0 | recall@thr=nan  (detection not yet possible)
+graphagate-eval-picodomain  | 
+graphagate-eval-picodomain  | --- BASELINE A REGOLE (signal-only) ---
+graphagate-eval-picodomain  |   Precision: 0.0000 | Recall: 0.0000 | Recall policy: 0.0000 | Recall contextual: 0.0000 | Recall lateral: 0.0000
+graphagate-eval-picodomain  |   NOTE: the rule baseline catches contextual anomalies almost entirely (edge signals only) but is blind to policy/lateral — that gap is the TGN's value-add.
+graphagate-eval-picodomain  | 
+graphagate-eval-picodomain  | --- PICODOMAIN SUMMARY ---
+graphagate-eval-picodomain  |   aggregate AUC=0.6658 AP=0.1370
+graphagate-eval-picodomain  |   lateral recall  before(global-FPR)=0.0000  after(cost-sensitive)=0.0000
+graphagate-eval-picodomain  |   benign FPR      before=0.0000  after=0.0000
+graphagate-eval-picodomain  |   lateral     AUC=0.6402 AP=0.0597 recall@routed=0.0000 n=356
+graphagate-eval-picodomain  |   contextual  AUC=0.6810 AP=0.0729 recall@routed=0.0000 n=397
+[Kgraphagate-eval-picodomain exited with code 0

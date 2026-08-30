@@ -97,6 +97,35 @@ asset classification. Its value is qualitative and specific: it is existence pro
 the five-node chain is observable in real enterprise telemetry, and the only public
 setting where the configuration node can be exercised on real fingerprints.
 
+\subsection{Model results on PicoDomain}
+\label{sec:pico-model}
+
+We ran the same one-class training, calibration and streaming-evaluation pipeline used
+on the synthetic stream (\texttt{tests/eval\_picodomain.py}) directly on the mapped
+PicoDomain stream (\PicoModelSettings), with no per-corpus hyperparameter tuning.
+Ranking quality is clearly above chance on all three classes: aggregate
+AUC \PicoModelAggAuc{} / AP \PicoModelAggAp; lateral AUC \PicoModelLatAuc{} / AP
+\PicoModelLatAp{} ($n=\PicoNlateral$); credential-theft AUC \PicoModelTheftAuc{} / AP
+\PicoModelTheftAp{} ($n=\PicoNtheft$); contextual AUC \PicoModelCtxAuc{} / AP
+\PicoModelCtxAp{} ($n=\PicoModelCtxN$, the test-split share of \PicoNctx{} total). This
+is markedly weaker than the synthetic result,
+as expected from a corpus two orders of magnitude smaller and with only eight source
+addresses, and we report it as a case-study signal, not a competing headline number.
+
+We do not report an operating recall on this corpus, and the omission is deliberate
+rather than an oversight. PicoDomain's red-team campaign is concentrated in the final
+portion of the capture --- the first lateral and credential-theft events land at 84.3\%
+and 84.2\% of the stream by index --- so under the chronological 70/10/20 split the
+training window is entirely benign (the correct condition for one-class training) but
+the validation window used to calibrate the detection threshold contains zero lateral
+and zero theft events. A threshold fit against zero positive examples is uninformative
+by construction, and reporting a recall number derived from it would misattribute a
+split artifact to the model. We regard this as a genuine limitation of evaluating an
+operating point on a single, tail-concentrated intrusion campaign, not of the ranking
+itself, and leave a split that also gives a representative validation sample of the
+attack (e.g.\ time-stratified rather than count-stratified) to future work on a larger
+real-world corpus.
+
 \subsection{LANL as an ablation, not a peer benchmark}
 
 Omitting LANL from a lateral-movement paper invites an obvious question, so we state

@@ -173,9 +173,12 @@ both ranking and detection metrics: aggregate AUC improves by \BaggAucD{} (to \B
 while lateral-movement AUC increases by \BlatAucD{} (from \BlatAucIII{} to \BlatAucIV)
 along with a marked gain in lateral Average Precision (\BlatApD). Operating recall on lateral
 movement improves substantially by \BlatRecD{} (reaching \BlatRecIV), while maintaining a
-low benign false-positive rate (\BfprIV). On a theft-rich stream, ablating the
-configuration node costs \TheftRecallDelta{} of recall on credential reuse and
-\TheftLateralDelta{} on lateral movement (\TheftSettings).
+low benign false-positive rate (\BfprIV). On a theft-rich stream, credential-reuse
+detection with the configuration node reaches AUC \TheftAucOn{} and recall
+\TheftRecOn{} ($n=\TheftN$ theft events); ablating the node drops both to AUC
+\TheftAucOff{} and recall \TheftRecOff{}, a cost of \TheftRecallDelta{} recall on
+credential reuse and \TheftLateralDelta{} on lateral movement on the same stream
+(\TheftSettings).
 
 The stronger argument for the node is not the delta but the expressiveness: on a
 four-node chain the credential-reuse class has no edge on which to be anomalous. The
