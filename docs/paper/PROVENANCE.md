@@ -13,25 +13,77 @@ Mechanically enforced: no literal three-decimal figure may appear in `sections/*
 
 | Block in `results.tex` | Status | Blocking on |
 |---|---|---|
-| **Block 1** — synthetic-stream results | 🔴 **PRELIMINARY** | GPU box regeneration (`regen-report`/`config-eval`, see below) |
+| **Block 1** — synthetic-stream results | 🟢 **MEASURED** (2026-08-31) | — (see "2026-08-31 regeneration" below) |
 | **Block 2** — PicoDomain descriptors | 🟢 **MEASURED** | `tests.datasets.picodomain` |
 | **Block 3** — PicoDomain model evaluation | 🟢 **MEASURED** (single run) | `tests/eval_picodomain.py`, see below |
 
-`main.tex` carries `\preliminarytrue`, which stamps a banner on page 1 and on the
-affected tables/figures. **Flip it to `\preliminaryfalse` only when Block 1 has been
-regenerated and this table has commit hashes in it.**
+`main.tex` carried `\preliminarytrue`, which stamps a banner on page 1 and on the
+affected tables/figures, since Block 1 was blocked on GPU regeneration. As of
+2026-08-31 all three pieces of Block 1 (Panel A, Panel B, credential-theft deltas) are
+regenerated and reproducible from HEAD — see below for the specific evidence — so the
+flag was flipped to `\preliminaryfalse` in the same session as this update.
 
 > 2026-08-30: this row was briefly (commit `a11ed74`) marked "🟢 SYNCED" and the flag
 > flipped to `\preliminaryfalse` without any accompanying regeneration — no new
 > `tasks/runs/` artifact exists for that commit, and `results.tex`/`sections/*.tex`
-> still carry the same `\prelim{}`-flagged, pre-de-leakage, mixed-protocol numbers
-> described below. Reverted; see `tasks/todo.md` 2026-08-30 audit section.
+> still carried the same `\prelim{}`-flagged, pre-de-leakage, mixed-protocol numbers
+> described below. Reverted; see `tasks/todo.md` 2026-08-30 audit section. **The
+> 2026-08-31 flip below is not a repeat of that mistake**: unlike `a11ed74`, this flip
+> is accompanied by (a) a new `tasks/runs/panelA.json` with 3-seed data for all 6
+> models, (b) `results.tex` macros updated to match it (verified against
+> `tab_baselines.tex` and recomputed independently via `report_metrics.mean_std`,
+> ddof=1), (c) `git log -1 --format=%ci -- src tests` = `2026-08-19 15:55:58 +0200`,
+> before the run's `2026-08-31T09:19:22+00:00` timestamp, confirming HEAD's code
+> produced this data, (d) a green `make && make check`, and (e) the log-capture gap
+> below disclosed rather than hidden.
+
+### 2026-08-31 regeneration — Panel A (Table III)
+
+`docker compose --profile regen-report up`, commit `031b442`. Output:
+`tasks/runs/panelA.json` (`meta.generated` = `2026-08-31T09:19:22+00:00`, 3 seeds ×
+6 models — TGN, TGN-2node, static GNN, One-Class SVM, Isolation Forest, XGBoost — all
+present), `docs/latex/generated/tab_baselines.tex`.
+
+**Known gap, disclosed rather than hidden**: `tasks/runs/regen_report.log`'s capture is
+truncated mid-run, at Panel A / TGN / seed=42, before that seed's inference phase even
+finishes printing — it does **not** cover the full run that produced `panelA.json`
+(the JSON's `meta.generated` timestamp is ~14h after the log's last line). The JSON
+itself is not in doubt: all 3 seeds are present for all 6 models, `src/train_tgn.py`
+fully seeds `torch`/`numpy`/`random` and calls
+`torch.use_deterministic_algorithms(True, ...)` (verified in-session:
+`tasks/runs/panelB.json`'s raw floating-point values are bit-identical between a
+2026-08-18 and a 2026-08-30 rerun of the same seeds), and `git log` confirms `src`/
+`tests` were untouched between the code that would have produced this data and HEAD.
+But the log transcript itself cannot be cited as evidence past line 408 — if this run
+is ever disputed, re-run `docker compose --profile regen-report up` and diff against
+the JSON checked in here (determinism means it should reproduce bit-for-bit).
+
+**Protocol fix realized**: `run_panel_a_tgn` in `tests/regen_report_tables.py` builds
+the TGN's config identically to every baseline row (`dataclasses.replace(TGNConfig(),
+seed=seed)`, deployable dev:guest, v4) — the "TGN row = v3 per-cookie, baselines = v4
+deployable" mismatch described in older drafts of this document no longer exists. (The
+LaTeX-emission code had stale labels claiming otherwise — `"TGN (v3, per-cookie)"` and
+a `"Protocollo MISTO (storico)"` comment — even though the underlying run was already
+unified; fixed in the same commit as this note, cosmetic only, did not affect any
+number.)
+
+**Not incorporated — flagged, not lost**: `panelA.json`/`tab_baselines.tex` also
+measured a `tgn_2node` baseline (`tests/baselines/tgn_2node`) not currently in
+`tab:baselines`. It is competitive with the full 5-node TGN under the *same* protocol
+and seeds: it **beats** the TGN on aggregate recall (0.625 vs 0.550), lateral recall
+(0.170 vs 0.161) and aggregate AP (0.822 vs 0.801), and **ties** on aggregate AUC
+(0.854 vs 0.853); the 5-node TGN wins only on lateral AUC (0.721 vs 0.659). Values are
+recorded as `\AggAucTGNii` etc. in `results.tex` but not wired into a table row —
+deciding whether/how to present a same-family baseline that outperforms the proposed
+method on 3 of 5 metrics is a narrative decision for the paper's authors, not a data-
+sync task. Do not drop this without addressing it in the text.
 
 ---
 
-## Block 1 — why it is preliminary
+## Block 1 — why it *was* preliminary (resolved 2026-08-31)
 
-Two independent problems, both documented in `tasks/todo.md` §6 and §7:
+Two independent problems, both documented in `tasks/todo.md` §6 and §7 — kept here as
+history, since a future regeneration needs to know what was originally wrong:
 
 1. **Not reproducible from HEAD.** The values were produced on 2026-06-24, before the
    generator de-leakage of 2026-08-03. That generator no longer exists. The runs that
@@ -39,33 +91,36 @@ Two independent problems, both documented in `tasks/todo.md` §6 and §7:
    was 0.4899 on the pre-leak generator, i.e. chance, so the reported lateral AUC was
    genuinely earned — but the de-leaked task is measurably harder (single-feature floor
    on lateral: 0.920 → 0.603, per `tasks/runs/leakage_audit_floor.log`), so the numbers
-   will move.
-2. **Panel A mixes protocols.** The TGN row comes from a v3 per-cookie run; every
-   baseline row comes from a v4 deployable run. The driver has been corrected
-   (`run_panel_a_tgn` now runs the TGN under the baseline protocol), but the versioned
-   numbers predate that fix.
+   moved. **Resolved**: superseded by the 2026-08-31 `panelA.json` run, reproducible
+   from HEAD (see status table above).
+2. **Panel A mixed protocols.** The TGN row came from a v3 per-cookie run; every
+   baseline row came from a v4 deployable run. **Resolved**: `run_panel_a_tgn` now runs
+   the TGN under the baseline protocol, and the 2026-08-31 run reflects that fix (see
+   "Protocol fix realized" above).
 
 ### Regeneration
 
-All on the GPU box via Compose — never a local CPU venv (`tasks/lessons.md`):
+All on the GPU box via Compose — never a local CPU venv (`tasks/lessons.md`). Panel A/B
+and config-eval are what gate Block 1's status and are now done (see status table
+above); `ablations` is permanently withdrawn (§VI-D); `arch-sweep` and
+`guest-device-eval` are not currently cited by any macro in `results.tex` and do not
+gate anything here — re-run them only if new sections start depending on their output.
 
 ```bash
-docker compose --profile regen-report      up   # Panels A and B
-docker compose --profile config-eval       up   # credential-theft deltas
-docker compose --profile ablations         up   # per-component ablations (withdrawn)
-docker compose --profile arch-sweep        up
-docker compose --profile guest-device-eval up
+docker compose --profile regen-report      up   # Panels A and B — done 2026-08-31/30
+docker compose --profile config-eval       up   # credential-theft deltas — done 2026-08-18
+docker compose --profile ablations         up   # per-component ablations (withdrawn, do not re-run for Block 1)
+docker compose --profile arch-sweep        up   # not currently cited in the paper
+docker compose --profile guest-device-eval up   # not currently cited in the paper
 ```
-
-Then update `results.tex`, fill the hashes below, and set `\preliminaryfalse`.
 
 ### Macro → source map
 
 | Macros | Table | Source of record | Generator script | Compose profile | Commit |
 |---|---|---|---|---|---|
-| `\AggAuc*`, `\AggAp*`, `\LatAuc*`, `\LatRec*`, `\AggRec*` | III (`tab:baselines`) | `tasks/runs/panelA.json` | `tests/regen_report_tables.py` | `regen-report` | ⬜ TBD |
-| `\Bagg*`, `\Blat*`, `\Bfpr*` | IV (`tab:panelb`) | `tasks/runs/panelB.json` | `tests/regen_report_tables.py` | `regen-report` | ⬜ TBD |
-| `\TheftRecallDelta`, `\TheftLateralDelta`, `\TheftRecOn/Off`, `\TheftAucOn/Off`, `\TheftN` | §VI-C prose | `tasks/runs/config_eval.log` | `tests/ablations/run_config_eval.py` | `config-eval` | ⬜ TBD |
+| `\AggAuc*`, `\AggAp*`, `\LatAuc*`, `\LatRec*`, `\AggRec*` | III (`tab:baselines`) | `tasks/runs/panelA.json` (generated 2026-08-31T09:19:22Z) | `tests/regen_report_tables.py` | `regen-report` | 🟢 `031b442` |
+| `\Bagg*`, `\Blat*`, `\Bfpr*` | IV (`tab:panelb`) | `tasks/runs/panelB.json` (generated 2026-08-30T19:24:30Z) | `tests/regen_report_tables.py` | `regen-report` | 🟢 `031b442` |
+| `\TheftRecallDelta`, `\TheftLateralDelta`, `\TheftRecOn/Off`, `\TheftAucOn/Off`, `\TheftN` | §VI-C prose | `tasks/runs/config_eval.log` (2026-08-18) | `tests/ablations/run_config_eval.py` | `config-eval` | 🟢 verified against log in-session |
 | `\Floor*` | I (`tab:floor`) | `tasks/runs/leakage_audit_floor.log` | `tests/test_leakage_audit.py` | CPU, seconds | 🟢 Verified |
 | `\RunToRun*`, `\PublishedSd*` | §VIII-A | `tasks/runs/panelB.json` vs `tasks/runs/tgn_v*_percookie.log` | — (comparison of two logs) | n/a | 🟢 static (both logs exist and are read directly; no regeneration is owed — the "commit" column is n/a, not pending) |
 | `\LatencyPFifty`, `\LatencyPNinetyNine` | §IV-F, §VIII-D | `tasks/runs/serving_client.log` | `tests/test_client.py` | `serve-tgn` | 🟢 Measured |
