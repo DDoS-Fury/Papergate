@@ -4,12 +4,13 @@
 \ifpreliminary
 \noindent\fcolorbox{red!60!black}{red!5}{%
 \begin{minipage}{0.955\columnwidth}\footnotesize
-\textbf{Status of this section.} Tables~\ref{tab:baselines} and~\ref{tab:panelb}
-predate the generator de-leakage of Section~\ref{sec:setup} and are not reproducible
-from the current code; Table~\ref{tab:baselines} additionally mixes two protocols (the
-TGN row is a four-node per-cookie run, the baselines are five-node deployable runs).
-They are retained so the structure and the argument can be reviewed. The qualitative
-comparison of Table~\ref{tab:qualitative} does not depend on them.
+\textbf{Status of this section.} Tables~\ref{tab:baselines} and~\ref{tab:panelb} were
+both regenerated from HEAD (Panel A: 2026-08-31, Panel B: 2026-08-30; see
+\texttt{paper/PROVENANCE.md} for commit hashes and per-artifact provenance) and the TGN
+row of Table~\ref{tab:baselines} now runs under the same deployable protocol as every
+baseline row --- the protocol mismatch described in earlier drafts no longer applies.
+This box only renders while \texttt{main.tex} carries \texttt{\textbackslash
+preliminarytrue}; at time of writing that flag is false and it is not shown.
 \end{minipage}}
 \vspace{2mm}
 \fi
@@ -63,13 +64,11 @@ graph, but it is the first question in deployment.
 
 \begin{table*}[t]
 \centering
-\caption{Synthetic stream. \PanelAsettings. All baselines receive the \emph{same}
+\caption{Synthetic stream. \PanelAsettings. All baselines receive the \textbf{same}
 tabular signals as the TGN --- the causal history counters and the same precursor prior
 --- so the gap isolates the temporal-relational machinery rather than the counters.
-$^{\dagger}$ spurious: a permissive threshold over a chance-level ranking is not
-detection. $^{\ddagger}$ \emph{supervised}: sees the labels, reference upper bound, not
-a comparable baseline.
-\prelim{\textbf{Preliminary: not reproducible from HEAD; mixed protocol.}}}
+$^{\ddagger}$ \textbf{supervised}: sees the labels, reference upper bound, not a
+comparable baseline.}
 \label{tab:baselines}
 \footnotesize
 \begin{tabular}{lccccc}
@@ -78,7 +77,7 @@ Model & Aggregate AUC & Aggregate AP & \textbf{Lateral AUC} & Lateral Rec.\ @1\%
 \midrule
 Isolation Forest      & \AggAucIF    & \AggApIF    & \LatAucIF    & \LatRecIF & \AggRecIF \\
 One-Class SVM         & \AggAucOCSVM & \AggApOCSVM & \LatAucOCSVM & \LatRecOCSVM & \AggRecOCSVM \\
-Static GNN (no temporal memory) & \AggAucGNN & \AggApGNN & \LatAucGNN & \LatRecGNN$^{\dagger}$ & \AggRecGNN \\
+Static GNN (no temporal memory) & \AggAucGNN & \AggApGNN & \LatAucGNN & \LatRecGNN & \AggRecGNN \\
 \textbf{TGN (this work)} & \textbf{\AggAucTGN} & \textbf{\AggApTGN} & \textbf{\LatAucTGN} & \textbf{\LatRecTGN} & \textbf{\AggRecTGN} \\
 \midrule
 \textit{XGBoost}$^{\ddagger}$ & \textit{\AggAucXGB} & \textit{\AggApXGB} & \textit{\LatAucXGB} & \textit{\LatRecXGB} & \textit{\AggRecXGB} \\
@@ -86,30 +85,34 @@ Static GNN (no temporal memory) & \AggAucGNN & \AggApGNN & \LatAucGNN & \LatRecG
 \end{tabular}
 \end{table*}
 
-The comparison that carries the argument is the static GNN
-(Table~\ref{tab:baselines}). It has the same graph structure, the same causal history
-counters and the same precursor prior; it lacks only the recurrent memory and the
-temporal neighbourhood. On lateral movement it sits at chance (\LatAucGNN), while the
-TGN reaches \LatAucTGN. The lateral signal therefore lives in the temporal machinery,
-not in the counters --- which every baseline has. Its apparent recall (\LatRecGNN) is
-an artefact of a permissive threshold over a chance-level ranking and should not be
-read as detection.
+The comparison that carries the argument is against the single-feature floor
+(Table~\ref{tab:floor}, $\FloorLatPost$ AUC) that any classifier reaches on lateral
+movement by reading one field, not against chance. The static GNN
+(Table~\ref{tab:baselines}) has the same graph structure, the same causal history
+counters and the same precursor prior as the TGN; it lacks only the recurrent memory
+and the temporal neighbourhood, and it lands at \LatAucGNN --- statistically on top of
+the floor, not above it. One-Class SVM (\LatAucOCSVM) and Isolation Forest
+(\LatAucIF) do not even clear it. The TGN is the only unsupervised model in the table
+that does, at \LatAucTGN, and that margin is what the temporal machinery buys over the
+counters every baseline also receives.
 
 The tabular one-class detectors behave as expected: they do well on the classes that a
 rule engine also handles and poorly on lateral movement, which by construction has no
-tabular signature. Supervised XGBoost, which sees the labels, is close to the TGN on
-ranking (\LatAucXGB{} vs \LatAucTGN) and well ahead on operating recall
-(\LatRecXGB{} vs \LatRecTGN) --- the gap that labels buy, and the honest measure of
-what the one-class regime costs.
+tabular signature. Supervised XGBoost, which sees the labels, now outranks the TGN on
+both lateral AUC (\LatAucXGB{} vs \LatAucTGN) and operating recall (\LatRecXGB{} vs
+\LatRecTGN) --- the gap that labels buy, and the honest measure of what the one-class
+regime costs on the de-leaked task.
 
 Interpreting these numbers requires perspective on the broader literature. Earlier
 works on static graph snapshots frequently claimed near-perfect ranking ($>0.98$ AUC),
 yet recent reproducibility studies on imbalanced enterprise logs show that
 unsupervised Average Precision on sparse lateral activity routinely drops below $0.10$.
-On our de-leaked stream, where lateral movement is strictly bounded by a single-feature
-floor of $\FloorLatPost$, reaching \LatAucTGN{} with an AP of \LatApTGN{} under
-benign-only one-class training represents genuine relational learning rather than
-synthetic dataset shortcuts.
+On our de-leaked stream, lateral movement is strictly bounded below by a single-feature
+floor of $\FloorLatPost$ AUC; every non-temporal baseline in the table sits at or below
+it, while the TGN clears it by a double-digit AUC margin, reaching \LatAucTGN{} with an
+AP of \LatApTGN{} under benign-only one-class training --- evidence of genuine
+relational learning, not a synthetic-dataset shortcut inherited from signals every
+baseline also receives.
 
 \begin{figure}[t]
 \centering
@@ -147,8 +150,7 @@ synthetic dataset shortcuts.
 \centering
 \caption{Four-node chain versus five-node chain with the configuration node, same
 stream. \PanelBsettings. $^{\dagger}$ within multi-seed noise; $^{\ddagger}$ within
-run-to-run noise (Section~\ref{sec:limits}), \emph{not established}.
-\prelim{\textbf{Preliminary: not reproducible from HEAD.}}}
+run-to-run noise (Section~\ref{sec:limits}), \textbf{not established}.}
 \label{tab:panelb}
 \footnotesize
 \setlength{\tabcolsep}{4pt}

@@ -17,8 +17,15 @@
 % While \preliminarytrue, every quantitative claim in this document is a placeholder
 % carried from runs that predate the generator de-leakage. Flip to \preliminaryfalse
 % only after results.tex has been regenerated. See paper/PROVENANCE.md.
+%
+% 2026-08-31: flipped to \preliminaryfalse. Block 1 (Panel A, Panel B, credential-theft
+% deltas) is regenerated and reproducible from HEAD; see PROVENANCE.md "Status" and
+% "2026-08-31 regeneration" sections for the commit hash, timestamps and the disclosed
+% log-capture gap. (Contrast with commit a11ed74, which flipped this flag without any
+% accompanying regeneration and was reverted — PROVENANCE.md documents why this flip is
+% different.)
 \newif\ifpreliminary
-\preliminarytrue
+\preliminaryfalse
 
 \ifpreliminary
   \newcommand{\prelim}[1]{#1}

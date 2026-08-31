@@ -256,7 +256,7 @@ def _emit_panel_a_tex(tgn: dict, base_summary: dict):
         ("Lateral --- Recall @1\\%FPR", "lat_recall_global"),
         ("Recall aggregata @1\\%FPR", "agg_recall_global"),
     ]
-    models = [("TGN (v3, per-cookie)", tgn)]
+    models = [("TGN (v4, deployable)", tgn)]
     for key, (_rel, _attr, label) in BASELINES.items():
         if key == "xgboost":
             continue  # supervised upper-bound: emit last, separately flagged
@@ -265,7 +265,7 @@ def _emit_panel_a_tex(tgn: dict, base_summary: dict):
 
     lines = ["% Auto-generato da tests/regen_report_tables.py — NON modificare a mano.",
              "% Sorgente numerica: tasks/runs/panelA.json",
-             "% Protocollo MISTO (storico): riga TGN = v3 per-cookie; baseline = deployable (dev:guest).",
+             "% Protocollo UNIFICATO: riga TGN e baseline sono entrambe deployable (dev:guest, v4).",
              "% Una riga per metrica; le colonne sono i modelli nell'ordine:",
              "%   " + " | ".join(m[0] for m in models)]
     for label, key in metric_rows:
