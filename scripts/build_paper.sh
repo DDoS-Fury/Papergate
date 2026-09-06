@@ -11,6 +11,7 @@
 #   ./scripts/build_paper.sh --engine pdflatex
 #   ./scripts/build_paper.sh --keep-aux      # Do not delete .aux, .log, .bbl
 #   ./scripts/build_paper.sh --clean-only    # Only clean auxiliary files
+#   ./scripts/build_paper.sh --check         # Check references and rules after build
 # ==============================================================================
 
 set -eo pipefail
@@ -34,13 +35,23 @@ MAIN_BASE="main"
 ENGINE="auto"
 KEEP_AUX=false
 CLEAN_ONLY=false
+DO_CHECK=false
+BUILD_SUCCESS=false
 
 # Parse command line options
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --engine|-e)
+      if [[ $# -lt 2 || -z "$2" || "$2" == -* ]]; then
+        echo -e "${RED}[!] Error: --engine requires an argument.${NC}"
+        exit 1
+      fi
       ENGINE="$2"
       shift 2
+      ;;
+    --engine=*)
+      ENGINE="${1#*=}"
+      shift
       ;;
     --keep-aux|-k)
       KEEP_AUX=true
@@ -50,13 +61,18 @@ while [[ $# -gt 0 ]]; do
       CLEAN_ONLY=true
       shift
       ;;
+    --check)
+      DO_CHECK=true
+      shift
+      ;;
     --help|-h)
       echo "Usage: $0 [OPTIONS]"
       echo ""
       echo "Options:"
-      echo "  --engine, -e <name>   Force engine: pdflatex, latexmk, xelatex, lualatex, tectonic, docker"
+      echo "  --engine, -e <name>   Force engine: latexmk, pdflatex, xelatex, lualatex, tectonic, docker"
       echo "  --keep-aux, -k        Keep intermediate build files"
       echo "  --clean-only, -c      Only clean intermediate files and exit"
+      echo "  --check               Run post-build checks (undefined refs, figures)"
       echo "  --help, -h            Show this help message"
       exit 0
       ;;
@@ -80,14 +96,18 @@ clean_aux_files() {
     "*.fdb_latexmk" "*.fls" "*.toc" "*.nav" "*.snm" "*.vrb"
     "*.bcf" "*.run.xml" "*.auxlock"
   )
+  local old_nullglob
+  old_nullglob=$(shopt -p nullglob || true)
+  shopt -s nullglob
   for pat in "${patterns[@]}"; do
-    for f in "${PAPER_DIR}"/${pat}; do
+    for f in "${PAPER_DIR}"/${pat} "${PAPER_DIR}"/*/${pat}; do
       if [[ -f "$f" ]]; then
         rm -f "$f"
         count=$((count + 1))
       fi
     done
   done
+  eval "$old_nullglob"
   echo -e "${GREEN}[+] Removed ${count} intermediate file(s).${NC}"
 }
 
@@ -119,8 +139,14 @@ fi
 
 run_three_pass() {
   local compiler="$1"
+  local pass_log="${PAPER_DIR}/${MAIN_BASE}.log"
+
   echo -e "${YELLOW}[>] [Pass 1/3] Running ${compiler}...${NC}"
-  "$compiler" -interaction=nonstopmode "${MAIN_TEX}" >/dev/null 2>&1 || true
+  if ! "$compiler" -interaction=nonstopmode "${MAIN_TEX}" >/dev/null 2>&1; then
+    if [[ -f "$pass_log" ]] && grep -qE '^! ' "$pass_log"; then
+      echo -e "${YELLOW}[!] Notice: compiler reported warnings/errors on Pass 1 (continuing for BibTeX)...${NC}"
+    fi
+  fi
 
   if [[ "$HAS_BIBTEX" == true ]]; then
     echo -e "${YELLOW}[>] Running bibtex...${NC}"
@@ -133,13 +159,36 @@ run_three_pass() {
   "$compiler" -interaction=nonstopmode "${MAIN_TEX}" >/dev/null 2>&1 || true
 
   echo -e "${YELLOW}[>] [Pass 3/3] Running ${compiler} (finalizing references)...${NC}"
-  "$compiler" -interaction=nonstopmode "${MAIN_TEX}" >/dev/null 2>&1 || true
+  if ! "$compiler" -interaction=nonstopmode "${MAIN_TEX}" >/dev/null 2>&1; then
+    echo -e "${RED}[!] Final compilation pass failed with ${compiler}.${NC}"
+    return 1
+  fi
+  return 0
 }
+
+# Supported engine list
+SUPPORTED_ENGINES=("auto" "latexmk" "pdflatex" "xelatex" "lualatex" "tectonic" "docker")
+is_supported_engine() {
+  local eng="$1"
+  for item in "${SUPPORTED_ENGINES[@]}"; do
+    if [[ "$item" == "$eng" ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+if ! is_supported_engine "$ENGINE"; then
+  echo -e "${RED}[!] Error: Unsupported engine '${ENGINE}'.${NC}"
+  echo -e "    Supported engines: latexmk, pdflatex, xelatex, lualatex, tectonic, docker"
+  exit 1
+fi
 
 if [[ "$ENGINE" == "auto" ]]; then
   echo -e "${YELLOW}[*] Scanning system for available LaTeX engines...${NC}"
   
-  CANDIDATES=("pdflatex" "latexmk" "xelatex" "lualatex" "tectonic")
+  # Priority order: latexmk is preferred if perl is available, followed by pdflatex, etc.
+  CANDIDATES=("latexmk" "pdflatex" "xelatex" "lualatex" "tectonic")
   for cand in "${CANDIDATES[@]}"; do
     if has_cmd "$cand"; then
       cmd_path="$(command -v "$cand")"
@@ -167,7 +216,12 @@ if [[ "$ENGINE" == "auto" ]]; then
   fi
 else
   SELECTED_ENGINE="$ENGINE"
-  if [[ "$SELECTED_ENGINE" != "docker" ]] && ! has_cmd "$SELECTED_ENGINE"; then
+  if [[ "$SELECTED_ENGINE" == "docker" ]]; then
+    if ! has_cmd docker; then
+      echo -e "${RED}[!] Docker engine specified, but 'docker' was not found in PATH.${NC}"
+      exit 1
+    fi
+  elif ! has_cmd "$SELECTED_ENGINE"; then
     echo -e "${RED}[!] Specified engine '${SELECTED_ENGINE}' not found in PATH.${NC}"
     exit 1
   fi
@@ -178,15 +232,23 @@ echo "------------------------------------------------------------"
 
 cd "${PAPER_DIR}"
 
-trap '
-  if [[ "$KEEP_AUX" == false ]]; then
-    clean_aux_files
-  else
+cleanup() {
+  if [[ "$KEEP_AUX" == true ]]; then
     echo -e "${GRAY}[*] --keep-aux specified: intermediate files retained.${NC}"
+  elif [[ "$BUILD_SUCCESS" != true ]]; then
+    echo -e "${YELLOW}[*] Build did not succeed: retaining log and intermediate files for debugging.${NC}"
+  else
+    clean_aux_files
   fi
-' EXIT
+}
+trap cleanup EXIT
+
+# Remove any stale PDF before build so a failed build cannot falsely report success
+rm -f "${PAPER_DIR}/${MAIN_BASE}.pdf"
 
 START_TIME=$(date +%s)
+
+COMPILE_SUCCESS=true
 
 case "$SELECTED_ENGINE" in
   latexmk)
@@ -194,21 +256,36 @@ case "$SELECTED_ENGINE" in
     if ! latexmk -pdf -interaction=nonstopmode "${MAIN_TEX}"; then
       echo -e "${YELLOW}[!] latexmk encountered an issue. Falling back to pdflatex...${NC}"
       if has_cmd pdflatex; then
-        run_three_pass "pdflatex"
+        if ! run_three_pass "pdflatex"; then
+          COMPILE_SUCCESS=false
+        fi
+      else
+        echo -e "${RED}[!] pdflatex not found for fallback.${NC}"
+        COMPILE_SUCCESS=false
       fi
     fi
     ;;
   pdflatex|xelatex|lualatex)
-    run_three_pass "$SELECTED_ENGINE"
+    if ! run_three_pass "$SELECTED_ENGINE"; then
+      COMPILE_SUCCESS=false
+    fi
     ;;
   tectonic)
     echo -e "${YELLOW}[>] Running tectonic...${NC}"
-    tectonic "${MAIN_TEX}"
+    if ! tectonic "${MAIN_TEX}"; then
+      COMPILE_SUCCESS=false
+    fi
     ;;
   docker)
     echo -e "${YELLOW}[>] Running compilation inside Docker (texlive container)...${NC}"
-    docker run --rm -v "${PAPER_DIR}:/work" -w /work texlive/texlive:latest sh -c \
-      "pdflatex -interaction=nonstopmode main.tex && bibtex main && pdflatex -interaction=nonstopmode main.tex && pdflatex -interaction=nonstopmode main.tex"
+    if ! docker run --rm -u "$(id -u):$(id -g)" -v "${PAPER_DIR}:/work" -w /work texlive/texlive:latest sh -c \
+      "pdflatex -interaction=nonstopmode main.tex && (bibtex main || true) && pdflatex -interaction=nonstopmode main.tex && pdflatex -interaction=nonstopmode main.tex"; then
+      COMPILE_SUCCESS=false
+    fi
+    ;;
+  *)
+    echo -e "${RED}[!] Unknown compilation engine: '${SELECTED_ENGINE}'${NC}"
+    exit 1
     ;;
 esac
 
@@ -216,18 +293,54 @@ END_TIME=$(date +%s)
 DURATION=$((END_TIME - START_TIME))
 
 PDF_FILE="${PAPER_DIR}/${MAIN_BASE}.pdf"
-if [[ -f "$PDF_FILE" ]]; then
+LOG_FILE="${PAPER_DIR}/${MAIN_BASE}.log"
+
+if [[ "$COMPILE_SUCCESS" == true && -f "$PDF_FILE" ]]; then
+  BUILD_SUCCESS=true
   SIZE_KB=$(du -k "$PDF_FILE" 2>/dev/null | cut -f1 || echo "unknown")
   echo -e "${GREEN}============================================================${NC}"
   echo -e "${GREEN}[SUCCESS] Paper compiled successfully in ${DURATION}s!${NC}"
   echo -e "${GREEN}  -> PDF File: ${PDF_FILE} (${SIZE_KB} KB)${NC}"
   echo -e "${GREEN}============================================================${NC}"
 
-  LOG_FILE="${PAPER_DIR}/${MAIN_BASE}.log"
   if [[ -f "$LOG_FILE" ]] && grep -qE 'Warning: (Reference|Citation).*undefined' "$LOG_FILE"; then
-    echo -e "${YELLOW}[!] Warning: Some citations or references might be undefined. Check ${MAIN_BASE}.log.${NC}"
+    echo -e "${YELLOW}[!] Warning: Unresolved citations or references found in build:${NC}"
+    grep -E 'Warning: (Reference|Citation).*undefined' "$LOG_FILE" | sed 's/^/    /' || true
+    echo -e "${YELLOW}    Run with --keep-aux to inspect full ${MAIN_BASE}.log.${NC}"
+  fi
+
+  # Optional check mode
+  if [[ "$DO_CHECK" == true ]]; then
+    echo -e "${CYAN}[*] Running post-compilation checks...${NC}"
+    check_failed=false
+    if grep -nE '[0-9]\.[0-9]{3}' "${PAPER_DIR}"/sections/*.tex 2>/dev/null | grep -vE 'columnwidth|textwidth|linewidth'; then
+      echo -e "${RED}[FAIL] Literal figure found outside results.tex${NC}"
+      check_failed=true
+    else
+      echo -e "${GREEN}[OK] No literal figures in sections/${NC}"
+    fi
+
+    if [[ -f "$LOG_FILE" ]] && grep -qE 'Warning: (Reference|Citation).*undefined' "$LOG_FILE"; then
+      echo -e "${RED}[FAIL] Undefined references or citations present${NC}"
+      check_failed=true
+    else
+      echo -e "${GREEN}[OK] All references and citations resolved${NC}"
+    fi
+
+    if [[ "$check_failed" == true ]]; then
+      echo -e "${RED}[!] Post-build verification check failed.${NC}"
+      exit 1
+    fi
   fi
 else
-  echo -e "${RED}[!] Build failed: PDF file '${PDF_FILE}' was not generated. Check ${MAIN_BASE}.log for errors.${NC}"
+  BUILD_SUCCESS=false
+  echo -e "${RED}============================================================${NC}"
+  echo -e "${RED}[!] Build failed: PDF file '${PDF_FILE}' was not generated.${NC}"
+  if [[ -f "$LOG_FILE" ]]; then
+    echo -e "${RED}[!] Recent LaTeX errors from ${MAIN_BASE}.log:${NC}"
+    grep -A 2 -E '^!' "$LOG_FILE" | head -n 30 || true
+    echo -e "${YELLOW}[*] Full log preserved at: ${LOG_FILE}${NC}"
+  fi
+  echo -e "${RED}============================================================${NC}"
   exit 1
 fi
