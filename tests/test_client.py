@@ -54,14 +54,14 @@ async def test_client(host="localhost", port=8888, duration_seconds=120, no_devi
             is_anomaly = resp_data.get("is_anomaly", False)
             tracker.record_prediction(is_anomaly, label == 1, etype)
             
-            # 3. Simulate Orchestrator/OPA decision
-            # L'API applica la corretta logica a doppia soglia.
-            opa_is_anomaly = resp_data.get("is_anomaly", False)
-            
+            # 3. Simulate External Policy / Orchestrator decision (anti-poisoning gate)
+            # Per protocol, memory commits advance on events admitted by external policy/sensor
+            # validation, never on the model's own anomaly verdict.
             user_counts[key_actor] = user_counts.get(key_actor, 0) + 1
             is_policy_violation = (etype == 1)
-
-            allow = (not is_policy_violation) and (not opa_is_anomaly)
+            feats = event.get("features", [])
+            is_signal_dirty = bool(feats and (feats[0] <= 0.5 or any(s > 0.5 for s in feats[1:4])))
+            allow = (not is_policy_violation) and (not is_signal_dirty)
                 
             if allow:
                 try:

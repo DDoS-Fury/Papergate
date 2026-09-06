@@ -9,8 +9,8 @@ Pipeline:
   5. Evaluate on the test stream **event-by-event**, reproducing the serving flow.
   6. Persist the deployable artifact (weights + memory + registry + threshold).
 
-Supervision, stated precisely — the method is **one-class / semi-supervised**, not
-unsupervised, and the paper must say so:
+Supervision regime: the method is **one-class / semi-supervised**, not
+unsupervised:
 
   * the training set is *selected* by ground-truth labels (``benign_mask = b_y == 0``),
     so the model never sees an attack but does rely on labels to know what to skip;

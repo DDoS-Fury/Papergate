@@ -1,12 +1,8 @@
 """Shared helpers that make the LaTeX report a reproducible artifact.
 
-Rationale (tasks/report-improvements.md, P2): report tables were hand-copied from
-stdout, which is the root of the metric drift. The training entrypoint
-(:func:`graphagate.train_tgn.train_tgn`) and every baseline already *compute* their
-metrics as a dict; this module centralises (a) the multi-seed aggregation
-(mean ± std), (b) the LaTeX cell formatting used by ``tab:theft`` / ``tab:archsweep``,
-and (c) atomic JSON serialisation, so ``tests/regen_report_tables.py`` can rebuild the
-Panel A / Panel B tables from fixed seeds instead of by hand.
+This module centralises (a) multi-seed aggregation (mean ± std),
+(b) LaTeX cell formatting for result tables, and (c) atomic JSON serialisation,
+ensuring tables can be rebuilt deterministically from fixed seeds.
 
 No training logic lives here — only formatting/IO — so it is import-cheap and safe to
 reuse from both the package and the test drivers.

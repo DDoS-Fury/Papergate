@@ -11,8 +11,8 @@ This driver compares — at parity of data, per seed, with ``save=False`` (the d
 artifact in ``public/`` is never touched) — the cookie baseline against the guest
 fallback, on a **theft-rich** stream (so credential-theft incidents, where the attacker
 device collapses to guest, land in the test split and are measurable). Multi-seed
-(mean ± std) because lateral/theft AUC carries ~±0.01–0.03 single-run CUDA
-nondeterminism (cfr. tasks/lessons.md).
+(mean ± std) because lateral/theft AUC carries single-run CUDA
+nondeterminism.
 
     docker compose --profile guest-device-eval up      # if wired in compose, or:
     python tests/ablations/run_guest_device_eval.py

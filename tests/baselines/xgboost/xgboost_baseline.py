@@ -85,7 +85,7 @@ def xgboost_baseline(cfg: TGNConfig = TGNConfig()):
     base_model = XGBClassifier(
         tree_method="hist",
         random_state=cfg.seed,
-        n_jobs=18,
+        n_jobs=-1,
         eval_metric="auc"
     )
 
@@ -98,7 +98,7 @@ def xgboost_baseline(cfg: TGNConfig = TGNConfig()):
     }
 
     # Impostiamo n_jobs=1 per la ricerca in sé per non sovraccaricare la CPU,
-    # dal momento che XGBoost userà internamente 18 thread per il training.
+    # dal momento che XGBoost userà internamente i thread disponibili (n_jobs=-1).
     search = RandomizedSearchCV(
         base_model,
         param_distributions=param_grid,

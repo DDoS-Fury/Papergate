@@ -50,9 +50,8 @@ TYPE_NAMES = {
 MAX_SINGLE_FEATURE_AUC = 0.75
 
 # Signals that ARE legitimately discriminative by design. Each entry is
-# (type_id, source, column) -> rationale. These are not leaks: they are the observable
-# evidence a deployed sensor/PDP genuinely has, and the paper reports them as the
-# trivial-detector floor that the model must beat on the classes that matter.
+# (type_id, source, column) -> rationale. These are observable signals available
+# to a deployed PDP/sensor, representing the floor baseline detectors achieve.
 ALLOWLIST: dict[tuple[int, str, int], str] = {
     # Contextual anomalies are the recon phase and are SUPPOSED to trip the IDS probes.
     # The rule baseline catches them; they are not the model's value-add.
@@ -72,16 +71,13 @@ ALLOWLIST: dict[tuple[int, str, int], str] = {
     (5, "nf_dst", 4): "resource risk — exfil targets the loot",
     (6, "nf_dst", 4): "resource risk — a benign OPA denial is also on a protected route",
     # The HTTP method is an input to the OPA decision itself: under Bell-LaPadula most
-    # denials are write-downs, so writes are over-represented among denied requests. Both
-    # denial classes are OPA-owned — the deterministic layer decides them and the model is
-    # not claimed to add value there.
+    # denials are write-downs, so writes are over-represented among denied requests.
     (1, "msg", 4): "HTTP method — BLP denials are mostly writes; OPA decides this class",
     (6, "msg", 4): "HTTP method — ditto for benign denials",
 }
 
-# The classes the paper's contribution actually rests on. OPA cannot see them and the rule
-# baseline is blind to them, so they get NO exemptions: every input column must stay under
-# MAX_SINGLE_FEATURE_AUC. Enforced by test_critical_classes_have_no_allowlist_entries.
+# Critical target classes (lateral movement, credential theft) get NO exemptions:
+# every input column must stay under MAX_SINGLE_FEATURE_AUC.
 CRITICAL_TYPES = (3, 4)  # lateral movement, credential theft
 
 
@@ -307,8 +303,8 @@ def test_critical_classes_have_no_allowlist_entries():
 def test_exfil_is_not_labelled_lateral():
     """Exfiltration must not be folded into the lateral-movement class.
 
-    It carries a massive-transfer signal, so mixing the two puts a trivially separable
-    sub-population inside the class the paper's central claim rests on.
+    It carries a bulk-transfer volume signal, so mixing the two would introduce
+    a trivial shortcut into the lateral-movement evaluation class.
     """
     s = _stream(SEEDS[0])
     types = s.types.numpy()

@@ -50,7 +50,7 @@ The four alarm columns are held **clean**: PicoDomain ships no IDS alert stream,
 red-team activity here is signal-clean by construction, so a rule baseline must stay blind
 to it and the temporal/relational pattern remains the sole discriminator — the honest test.
 ``bytes_resp`` is held at 0 for the same reason ``http_status`` was removed from the
-synthetic message (P0, ``tasks/todo.md``): a response size is not available at decision
+synthetic message: a response size is not available at decision
 time, and using it violates causality.
 
 Static node features are neutral (PicoDomain has no roles, clearances or asset

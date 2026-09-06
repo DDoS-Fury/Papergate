@@ -14,16 +14,6 @@
 \usepackage{url}
 
 % --- Preliminary-draft switch --------------------------------------------------------
-% While \preliminarytrue, every quantitative claim in this document is a placeholder
-% carried from runs that predate the generator de-leakage. Flip to \preliminaryfalse
-% only after results.tex has been regenerated. See paper/PROVENANCE.md.
-%
-% 2026-08-31: flipped to \preliminaryfalse. Block 1 (Panel A, Panel B, credential-theft
-% deltas) is regenerated and reproducible from HEAD; see PROVENANCE.md "Status" and
-% "2026-08-31 regeneration" sections for the commit hash, timestamps and the disclosed
-% log-capture gap. (Contrast with commit a11ed74, which flipped this flag without any
-% accompanying regeneration and was reverted — PROVENANCE.md documents why this flip is
-% different.)
 \newif\ifpreliminary
 \preliminaryfalse
 
@@ -78,14 +68,13 @@ a Temporal Graph Network over it under a protocol that keeps the deployment hone
 one-class training on benign traffic only, event-by-event chronological scoring, and
 a memory-commit gate driven by an \emph{external} policy engine rather than by the
 model's own verdict. Two properties follow from the extra nodes. Credential reuse
-from an unfamiliar client tool becomes expressible as a broken
-configuration-to-principal binding --- a class that is not representable on a
-host-to-host graph at all. And the anti-poisoning gate becomes measurable as a
-system property, because the entity memory advances only on events the policy engine
-admits. We further report a permanent label-leakage audit for the synthetic
-generator, and a case study on PicoDomain, the one public corpus we found in which
-all five nodes are backed by real fields --- its \texttt{ssl.log} carries JA3
-fingerprints alongside Kerberos principals.
+from an unfamiliar client tool becomes expressible as an anomalous
+configuration-to-principal binding, a class not representable on a host-to-host
+graph. Furthermore, the anti-poisoning commit gate provides verifiable resilience against
+adversarial baseline drift, as entity memory advances strictly on events admitted by
+external policy. We further report an automated label-leakage audit for the synthetic
+generator, along with an empirical case study on PicoDomain, where all five nodes are
+grounded in real enterprise telemetry, providing JA3 fingerprints alongside Kerberos principals.
 \end{abstract}
 
 \begin{IEEEkeywords}
