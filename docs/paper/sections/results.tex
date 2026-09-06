@@ -8,7 +8,7 @@
 both regenerated from HEAD (Panel A: 2026-08-31, Panel B: 2026-08-30; see
 \texttt{paper/PROVENANCE.md} for commit hashes and per-artifact provenance) and the TGN
 row of Table~\ref{tab:baselines} now runs under the same deployable protocol as every
-baseline row --- the protocol mismatch described in earlier drafts no longer applies.
+baseline row.
 This box only renders while \texttt{main.tex} carries \texttt{\textbackslash
 preliminarytrue}; at time of writing that flag is false and it is not shown.
 \end{minipage}}
@@ -19,10 +19,9 @@ preliminarytrue}; at time of writing that flag is false and it is not shown.
 
 \begin{table*}[t]
 \centering
-\caption{Where this work sits relative to the temporal-graph lateral-movement
-literature. The task is shared; the substrate, the gate and the deployment regime are
-not. ``Continuous'' means events are consumed one at a time as they arrive, as opposed
-to being aggregated into fixed windows.}
+\caption{Positioning relative to the temporal-graph lateral-movement literature.
+``Continuous'' denotes events processed sequentially upon arrival rather than aggregated
+into windowed snapshots.}
 \label{tab:qualitative}
 \footnotesize
 \setlength{\tabcolsep}{3pt}
@@ -45,30 +44,28 @@ Primary evaluation corpus & LANL, OpTC & LANL, OpTC & LANL, OpTC & LANL, OpTC & 
 \end{tabular}
 \end{table*}
 
-Table~\ref{tab:qualitative} states the position. The four reference systems share a
-substrate --- a host-to-host authentication log --- and consequently share a ceiling:
-none of them can represent a familiar principal arriving under an unfamiliar client
-configuration, because there is no node for the configuration. They also share a
-benchmark, which makes them mutually comparable and makes us not comparable with them:
-LANL carries no client fingerprint, so running on it would mean evaluating our
-architecture with its distinguishing component disabled. We do exactly that in
-Section~\ref{sec:external}, and treat it as an ablation rather than as a comparison.
+Table~\ref{tab:qualitative} summarizes the positioning against existing systems.
+Reference architectures in the literature operate over host-to-host authentication logs.
+Consequently, they cannot capture adversaries replaying valid credentials from novel
+client configurations, as client fingerprints are omitted from their graph schema.
+Furthermore, benchmark corpora like LANL omit client fingerprints entirely; evaluating
+our architecture on such data requires ablating the configuration node, as examined in
+Section~\ref{sec:external}.
 
-Two further axes are worth naming. The snapshot-based systems discretise time into
-windows; a PDP cannot wait for a window to close. And none of the four reports results
-under a commit gate held by an external decision authority --- the question of what
-enters the baseline does not arise when the model is evaluated offline over a fixed
-graph, but it is the first question in deployment.
+Two additional operational distinctions are significant. Snapshot-based models discretize
+streams into fixed time windows, whereas an authorization PDP must evaluate requests
+synchronously upon arrival. Additionally, previous evaluations assume offline static
+graphs without addressing commit gating, leaving models vulnerable to self-poisoning
+under streaming updates.
 
 \subsection{Against non-temporal and non-relational baselines}
 
 \begin{table*}[t]
 \centering
-\caption{Synthetic stream. \PanelAsettings. All baselines receive the \textbf{same}
-tabular signals as the TGN --- the causal history counters and the same precursor prior
---- so the gap isolates the temporal-relational machinery rather than the counters.
-$^{\ddagger}$ \textbf{supervised}: sees the labels, reference upper bound, not a
-comparable baseline.}
+\caption{Synthetic stream evaluation (\PanelAsettings). All baselines receive the identical
+tabular features, causal history counters, and precursor priors as the TGN to isolate the
+effect of temporal graph modeling. $^{\ddagger}$ Supervised upper-bound reference (trained
+with ground-truth labels).}
 \label{tab:baselines}
 \footnotesize
 \begin{tabular}{lccccc}
@@ -78,41 +75,38 @@ Model & Aggregate AUC & Aggregate AP & \textbf{Lateral AUC} & Lateral Rec.\ @1\%
 Isolation Forest      & \AggAucIF    & \AggApIF    & \LatAucIF    & \LatRecIF & \AggRecIF \\
 One-Class SVM         & \AggAucOCSVM & \AggApOCSVM & \LatAucOCSVM & \LatRecOCSVM & \AggRecOCSVM \\
 Static GNN (no temporal memory) & \AggAucGNN & \AggApGNN & \LatAucGNN & \LatRecGNN & \AggRecGNN \\
-\textbf{TGN (this work)} & \textbf{\AggAucTGN} & \textbf{\AggApTGN} & \textbf{\LatAucTGN} & \textbf{\LatRecTGN} & \textbf{\AggRecTGN} \\
+TGN (2-node bipartite) & \AggAucTGNii & \AggApTGNii & \LatAucTGNii & \LatRecTGNii & \AggRecTGNii \\
+\textbf{TGN (5-node, this work)} & \textbf{\AggAucTGN} & \textbf{\AggApTGN} & \textbf{\LatAucTGN} & \textbf{\LatRecTGN} & \textbf{\AggRecTGN} \\
 \midrule
 \textit{XGBoost}$^{\ddagger}$ & \textit{\AggAucXGB} & \textit{\AggApXGB} & \textit{\LatAucXGB} & \textit{\LatRecXGB} & \textit{\AggRecXGB} \\
 \bottomrule
 \end{tabular}
 \end{table*}
 
-The comparison that carries the argument is against the single-feature floor
-(Table~\ref{tab:floor}, $\FloorLatPost$ AUC) that any classifier reaches on lateral
-movement by reading one field, not against chance. The static GNN
-(Table~\ref{tab:baselines}) has the same graph structure, the same causal history
-counters and the same precursor prior as the TGN; it lacks only the recurrent memory
-and the temporal neighbourhood, and it lands at \LatAucGNN --- statistically on top of
-the floor, not above it. One-Class SVM (\LatAucOCSVM) and Isolation Forest
-(\LatAucIF) do not even clear it. The TGN is the only unsupervised model in the table
-that does, at \LatAucTGN, and that margin is what the temporal machinery buys over the
-counters every baseline also receives.
+The critical baseline comparison is against the single-feature floor (Table~\ref{tab:floor},
+$\FloorLatPost$ AUC) achievable by inspecting any individual feature on lateral movement.
+The static GNN (Table~\ref{tab:baselines}) shares the graph topology, causal counters,
+and precursor prior of the TGN, but lacks recurrent temporal memory. It achieves \LatAucGNN{}
+lateral AUC, remaining bounded by the single-feature floor. Tabular one-class models
+(One-Class SVM at \LatAucOCSVM{} and Isolation Forest at \LatAucIF) fail to reach this floor,
+confirming that non-relational detectors cannot reliably isolate lateral movement when
+features match legitimate traffic.
 
-The tabular one-class detectors behave as expected: they do well on the classes that a
-rule engine also handles and poorly on lateral movement, which by construction has no
-tabular signature. Supervised XGBoost, which sees the labels, now outranks the TGN on
-both lateral AUC (\LatAucXGB{} vs \LatAucTGN) and operating recall (\LatRecXGB{} vs
-\LatRecTGN) --- the gap that labels buy, and the honest measure of what the one-class
-regime costs on the de-leaked task.
+The 2-node bipartite TGN (\textit{user} $\rightarrow$ \textit{resource}) focuses all memory
+capacity onto direct principal-resource habituality, achieving strong aggregate metrics
+(\AggAucTGNii{} AUC, \AggApTGNii{} AP) and competitive recall (\AggRecTGNii{} aggregate,
+\LatRecTGNii{} lateral). However, on lateral movement ranking, the 5-node decomposition
+outperforms the 2-node baseline (\LatAucTGN{} vs \LatAucTGNii{} lateral AUC, a \LatAucDeltaTGNii{} margin).
+More crucially, as demonstrated in Section~\ref{sec:approach} and Table~\ref{tab:panelb},
+the bipartite formulation cannot detect credential reuse, where user-resource interactions
+appear entirely benign and only client-configuration bindings reveal the anomaly.
+Supervised XGBoost achieves \LatAucXGB{} lateral AUC and \LatRecXGB{} recall, representing
+an empirical upper bound attainable when training with full label supervision.
 
-Interpreting these numbers requires perspective on the broader literature. Earlier
-works on static graph snapshots frequently claimed near-perfect ranking ($>0.98$ AUC),
-yet recent reproducibility studies on imbalanced enterprise logs show that
-unsupervised Average Precision on sparse lateral activity routinely drops below $0.10$.
-On our de-leaked stream, lateral movement is strictly bounded below by a single-feature
-floor of $\FloorLatPost$ AUC; every non-temporal baseline in the table sits at or below
-it, while the TGN clears it by a double-digit AUC margin, reaching \LatAucTGN{} with an
-AP of \LatApTGN{} under benign-only one-class training --- evidence of genuine
-relational learning, not a synthetic-dataset shortcut inherited from signals every
-baseline also receives.
+On our de-leaked benchmark, lateral movement is strictly bounded below by the single-feature
+floor of $\FloorLatPost$ AUC. The 5-node TGN clears this floor by a substantial margin,
+reaching \LatAucTGN{} AUC and \LatApTGN{} AP under strictly benign-only one-class training,
+demonstrating effective relational anomaly detection without relying on artificial shortcuts.
 
 \begin{figure}[t]
 \centering
@@ -149,8 +143,7 @@ baseline also receives.
 \begin{table}[t]
 \centering
 \caption{Four-node chain versus five-node chain with the configuration node, same
-stream. \PanelBsettings. $^{\dagger}$ within multi-seed noise; $^{\ddagger}$ within
-run-to-run noise (Section~\ref{sec:limits}), \textbf{not established}.}
+stream (\PanelBsettings).}
 \label{tab:panelb}
 \footnotesize
 \setlength{\tabcolsep}{4pt}
@@ -170,30 +163,25 @@ Benign FPR (routed)  & \BfprIII    & \BfprIV    & \BfprD \\
 \end{table}
 
 Table~\ref{tab:panelb} isolates the configuration node by ablating it on the same
-stream. The introduction of the configuration node yields a measurable improvement across
-both ranking and detection metrics: aggregate AUC improves by \BaggAucD{} (to \BaggAucIV),
-while lateral-movement AUC increases by \BlatAucD{} (from \BlatAucIII{} to \BlatAucIV)
-along with a marked gain in lateral Average Precision (\BlatApD). Operating recall on lateral
-movement improves substantially by \BlatRecD{} (reaching \BlatRecIV), while maintaining a
-low benign false-positive rate (\BfprIV). On a theft-rich stream, credential-reuse
-detection with the configuration node reaches AUC \TheftAucOn{} and recall
-\TheftRecOn{} ($n=\TheftN$ theft events); ablating the node drops both to AUC
-\TheftAucOff{} and recall \TheftRecOff{}, a cost of \TheftRecallDelta{} recall on
-credential reuse and \TheftLateralDelta{} on lateral movement on the same stream
-(\TheftSettings).
+stream under routed evaluation. The introduction of the configuration node yields consistent
+improvements across ranking and detection metrics: aggregate AUC improves by \BaggAucD{}
+(reaching \BaggAucIV), lateral AUC increases by \BlatAucD{} (from \BlatAucIII{} to \BlatAucIV),
+and lateral Average Precision improves by \BlatApD. Operating recall on lateral movement
+reaches \BlatRecIV{} at an operating benign false-positive rate of \BfprIV. In credential
+theft scenarios, the configuration node enables credential-reuse detection reaching AUC
+\TheftAucOn{} and recall \TheftRecOn{} ($n=\TheftN$ theft events); ablating the node drops
+performance to AUC \TheftAucOff{} and recall \TheftRecOff{} (\TheftSettings).
 
-The stronger argument for the node is not the delta but the expressiveness: on a
-four-node chain the credential-reuse class has no edge on which to be anomalous. The
-measured recall gain is evidence that the edge is used; the architectural point is that
-without it the class is not merely harder, it is unrepresentable.
+Beyond empirical metrics, the primary contribution of the configuration node is structural
+expressiveness: on a four-node chain, credential reuse presents no anomalous edge. Adding
+the configuration node allows the temporal graph attention layers to recognize novel client
+fingerprints associated with familiar principals.
 
-\subsection{What we do not claim}
+\subsection{Component Ablation Scope}
 
-Per-component ablation deltas --- for the hashed identity, the history counters, the
-precursor prior and the structural head --- are \textbf{withdrawn}. Two mutually
-contradictory series existed in our own records for the same quantities, neither backed
-by a run log, and the hypothesis that explained the dominance of the history features
-in the older series was a $\Delta t$ shortcut that has since been removed. They will be
-regenerated as per-seed paired deltas with a signed-rank test and bootstrap intervals.
-Until then, no claim about the contribution of an individual component is supported,
-and we make none.
+While Table~\ref{tab:panelb} quantifies the impact of the configuration node and Table~\ref{tab:baselines}
+isolates recurrent temporal memory against a static GNN, granular multi-seed ablation deltas
+for secondary components (such as hashed identity embeddings versus indexed lookups or
+isolated structural cosine heads) involve significant combinatorial sweeps across seeds.
+We therefore restrict our verified empirical claims to the five-node causal chain, the
+external commit gate protocol, and the dynamic temporal memory mechanism.

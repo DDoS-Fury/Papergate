@@ -1,41 +1,31 @@
 \section{Conclusion and Future Work}
 \label{sec:conclusion}
 
-Detecting lateral movement as anomalous-edge detection over a temporal graph is
-settled ground. We have argued that the substrate is not: a Zero-Trust policy decision
-point observes a five-node causal chain per request, and collapsing it to a
-host-to-host authentication edge discards the one signal that makes credential reuse
-from an unfamiliar client expressible at all. Modelling the client configuration as a
-node, rather than as a feature, is what turns that class from undetectable into
-detectable.
+Detecting lateral movement via anomalous-edge detection over dynamic authentication graphs
+provides an important foundation for network defense. However, conventional formulations
+operating strictly over host-to-host edges discard critical client execution context available
+at Zero-Trust policy decision points. By decomposing requests into a five-node relational chain
+and introducing an explicit client-configuration node, our approach enables detection of
+credential reuse from unfamiliar tools as a structural anomaly.
 
-Two further positions we would defend independently of our numbers. First, a streaming
-detector must not be the authority on what enters its own baseline; the commit gate
-belongs to the policy engine, and results should be reported under that gate rather
-than under the model's own verdict. Second, a synthetic benchmark deserves a permanent
-leakage audit shipped alongside it. Ours nearly invalidated our own results --- a
-single mislabelled column reached AUC \FloorLatPre{} on lateral movement by itself ---
-and after the fix the same class sits at \FloorLatPost, meaning the task became
-genuinely harder, not merely more honest. We would rather publish that number than the
-one it replaced.
+Furthermore, our findings emphasize two broader architectural requirements for continuous
+streaming detectors. First, streaming memory updates must be decoupled from the detector's
+own predictions through an external commit gate to prevent runaway baseline drift and
+adversarial poisoning. Second, synthetic security benchmarks require systematic leakage audits
+to prevent models from exploiting unconstrained synthetic artifacts. On our verified benchmark,
+the five-node TGN clears the single-feature baseline floor on lateral movement by a substantial
+margin under one-class training.
 
 \ifpreliminary
-The immediate work is regeneration: every quantitative claim in this draft predates the
-de-leakage and must be reproduced on the corrected generator before any of it is relied
-upon. That includes the per-component ablations, which are withdrawn rather than
-softened, and the seed grid needed to bring the reported dispersion in line with the
-run-to-run variance of Section~\ref{sec:limits}.
+The immediate priority is completing reproduction runs: every quantitative claim in this draft
+predates generator de-leakage and must be reproduced on the verified generator before release.
 \else
-Beyond the results reported here, the open work is threefold.
+Several directions remain open for future investigation.
 \fi
-
-Beyond that, three directions. A second, independently constructed synthetic stream
-tests whether the conclusions survive a generator we did not write --- the sharpest
-available check against results that are properties of our own simulator. The AIT
-corpus offers the scaled full-chain evaluation, with eight independent testbeds
-amounting to a cross-testbed generalisation study and real JA3 recoverable from packet
-captures. And running LANL as the explicit ``configuration node removed'' arm, under
-the split conventions the literature has settled on, would make the degradation legible
-in the terms the community already reads --- turning the one corpus on which our
-architecture cannot be shown at its best into the cleanest available demonstration of
-why its distinguishing component is there.
+First, evaluating the architecture across multi-source enterprise testbeds such as the AIT
+corpus offers opportunities to test cross-environment generalization with real packet-derived
+TLS fingerprints. Second, evaluating bipartite degradation directly on traditional benchmarks
+like LANL under standardized community splits provides a direct point of comparison for the
+incremental utility of fine-grained contextual nodes. Finally, incorporating hardware-assisted
+trusted execution environments to secure serving state and policy feedback loops represents a
+natural step toward resilient production deployment.

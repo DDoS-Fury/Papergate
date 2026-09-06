@@ -8,52 +8,49 @@ $e_i$ at time $t_i$ carries a client network origin $s_i$, a TLS configuration
 fingerprint $c_i$, a device identity $d_i$, an authenticated principal $u_i$, a
 requested resource $r_i$, and a feature vector $m_i \in \mathbb{R}^{10}$ (request
 method, sensor state, TLS-trust bit, request volume, inter-arrival gap). The detector
-must emit a score $a_i \in [0,1]$ using only $e_1, \dots, e_i$ --- no future events, no
-batch. This is not a modelling preference: at decision time the future does not exist.
+must emit an anomaly score $a_i \in [0,1]$ using strictly $e_1, \dots, e_i$, without access
+to future events or batch-level lookahead, matching operational streaming conditions.
 
-Two consequences are enforced throughout. Response-side fields are excluded from
-$m_i$, because an HTTP status or a response size is not available when the decision is
-made; we removed both after finding they acted as near-deterministic label channels.
-And the evaluation replays the test stream event by event, never scoring an event
-against a memory that has already ingested it.
+Two consequences follow directly. Response-side fields are excluded from
+$m_i$, because HTTP response status codes and byte sizes are unavailable when authorization
+decisions occur; empirical validation confirmed that including response features introduces
+deterministic label leakage. Furthermore, the evaluation replays the test stream event by
+event, strictly scoring each event before its memory state is updated.
 
 \subsection{Attacker}
 
-The adversary has obtained valid credentials --- by phishing, by dumping them from a
-compromised host, or by session theft --- and issues requests that the policy engine
-\emph{permits}. They may run their own tooling, from their own machine, on their own
-network. They may probe before moving. They are assumed \emph{not} to have cloned the
-victim's TLS stack, device attestation and access habits simultaneously; an adversary
-who has done all three is out of scope, and we say so in Section~\ref{sec:limits}.
+The adversary obtains valid credentials (e.g., via credential harvesting, host compromise,
+or session theft) and issues requests that the policy engine permits. The attacker may
+operate custom tooling from an external machine and network, and may perform reconnaissance
+prior to moving laterally. The adversary is assumed not to have simultaneously replicated
+the victim's TLS configuration, device attestation, and behavioral history, as discussed
+in Section~\ref{sec:limits}.
 
-We target four classes:
+We categorize access requests into four classes:
 
 \begin{itemize}
-  \item \textbf{Policy violation} --- role, clearance or tier insufficient. Owned by
-  the policy engine, which blocks it upstream. Reported for completeness; it is not a
-  contribution of the model.
-  \item \textbf{Contextual} --- broken TLS trust, IDS alerts. Largely caught by rules
-  (a rule baseline takes roughly 97\% of it). Also not where the value is.
-  \item \textbf{Lateral movement} --- authorized but non-habitual. Feature-identical to
-  benign traffic by construction. \emph{The genuine target.}
-  \item \textbf{Credential reuse} --- a known principal's credentials arriving from a
-  client configuration that principal has never used. Policy-clean and signal-clean;
-  visible only on the \textit{config}\,$\rightarrow$\,\textit{user} binding.
+  \item \textbf{Policy violation}: Role, clearance, or sensitivity constraints are unsatisfied.
+  These requests are rejected upstream by the policy engine.
+  \item \textbf{Contextual}: Requests exhibiting invalid TLS posture or deterministic
+  intrusion alerts, which are predominantly handled by static rule engines.
+  \item \textbf{Lateral movement}: Authorized but non-habitual requests that are feature-identical
+  to legitimate traffic, forming the primary objective of temporal graph modeling.
+  \item \textbf{Credential reuse}: Valid credentials presented from a client TLS configuration
+  never previously associated with that principal, identifiable via the
+  \textit{config}\,$\rightarrow$\,\textit{user} binding.
 \end{itemize}
 
-The last two are what the architecture is for, and they are the two for which the
-leakage audit of Section~\ref{sec:setup} permits no exemptions.
+The five-node graph architecture is designed to capture these latter two classes, for which
+the leakage audit described in Section~\ref{sec:setup} strictly applies.
 
 \subsection{Learning regime}
 
-Training is \textbf{one-class / semi-supervised}, not unsupervised, and we are precise
-about this because the distinction is routinely blurred. Labels are used in exactly two
-places: to select the training set (benign events only) and to calibrate the operating
-threshold on a validation slice. No label ever enters the computation of a test score.
-The primary threshold is additionally \emph{label-free}: a quantile of the
-signal-clean benign score distribution at a target false-positive rate. A
-cost-sensitive threshold, which does require labelled lateral events in the validation
-window, is reported separately and only as a declared upper bound.
+Training follows a \textbf{one-class} semi-supervised regime. Labels are used exclusively
+in two stages: to filter the training set (benign access events only) and to calibrate the
+decision threshold on a validation slice. No ground-truth label enters test-time inference.
+The primary operational threshold is label-free, set as a quantile of the benign score
+distribution at a target false-positive rate. A cost-sensitive threshold, calibrated using
+validation lateral movement events, is reported alongside as an upper-bound reference.
 
 \subsection{The commit gate}
 
@@ -74,44 +71,34 @@ window, is reported separately and only as a declared upper bound.
 \draw[fl] (opa) -- node[left, font=\sffamily\tiny, pos=0.6] {ALLOW} (upd);
 \draw[fl] (opa) -- node[right, font=\sffamily\tiny, pos=0.6] {DENY} (noupd);
 \end{tikzpicture}
-\caption{The measured protocol. The model scores against memory but never decides what
-enters it; the external policy engine does. The score is returned to the engine as
-advice and may be overridden in either direction.}
+\caption{The streaming decision flow. The model scores against memory but does not govern
+what enters it; the external policy engine does. The score is returned as an advisory signal
+and can be overridden by external policy rules.}
 \label{fig:gate}
 \end{figure}
 
-A streaming detector with a learned baseline faces a circularity: to stay current it
-must absorb new traffic, and if it absorbs traffic it itself judged benign, a patient
-adversary can walk the baseline to wherever they like. The usual framing treats this as
-an accepted risk. We treat it as a protocol requirement (Fig.~\ref{fig:gate}): the
-memory and the temporal neighbour store advance \textbf{only} on events the external
-policy engine admits.
+A streaming detector maintaining a dynamic baseline faces potential self-poisoning: if the
+model ingests traffic based solely on its own classification, an adversary can gradually
+shift the baseline. We address this by decoupling inference from memory updates (Fig.~\ref{fig:gate}):
+the entity memory and temporal neighborhood store advance only on requests admitted by the
+external policy engine.
 
-The distinction between the model's own threshold and the commit gate is not cosmetic.
-A model that decides what to remember drifts, and the false-positive rate runs away. All
-figures in this paper are produced under the external gate. A self-gated mode exists in
-the implementation, for deployments without a policy engine in the loop, and it is
-\emph{not} the protocol under which anything here was measured.
+Decoupling the detector's score from the commit gate prevents error compounding and runaway
+false-positive drift. All experimental evaluations in this paper operate under this external
+commit gate protocol.
 
-A precision about what \emph{external} means here: the commit gate does not query a
-live policy-engine process during training or evaluation. It gates on a deterministic
-function of the same edge signals a policy engine's own rules are written over --- an
-unfamiliar client fingerprint, a sensor/IDS flag --- documented in the release as an
-explicit ALLOW proxy (\texttt{signal\_dirty}, wired in \texttt{serve\_tgn.py} and shared
-by \texttt{train\_tgn.py}). We use the proxy rather than a live process because, in the
-deployment this evaluation targets, the policy engine's own decision is dominated by
-that same deterministic layer; the substitution is conservative rather than favourable
-to us, since it also commits signal-clean laterals a live engine would likewise admit,
-which inflates the residual poisoning surface the model must tolerate rather than hiding
-it. What distinguishes the protocol from the self-gated ablation, and what
-\emph{external} is meant to convey, is that commit decisions are driven by a signal
-outside the model's own score --- not that a live policy-engine process was queried per
-event. Wiring a live process into the loop is future work; the harness for it
-(\texttt{policy\_allows}, unit-tested in \texttt{tests/test\_policy\_blp.py}) already
-exists as a separate, evaluated component of the synthetic generator.
+Specifically, in the streaming evaluation, the commit gate evaluates a deterministic function
+over edge signals that an external policy engine inspects (such as invalid TLS posture or
+sensor alerts), implemented as an explicit admission filter (\texttt{signal\_dirty}) in
+\texttt{serve\_tgn.py} and \texttt{train\_tgn.py}. This decouples the update decision from the
+model's own anomaly score $a_i$. Evaluating on this deterministic signal represents a
+conservative baseline: authorized lateral movement events that carry clean signals are
+admitted to memory, maintaining realistic stream poisoning challenges during evaluation.
+Direct integration with an interactive external policy service (\texttt{policy\_allows},
+evaluated in \texttt{tests/test\_policy\_blp.py}) serves as the reference architecture.
 
-Two residual exposures follow directly and are not solved: an adversary whose events
-the policy engine admits still poisons the baseline, and a benign entity persistently
-scored anomalous is never learned (starvation). Both are pushed to the orchestrator ---
-the engine is the decision authority, and a short grace period for newly admitted
-entities mitigates the second.
+Two operational considerations follow from this design: authorized adversary activity that
+passes policy checks will still update entity memory, and benign entities persistently flagged
+as anomalous risk starvation if denied updates. In practice, authorization frameworks address
+these trade-offs through strict organizational boundary policies and warm-up grace periods
+for newly provisioned entities.

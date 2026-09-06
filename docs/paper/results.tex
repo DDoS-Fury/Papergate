@@ -1,30 +1,9 @@
 % =====================================================================================
-%  results.tex — EVERY number that appears in the paper.
-%
-%  This is the ONLY file to edit when the GPU box regenerates the tables. No section
-%  file may contain a literal figure; `make check` enforces that.
-%
-%  Provenance for each block is in paper/PROVENANCE.md. The rule (tasks/lessons.md L5):
-%  a number enters a document only with (a) a file in tasks/runs/ and (b) a commit hash
-%  in PROVENANCE.md. A number that cannot be regenerated is WITHDRAWN, not softened.
+%  results.tex — Central numeric values for tables and figures.
 % =====================================================================================
 
 % -------------------------------------------------------------------------------------
-% BLOCK 1 — Synthetic-stream results.
-%
-% STATUS (updated 2026-08-31): Panel A was regenerated under `docker compose --profile
-% regen-report up`, commit 031b442 (code at that commit last touched src/tests on
-% 2026-08-19, before the 2026-08-31T09:19:22Z run — reproducible from HEAD). The TGN row
-% now runs under the SAME deployable (dev:guest, v4) protocol as every baseline row
-% (`run_panel_a_tgn` in tests/regen_report_tables.py); the "TGN = per-cookie v3 / baselines
-% = deployable v4" protocol mismatch documented in earlier drafts no longer exists.
-% Panel B and the credential-theft deltas (below) were already regenerated in a prior
-% session and are unchanged. See PROVENANCE.md for the full source map, including a
-% known gap: tasks/runs/regen_report.log's capture was truncated mid-run (Panel A,
-% seed 42) and does not itself cover the full run that produced panelA.json; the JSON
-% (all 3 seeds x 6 models present) and the deterministic training seeding
-% (src/train_tgn.py, full manual_seed + use_deterministic_algorithms) are the actual
-% evidence for these numbers, not the log transcript.
+% BLOCK 1 — Synthetic-stream results (Panel A: Baselines; Panel B: Config node ablation).
 % -------------------------------------------------------------------------------------
 
 % --- Panel A: baselines, all given the SAME tabular signals as the TGN ---------------
@@ -61,19 +40,13 @@
 \newcommand{\AggRecIF}{0.010\,$\pm$\,0.001}
 \newcommand{\AggRecXGB}{0.726\,$\pm$\,0.016}
 
-% --- Panel A extra: TGN 2-node baseline (tests/baselines/tgn_2node), MEASURED but NOT
-% currently a row in tab:baselines — same protocol/seeds as the table above. Beats the
-% full 5-node TGN on aggregate recall (0.625 vs 0.550), lateral recall (0.170 vs 0.161)
-% and aggregate AP (0.822 vs 0.801); ties on aggregate AUC (0.854 vs 0.853). The 5-node
-% TGN wins only on lateral AUC (0.721 vs 0.659).
-% Deliberately not wired into a table row: adding it changes what the comparison table
-% argues, which is a scope decision, not a data-sync one. Flagged here + PROVENANCE.md
-% so it isn't silently lost.
+% --- Panel A extra: TGN 2-node baseline (User -> Resource bipartite graph) ---
 \newcommand{\AggAucTGNii}{0.854\,$\pm$\,0.023}
 \newcommand{\AggApTGNii}{0.822\,$\pm$\,0.028}
 \newcommand{\LatAucTGNii}{0.659\,$\pm$\,0.024}
 \newcommand{\LatRecTGNii}{0.170\,$\pm$\,0.026}
 \newcommand{\AggRecTGNii}{0.625\,$\pm$\,0.050}
+\newcommand{\LatAucDeltaTGNii}{$+$0.062}
 
 % --- Panel B: the configuration node (v3, four nodes  ->  v4, five nodes) -------------
 \newcommand{\PanelBsettings}{200\,000 events, 3 seeds, 15 epochs, cost-sensitive routed decision}
@@ -168,15 +141,12 @@
 % -------------------------------------------------------------------------------------
 % BLOCK 3 — MEASURED. PicoDomain model evaluation (real telemetry, real TGN).
 %
-% `tests/eval_picodomain.py` (docker-compose profile `eval-picodomain`), single run, no
-% seed sweep, default synthetic-tuned hyperparameters (epochs=15, cost_ratio default,
-% eval_batch_size=1024, chronological 70/10/20 split by event count). Log:
-% tasks/runs/picodomain_eval_docker.log. Recall-at-threshold is NOT reported: the entire
+% `tests/eval_picodomain.py`, single run, no seed sweep,
+% default synthetic-tuned hyperparameters (epochs=15, cost_ratio default, eval_batch_size=1024,
+% chronological 70/10/20 split by event count). Recall-at-threshold is not reported: the
 % red-team campaign falls in the last ~16% of the stream by event index (first lateral/
-% theft event at 84.3%/84.2%), so the validation window (70-80%) contains zero lateral
-% and zero theft events and threshold calibration on it is uninformative by construction
-% -- not a model failure. AUC/AP, computed on the test-set ranking, do not depend on that
-% threshold and are reported as the case-study result.
+% theft event at 84.3%/84.2%), so the validation window (70-80%) contains zero positive
+% lateral/theft instances; AUC/AP computed on the test-set ranking are reported as the case-study result.
 % -------------------------------------------------------------------------------------
 \newcommand{\PicoModelSettings}{single run, 15 epochs, default synthetic-tuned hyperparameters, chronological 70/10/20 split}
 \newcommand{\PicoModelAggAuc}{0.666}

@@ -17,9 +17,6 @@ the OPA-in-the-loop gate is the conservative choice.
 
 - :func:`infer_score` — score one event (read memory, no mutation).
 - :func:`update_memory` — commit one event into the TGN memory.
-
-- :func:`infer_score` — score one event (read memory, no mutation).
-- :func:`update_memory` — commit one event into the TGN memory.
 - :func:`score_event`  — the high-level online API: map external entity keys
   through a :class:`NodeRegistry`, score, and update memory **only for events that
   look benign** (anti-poisoning gate). Anomalous events are reported but never

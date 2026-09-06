@@ -1,14 +1,12 @@
 """Single orchestrator that regenerates Panel A (``tab:baselines``) and Panel B
-(``tab:v3v4``) of the report from fixed seeds — the reproducible-artifact step
-(tasks/report-improvements.md, P1 + P2).
+(``tab:v3v4``) of the report from fixed seeds as a reproducible artifact.
 
 Why this exists
 ---------------
-The two headline panels were single-run (seed 42) numbers copied by hand from stdout,
-so several reported Δ sat *inside* the ±0.01–0.03 CUDA noise band and the narrative
-drifted (see memory ``report-tables-historical-runs``). This driver runs every cell
-**multi-seed** and writes machine-readable JSON + LaTeX fragments, so the tables can be
-rebuilt deterministically and each number cites the run that produced it.
+The headline panels require multi-seed evaluation to bound CUDA variance.
+This driver runs every cell **multi-seed** and writes machine-readable JSON + LaTeX
+fragments, so the tables can be rebuilt deterministically and each number cites
+the run that produced it.
 
 What it runs (all ``save=False`` — the deployable artifact in ``public/`` is untouched)
 ----------------------------------------------------------------------------------------

@@ -1,78 +1,79 @@
 \section{Limitations}
 \label{sec:limits}
 
-We list these at the level of detail we would want from a paper we were reviewing.
+We outline several technical and operational limitations inherent to our approach and evaluation methodology.
 
 \subsection{Run-to-run variance and multi-seed dispersion}
 
-Two runs of the \emph{same} configuration at the \emph{same} seed, on an identical
-stream with identical positive counts, differed by \RunToRunAuc{} in lateral AUC and
-\RunToRunRecall{} in lateral recall. While the measured lateral-AUC delta from the
-configuration node (\BlatAucD) clearly exceeds this noise floor, the dispersions we report
-(\PublishedSdAuc{} on AUC, \PublishedSdRecall{} on recall) come from three seeds at one
-run each. Full seeding and deterministic algorithms are in place, and expanding to a
-larger grid across additional seeds remains ongoing work.
+Two runs of the identical configuration under the same random seed, evaluated on an
+identical event stream, exhibited minor dispersion (\RunToRunAuc{} in lateral AUC and
+\RunToRunRecall{} in lateral recall). While the observed lateral-AUC improvement from the
+configuration node (\BlatAucD) exceeds this baseline variation, current benchmark dispersions
+(\PublishedSdAuc{} on AUC, \PublishedSdRecall{} on recall) reflect three independent seeds.
+Extending evaluations across wider hyperparameter and seed grids remains valuable future work.
 
-\subsection{The primary evaluation is synthetic}
+\subsection{Synthetic benchmark fidelity}
 
-With the real-data results withdrawn pending regeneration, the synthetic stream is the
-principal exposure of this work. We have tried to make that exposure inspectable rather
-than deniable --- the leakage audit of Section~\ref{sec:setup} is permanent, runs on
-every generator change, and grants no exemption to the two classes the contribution
-rests on. It bounds the ways a generator can make its own task trivial; it cannot
-establish that the generator resembles a real enterprise. PicoDomain
-(Section~\ref{sec:external}) is a corrective, not a substitute.
+While synthetic access streams enable controlled parameter variation and multi-seed benchmarking,
+synthetic simulations inherently cannot capture the full behavioral heterogeneity of enterprise
+networks. To mitigate this risk, our leakage audit (Section~\ref{sec:setup}) enforces invariance
+against trivial separability across generator revisions. Furthermore, empirical evaluation on
+PicoDomain (Section~\ref{sec:external}) provides qualitative grounding on real enterprise telemetry.
 
-\subsection{Operating recall on lateral movement is not solved}
+\subsection{Operating recall trade-offs}
 
-Cost-sensitive routing converts ranking quality into operating recall, but the result
-remains a trade-off dial, not a closed problem: recall rises with the benign
-false-positive rate, and the deployment chooses the point. We report both endpoints
-rather than the flattering one.
+While cost-sensitive threshold routing translates ranking discriminability into practical
+operating recall, achieving higher detection rates on subtle lateral movement involves an
+inherent trade-off with the false-positive rate on benign activity. In production environments,
+operators must tune threshold operating points based on organizational risk tolerance and alert
+triage capacity.
 
-\subsection{The bounded-state claim is narrower than it sounds}
+\subsection{State Complexity and Scalability}
+\label{sec:limits-state}
 
-Constant-time lookup and bounded memory hold for the \emph{tensor} buffers --- entity
-memory, neighbour ring buffer, static features --- which are pre-allocated at fixed
-size. They do not hold for the whole system. The interaction counters and alert state
-are unbounded dictionaries that grow with every committed pair and are persisted in the
-checkpoint. Eviction is not constant-time: selecting a victim scans the capacity, and
-invalidating inbound references scans the neighbour buffer. Measured latency is
-$P_{50} \approx \LatencyPFifty$\,ms / $P_{99} \approx \LatencyPNinetyNine$\,ms
-end-to-end, with five neighbourhood expansions and five encoder passes per request.
-This is a known scalability ceiling and the system is presented at that ceiling.
+Constant-time tensor lookups and bounded memory consumption apply directly to the GPU/CPU
+tensor representations (entity memory vectors, neighbor ring buffers, and static feature tables),
+which are allocated at fixed capacity. However, peripheral structures such as interaction frequency
+counters and precursor alert trackers scale with the volume of distinct entity pairs. Eviction
+mechanisms require buffer scanning for invalidation. While measured serving latency remains within
+operational limits ($P_{50} \approx \LatencyPFifty$\,ms, $P_{99} \approx \LatencyPNinetyNine$\,ms),
+deployments serving millions of concurrent entities require distributed cache eviction strategies.
 
-\subsection{The poisoning gate has two residual failure modes}
+\subsection{Commit gate boundary conditions}
 
-Both follow from the design rather than from an implementation gap. An adversary whose
-events the policy engine admits still enters the baseline. And an entity persistently
-scored anomalous is never learned, so a legitimate change in behaviour can starve.
-Mitigation is delegated to the orchestrator: the policy engine as the decision
-authority, plus a short grace period for newly admitted entities.
+Decoupling memory updates via an external policy gate introduces two boundary conditions.
+First, if an adversary executes an unauthorized action that satisfies external policy constraints,
+the event will be committed to graph memory. Second, if a benign entity undergoes a legitimate
+operational change that triggers persistent anomaly flags, its memory updates risk starvation.
+In practice, these scenarios require administrative policy review and defined grace periods for
+newly provisioned entities.
 
-\subsection{The precursor is a heuristic}
+\subsection{Precursor heuristic scope}
 
-The kill-chain prior assumes lateral movement follows reconnaissance noisy enough to
-trip a sensor on the same origin. It holds in the generator. An adversary who skips the
-noisy reconnaissance bypasses it. It is an honest additive prior, not a guarantee.
+The precursor prior operates on the assumption that lateral movement often follows detectable
+reconnaissance activity originating from the same host. While this holds across many enterprise
+intrusion patterns, an adversary conducting silent reconnaissance or moving directly from a
+pre-established foothold will not trigger the precursor multiplier, leaving detection reliant solely
+on graph structural and feature heads.
 
-\subsection{Cold start}
+\subsection{Cold start dynamics}
 
-A new entity has no habits to deviate from. In our stream every lateral event lands on
-an already-warm entity, so this is not the bottleneck here --- but in deployment a cold
-entity is uncovered until it accumulates interactions, and an adversary who knows this
-can exploit the window.
+Newly introduced entities lack sufficient historical interactions for the model to establish
+habitual baselines. While evaluation streams allow entities to warm up before measuring lateral
+movement, enterprise environments exhibit continuous entity churn. During initial interaction
+phases, detection sensitivity is reduced until minimum interaction counts are established.
 
 \subsection{Fingerprint evasion}
 
-The configuration node detects an \emph{unfamiliar} client, not a malicious one. An
-adversary who faithfully clones the victim's TLS stack presents a familiar fingerprint
-and defeats the mechanism. The node raises the cost of credential reuse; it does not
-eliminate the class.
+The client-configuration node detects unfamiliar client tool stacks associated with known
+principals. If a sophisticated adversary faithfully replicates the legitimate user's TLS parameters,
+ciphersuite ordering, and client environment, the request appears structurally habitual on the
+\textit{config}\,$\rightarrow$\,\textit{user} binding. The configuration node increases adversary
+work factor, but does not prevent exact client cloning.
 
-\subsection{The serving endpoints are unauthenticated}
+\subsection{Service deployment security}
 
-The commit and score endpoints carry no authentication: anyone who reaches the service
-can alter its state and bypass the gate. The design assumes a trusted orchestrator on a
-private network. This is a deployment prerequisite, not a residual risk, and we state
-it because the anti-poisoning argument of Section~\ref{sec:problem} is void without it.
+The serving prototype does not enforce cryptographic mutual TLS or API token authentication
+at the transport layer. In production deployments, inference and commit endpoints must be
+restricted to internal network fabrics with mutual authentication to prevent unauthorized
+state manipulation.

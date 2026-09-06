@@ -15,8 +15,8 @@ config).
 All runs use ``save=False`` — the deployable artifact in ``public/`` is never touched.
 The high theft/wipe slot counts here are eval-only; the published default stays 64/16.
 
-Multi-seed (mean ± std) because lateral/theft AUC carries ~±0.01–0.03 single-run CUDA
-nondeterminism (cfr. tasks/lessons.md). Reduced stream/epochs so 2×|SEEDS| runs finish
+Multi-seed (mean ± std) because lateral/theft AUC carries single-run CUDA
+nondeterminism. Reduced stream/epochs so 2×|SEEDS| runs finish
 in reasonable time; relative ordering (the Δ) is what matters, not the absolute headline.
 
     docker compose --profile config-eval up

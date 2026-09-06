@@ -11,8 +11,7 @@ main.pdf: main.tex results.tex refs.bib $(wildcard sections/*.tex)
 	$(PDFLATEX) -interaction=nonstopmode main.tex
 	$(PDFLATEX) -interaction=nonstopmode main.tex
 
-# Guard for tasks/lessons.md L5: no literal three-decimal figure may appear outside
-# results.tex, so regenerating the numbers is always a one-file edit.
+# Guard: enforce that no literal three-decimal figure appears outside results.tex.
 check:
 	@if grep -nE '[0-9]\.[0-9]{3}' sections/*.tex | grep -vE 'columnwidth|textwidth|linewidth'; then \
 		echo "FAIL: literal figure outside results.tex (see the lines above)"; exit 1; \

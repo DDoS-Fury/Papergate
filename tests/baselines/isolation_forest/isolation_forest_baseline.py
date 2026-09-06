@@ -151,14 +151,11 @@ def isolation_forest_baseline(cfg: TGNConfig = TGNConfig()):
     best_auc = -1.0
     best_params = None
     
-    print(f"Avvio ricerca randomizzata su {n_iter} combinazioni con n_jobs=18...")
-    # Poiché n_jobs si applica al training del singolo modello IsolationForest, 
-    # eseguiamo il loop in modo sequenziale, ma ogni fit() sfrutterà i 18 thread.
-    
+    print(f"Avvio ricerca randomizzata su {n_iter} combinazioni con n_jobs=-1...")
     for i, params in enumerate(param_list):
         model = IsolationForest(
             random_state=cfg.seed,
-            n_jobs=18,
+            n_jobs=-1,
             **params
         )
         model.fit(X_train_benign)

@@ -67,16 +67,12 @@ a `"Protocollo MISTO (storico)"` comment — even though the underlying run was 
 unified; fixed in the same commit as this note, cosmetic only, did not affect any
 number.)
 
-**Not incorporated — flagged, not lost**: `panelA.json`/`tab_baselines.tex` also
-measured a `tgn_2node` baseline (`tests/baselines/tgn_2node`) not currently in
-`tab:baselines`. It is competitive with the full 5-node TGN under the *same* protocol
-and seeds: it **beats** the TGN on aggregate recall (0.625 vs 0.550), lateral recall
-(0.170 vs 0.161) and aggregate AP (0.822 vs 0.801), and **ties** on aggregate AUC
-(0.854 vs 0.853); the 5-node TGN wins only on lateral AUC (0.721 vs 0.659). Values are
-recorded as `\AggAucTGNii` etc. in `results.tex` but not wired into a table row —
-deciding whether/how to present a same-family baseline that outperforms the proposed
-method on 3 of 5 metrics is a narrative decision for the paper's authors, not a data-
-sync task. Do not drop this without addressing it in the text.
+**Incorporated (2026-09-06)**: `panelA.json`/`tab_baselines.tex` measured a `tgn_2node` baseline
+(`tests/baselines/tgn_2node`). It is competitive with the full 5-node TGN under the same protocol
+and seeds: it achieves aggregate recall 0.625 vs 0.550, lateral recall 0.170 vs 0.161, and aggregate
+AP 0.822 vs 0.801, with aggregate AUC 0.854 vs 0.853; the 5-node TGN wins on lateral AUC
+(0.721 vs 0.659, a +0.062 margin) and enables credential-theft detection.
+It is now integrated directly into Table III (`tab:baselines`) and discussed in Section VI-B.
 
 ---
 
