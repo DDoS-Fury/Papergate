@@ -37,4 +37,5 @@ data/
 docs/latex/*.out
 docs/latex/*.log
 docs/latex/*.aux
+!docs/paper/main.pdf
 backups/
