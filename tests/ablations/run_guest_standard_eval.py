@@ -31,6 +31,7 @@ the focus is lateral + aggregate + routed FPR.
 import dataclasses
 
 import numpy as np
+from graphagate.report_metrics import mean_std
 
 from graphagate.config import TGNConfig
 from graphagate.train_tgn import train_tgn
@@ -74,7 +75,8 @@ COLS = ["agg_auc", "agg_ap", "agg_rec", "lat_auc", "lat_ap", "lat_rec",
 
 def _ms(vals):
     a = np.array(vals, dtype=float)
-    return f"{np.nanmean(a):.3f}±{np.nanstd(a):.3f}"
+    m, sd = mean_std(a)
+    return f"{m:.3f}±{sd:.3f}"
 
 
 def main():

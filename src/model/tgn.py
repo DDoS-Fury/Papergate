@@ -167,10 +167,10 @@ class ZTATemporalGraphNetwork(nn.Module):
         # serve_tgn.precursor_boost). It is NOT a trained input (benign-only training
         # would make it a dead feature). Persisted/purged like last_contact.
         self.recent_alert = {}
-        # Single source of truth: graphagate.config.TGNConfig. These stale class defaults
-        # (100000.0 / 3.0) were the values that saturated every score to 1.0 after a single
-        # cold-start alert — the reason config.py lowered them. Importing here keeps the
-        # three copies of this knob (config, model, serve_tgn fallback) from drifting apart.
+        # Single source of truth: graphagate.config.TGNConfig. Importing the defaults
+        # here keeps the three copies of this knob (config, model, serve_tgn fallback)
+        # from drifting apart; e.g. a very large half-life/max-boost (100000.0 / 3.0)
+        # would saturate every score to 1.0 after a single cold-start alert.
         from graphagate.config import TGNConfig as _Cfg
 
         self.precursor_half_life = _Cfg.precursor_half_life

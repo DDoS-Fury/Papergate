@@ -48,9 +48,9 @@ the HTTP method code, the requesting identity's role/clearance (possibly stolen)
 request/response volumes and the recency of this user's previous request.
 
 Everything in this message is available to the PDP *before* the request is forwarded.
-An earlier revision also carried ``http_status``, which is a **response** field: using it
-to decide whether to allow the request is a causality violation, and since it took a
-class-specific constant it was also a near-deterministic label channel. It was removed.
+No **response** field may enter the message (e.g. the HTTP status): using it to decide
+whether to allow the request is a causality violation, and a response field that takes a
+class-specific constant would be a near-deterministic label channel.
 
 Two invariants this generator must preserve, both regression-tested in
 ``tests/test_leakage_audit.py``:
@@ -73,15 +73,56 @@ import torch
 
 from graphagate.netclass import GUEST_DEVICE, ip_is_internal
 
+
+def stream_kwargs_from_cfg(cfg) -> dict:
+    """Generator kwargs that make a derived stream EXACTLY match the TGN stream.
+
+    Single source of truth for the (TGNConfig -> generate_streaming_data) mapping:
+    every consumer that must see the same entity space as the trained model (the
+    baselines, the live test generator, the leakage audit) calls this instead of
+    hand-copying the parameters. Hand-copied lists silently drifted before — the
+    baselines ran 400 configs / per-cookie device keying against a model trained on
+    40 configs / dev:guest.
+    """
+    return dict(
+        num_users=cfg.num_users,
+        num_devices=cfg.num_devices,
+        num_sources=cfg.num_sources,
+        num_configs=cfg.num_configs,
+        num_resources=cfg.num_resources,
+        num_events=cfg.num_events,
+        num_wipe_slots=cfg.num_wipe_slots,
+        num_theft_slots=cfg.num_theft_slots,
+        benign_explore_prob=cfg.benign_explore_prob,
+        p_roam=cfg.p_roam,
+        p_shared_device=cfg.p_shared_device,
+        p_cookie_wipe=cfg.p_cookie_wipe,
+        p_cred_theft=cfg.p_cred_theft,
+        seed=cfg.seed,
+        use_resource_risk=cfg.use_resource_risk,
+        use_source_internal=cfg.use_source_internal,
+        guest_device_fallback=cfg.guest_device_fallback,
+    )
+
 ROLES = ["guest", "operator", "manager", "admin"]
 CLEARANCES = ["PUBLIC", "INTERNAL", "CONFIDENTIAL", "SECRET", "TOP_SECRET"]
 WRITE_METHODS = {1, 2, 3, 4}  # POST/PUT/DELETE/PATCH (0=GET is the only read)
 
-# --- Bell-LaPadula model: a 1:1 mirror of infra/opa/policy.rego ---------------------
-# These three maps are kept in lockstep with the rego `livelli`, `ruoli_to_blp` and
-# `matrice_sicurezza`. The generator's notion of "policy-compliant" MUST equal OPA's
-# allow decision so the model's benign manifold is exactly the set of accesses OPA
-# permits — and the `etype=1` violations are genuine OPA denials.
+# --- Reference authorization model (Bell-LaPadula + compartments) --------------------
+# This module implements the REFERENCE policy model the generator labels against:
+# no read-up on GET, no write-down on writes, compartment subset, plus the
+# trusted-guard sanitized write-down exception. A deployment that uses the model
+# in production must run an OPA policy implementing this same model, so that the
+# benign manifold equals the set of accesses OPA permits and the `etype=1`
+# violations are genuine OPA denials.
+#
+# Divergence warning: `docs/policies.txt` is a snapshot of the deployed ZTALeaks
+# rego that implements a DIFFERENT model (per-route min_clearance for reads AND
+# writes, min_tier device gate, a different role vocabulary, an AI-score deny
+# override, and no trusted-guard route). It also requires authentication on
+# /api/v1/auth/register/begin, while the reference model here keeps it public.
+# The two must be reconciled before the labels produced by this generator are
+# treated as decisions of the deployed PDP.
 SECURITY_LEVELS = {  # rego `livelli`
     "PUBLIC": 0, "INTERNAL": 1, "CONFIDENTIAL": 2, "SECRET": 3, "TOP_SECRET": 4,
 }
@@ -108,10 +149,11 @@ SECURITY_MATRIX = {
 
 # Methods each route serves (the candidate ``(route, method)`` action space).
 # methods: 0=GET, 1=POST, 2=PUT, 3=DELETE, 4=PATCH. Protected routes expose exactly the
-# methods declared in matrice_sicurezza; public/auth routes are GET or POST. Public routes
-# (everything outside SECURITY_MATRIX) are allowed for every role — OPA gates them on
-# ai_score only (rego `public_paths`). NB: /api/v1/auth/register/{begin,finish} are PUBLIC
-# in the current policy (they sit in public_paths), no longer authenticated-only.
+# methods declared in the security matrix; public/auth routes are GET or POST. Public
+# routes (everything outside the security matrix) are allowed for every role — OPA
+# gates them on ai_score only. NB: /api/v1/auth/register/{begin,finish} are PUBLIC in
+# this reference model; the deployed snapshot in docs/policies.txt instead requires
+# authentication on register/begin (see the divergence warning above).
 _GET, _POST = {0}, {1}
 ROUTE_METHODS = {
     "/": _GET,
@@ -152,11 +194,9 @@ _GENERATED_CLASSIFICATION = {
     "security": ("SECRET", {"security"}),
 }
 
-# Inherent RISK per classification (node_feat index 4). Single source of truth: this
-# MIRRORS getResourceSensitivity() in services/security-orchestrator/internal/handler/
-# handler.go (and the impact encoded in policy.rego matrice_sicurezza), collapsed to a
-# per-resource scalar (the max over methods, since the resource node is method-agnostic).
-# Routes the orchestrator never scores as sensitive (public/auth/static) are 0.0.
+# Inherent RISK per classification (node_feat index 4). Collapsed to a per-resource
+# scalar (the max over methods, since the resource node is method-agnostic). Routes
+# the orchestrator never scores as sensitive (public/auth/static) are 0.0.
 _CLASSIFICATION_RISK = {
     "INTERNAL": 0.5, "CONFIDENTIAL": 0.6, "SECRET": 0.8, "TOP_SECRET": 0.9,
 }
@@ -209,8 +249,8 @@ ROUTE_METHODS, SECURITY_MATRIX, RESOURCE_URIS, RESOURCE_RISK = build_resource_un
 
 
 def policy_allows(role: str, method: int, uri: str) -> bool:
-    """OPA-equivalent allow decision for ``(role, method, route)`` — a direct port of
-    ``infra/opa/policy.rego`` (Bell-LaPadula + compartments + trusted-guard exception).
+    """Reference-model allow decision for ``(role, method, route)``
+    (Bell-LaPadula + compartments + trusted-guard exception).
 
     Public routes (anything outside :data:`SECURITY_MATRIX`) are allowed for every role;
     OPA gates them on ``ai_score`` only, which is orthogonal to identity. For protected
@@ -429,10 +469,10 @@ class ZTAStreamSimulator:
         # Index map: [2]=device tier, [3]=UNUSED, [4]=resource RISK,
         # [5]=source network internal(1)/external(0), [14]=trust score.
         #
-        # [3] used to carry ``r / (num_resources - 1)``, i.e. the raw resource index
-        # dressed up as a "priority". It was redundant with the RISK in [4] and, because
-        # the index correlated with access frequency, it leaked the label: that single
-        # column reached AUC ~0.92 on every anomaly class. It is deliberately left at 0.
+        # [3] is deliberately left at 0. A raw resource index here (dressed up as a
+        # "priority") would be redundant with the RISK in [4] and, because the index
+        # correlates with access frequency, would leak the label: that single column
+        # reaches AUC ~0.92 on every anomaly class.
         #
         # [4] (RISK) is kept: it is a genuine ZTA attribute, known at decision time, and
         # its correlation with policy violations is semantic rather than an artifact. Its
@@ -870,8 +910,8 @@ class ZTAStreamSimulator:
                 if non_habit:
                     res_idx, method = self._zipf_choice(non_habit, ("nonhabit", user))
                     ja3 = 1.0
-                    # Movimento laterale: stealth — credenziali e protocolli legittimi,
-                    # raramente fa scattare l'IDS (la rete deve studiare il grafo).
+                    # Lateral movement: stealth — legitimate credentials and protocols,
+                    # rarely triggers the IDS (the network must study the graph).
                     s1 = 0.0
                     s2 = 1.0 if np.random.rand() > 0.98 else 0.0  # 2%
                     s3 = 1.0 if np.random.rand() > 0.90 else 0.0  # 10%
@@ -891,13 +931,16 @@ class ZTAStreamSimulator:
                     anomaly_type = "policy"
 
             if anomaly_type == "policy":
-                # A genuine OPA denial for this role: read-up, write-down, or a missing
-                # compartment on a protected route.
+                # A genuine policy denial for this role: read-up, write-down, or a
+                # missing compartment on a protected route.
                 invalid = self._policy_violations(u_role)
-                if invalid:
-                    res_idx, method = self._zipf_choice(invalid, ("viol", u_role))
-                else:
-                    res_idx, method = self._zipf_choice(self._all_actions, ("all",))
+                if not invalid:
+                    # No deniable action exists for this role: labelling a random
+                    # (allowed) action as etype=1 would contradict policy_allows, so
+                    # the event degrades to a contextual anomaly instead.
+                    anomaly_type = "context"
+            if anomaly_type == "policy":
+                res_idx, method = self._zipf_choice(invalid, ("viol", u_role))
                 ja3, s1, s2, s3 = 1.0, 0.0, 0.0, 0.0
                 etype = 1
             elif anomaly_type == "context":
@@ -913,8 +956,8 @@ class ZTAStreamSimulator:
                 else:
                     res_idx, method = self._zipf_choice(self._all_actions, ("all",))
                 ja3 = 0.0 if np.random.rand() > 0.5 else 1.0
-                # Recon: attacco esterno — alta probabilità su Edge (80%), media su
-                # Mid (50%), bassa su Internal (20%).
+                # Recon: external attack — high probability on Edge (80%), medium on
+                # Mid (50%), low on Internal (20%).
                 s1 = 1.0 if np.random.rand() > 0.2 else 0.0
                 s2 = 1.0 if np.random.rand() > 0.5 else 0.0
                 s3 = 1.0 if np.random.rand() > 0.8 else 0.0

@@ -1,8 +1,10 @@
 # Provenance of every number in the paper
 
-Rule (`tasks/lessons.md` L5): a number enters a document only with (a) a file in
-`tasks/runs/` and (b) the commit hash that produced it, recorded here. A number that
-cannot be regenerated is **withdrawn**, not softened.
+Rule (provenance rule, adopted in the 2026-08-30 audit): a number enters a document
+only with (a) a file in `tasks/runs/` and (b) the commit hash that produced it, recorded
+here. A number that cannot be regenerated is **withdrawn**, not softened. (The original
+rule lived in `tasks/lessons.md`, which was archived and removed from the tree; this file
+now carries it.)
 
 Mechanically enforced: no literal three-decimal figure may appear in `sections/*.tex`.
 `make check` fails the build if one does. Every value lives in `results.tex`.
@@ -17,6 +19,19 @@ Mechanically enforced: no literal three-decimal figure may appear in `sections/*
 | **Block 2** — PicoDomain descriptors | 🟢 **MEASURED** | `tests.datasets.picodomain` |
 | **Block 3** — PicoDomain model evaluation | 🟢 **MEASURED** (single run) | `tests/eval_picodomain.py`, see below |
 
+> **Open caveat (2026-09-09): Panel A baseline rows owe regeneration.** `panelA.json`
+> (2026-08-31) predates the stream-parity fix: the four non-TGN baseline rows (static GNN,
+> One-Class SVM, Isolation Forest, XGBoost) generated their stream with a *subset* of the
+> generator's parameters (no `num_configs`, `guest_device_fallback`, `use_resource_risk`,
+> `use_source_internal`), i.e. a different entity space than the TGN rows. The driver now
+> routes every stream construction through `src/config.py::stream_kwargs_from_cfg` (shared
+> by TGN, baselines, the live generator and the leakage audit) and the static GNN samples
+> its negatives on the stream's real resource range. The macros in `results.tex` still carry
+> the 2026-08-31 values; the TGN-vs-baseline deltas of Table III are **not** a
+> like-for-like comparison until `docker compose --profile regen-report up` is re-run and
+> the macro block re-synced. The TGN rows and the TGN-2node row are unaffected (they
+> already received the full parameter set).
+
 `main.tex` carried `\preliminarytrue`, which stamps a banner on page 1 and on the
 affected tables/figures, since Block 1 was blocked on GPU regeneration. As of
 2026-08-31 all three pieces of Block 1 (Panel A, Panel B, credential-theft deltas) are
@@ -27,7 +42,8 @@ flag was flipped to `\preliminaryfalse` in the same session as this update.
 > flipped to `\preliminaryfalse` without any accompanying regeneration — no new
 > `tasks/runs/` artifact exists for that commit, and `results.tex`/`sections/*.tex`
 > still carried the same `\prelim{}`-flagged, pre-de-leakage, mixed-protocol numbers
-> described below. Reverted; see `tasks/todo.md` 2026-08-30 audit section. **The
+> described below. Reverted; the audit findings were recorded in this file and in the root
+> `AUDIT_REPORT.md`. **The
 > 2026-08-31 flip below is not a repeat of that mistake**: unlike `a11ed74`, this flip
 > is accompanied by (a) a new `tasks/runs/panelA.json` with 3-seed data for all 6
 > models, (b) `results.tex` macros updated to match it (verified against
@@ -42,7 +58,7 @@ flag was flipped to `\preliminaryfalse` in the same session as this update.
 `docker compose --profile regen-report up`, commit `031b442`. Output:
 `tasks/runs/panelA.json` (`meta.generated` = `2026-08-31T09:19:22+00:00`, 3 seeds ×
 6 models — TGN, TGN-2node, static GNN, One-Class SVM, Isolation Forest, XGBoost — all
-present), `docs/latex/generated/tab_baselines.tex`.
+present), `docs/paper/generated/tab_baselines.tex`.
 
 **Known gap, disclosed rather than hidden**: `tasks/runs/regen_report.log`'s capture is
 truncated mid-run, at Panel A / TGN / seed=42, before that seed's inference phase even
@@ -78,8 +94,9 @@ It is now integrated directly into Table III (`tab:baselines`) and discussed in 
 
 ## Block 1 — why it *was* preliminary (resolved 2026-08-31)
 
-Two independent problems, both documented in `tasks/todo.md` §6 and §7 — kept here as
-history, since a future regeneration needs to know what was originally wrong:
+Two independent problems (documented in the 2026-08-30 audit; the original task
+list was archived and removed from the tree) — kept here as history, since a future
+regeneration needs to know what was originally wrong:
 
 1. **Not reproducible from HEAD.** The values were produced on 2026-06-24, before the
    generator de-leakage of 2026-08-03. That generator no longer exists. The runs that
@@ -96,7 +113,7 @@ history, since a future regeneration needs to know what was originally wrong:
 
 ### Regeneration
 
-All on the GPU box via Compose — never a local CPU venv (`tasks/lessons.md`). Panel A/B
+All on the GPU box via Compose — never a local CPU venv. Panel A/B
 and config-eval are what gate Block 1's status and are now done (see status table
 above); `ablations` is permanently withdrawn (§VI-D); `arch-sweep` and
 `guest-device-eval` are not currently cited by any macro in `results.tex` and do not
@@ -118,7 +135,7 @@ docker compose --profile guest-device-eval up   # not currently cited in the pap
 | `\Bagg*`, `\Blat*`, `\Bfpr*` | IV (`tab:panelb`) | `tasks/runs/panelB.json` (generated 2026-08-30T19:24:30Z) | `tests/regen_report_tables.py` | `regen-report` | 🟢 `031b442` |
 | `\TheftRecallDelta`, `\TheftLateralDelta`, `\TheftRecOn/Off`, `\TheftAucOn/Off`, `\TheftN` | §VI-C prose | `tasks/runs/config_eval.log` (2026-08-18) | `tests/ablations/run_config_eval.py` | `config-eval` | 🟢 verified against log in-session |
 | `\Floor*` | I (`tab:floor`) | `tasks/runs/leakage_audit_floor.log` | `tests/test_leakage_audit.py` | CPU, seconds | 🟢 Verified |
-| `\RunToRun*`, `\PublishedSd*` | §VIII-A | `tasks/runs/panelB.json` vs `tasks/runs/tgn_v*_percookie.log` | — (comparison of two logs) | n/a | 🟢 static (both logs exist and are read directly; no regeneration is owed — the "commit" column is n/a, not pending) |
+| `\PublishedSdAuc`, `\PublishedSdRecall` | §VIII-A | sample std over the 3 seeds in `tasks/runs/panelB.json` (ddof=1, `report_metrics.mean_std`) | `tests/regen_report_tables.py` | `regen-report` | 🟢 static — run-to-run on the same stream has **not** been re-measured since the de-leakage; the macros describe the seed-spread only. The `\RunToRun*` macros previously cited here (0.038 lateral AUC / 0.132 lateral recall, `panelB.json` vs `tgn_v*_percookie.log`) are **withdrawn**: the two files come from different streams (n_lateral 3802 vs 3868), so the pair was never a same-stream run-to-run measurement. Do not reinstate without a same-stream, same-seed, multi-replica log. |
 | `\LatencyPFifty`, `\LatencyPNinetyNine` | §IV-F, §VIII-D | `tasks/runs/serving_client.log` | `tests/test_client.py` | `serve-tgn` | 🟢 Measured |
 | `\ParityDelta` | §IV-F | `tests/verify_replay_batching.py` | CPU | — | 🟢 Measured |
 
@@ -158,7 +175,8 @@ StreamData ready: (55436, 10) msg, span=230374s (2.67 d), anomalous fraction = 0
 `\PicoCovUserShort` (29.0%) and `\PicoCovUserShortest` (11.8%) come from the same
 command with `--bind-ttl 3600` and `--bind-ttl 900`. `\PicoSSLrecords`,
 `\PicoJAthree`, `\PicoKrbCoverage` and `\PicoUidOverlap` come from the schema
-inspection recorded in `docs/datasets.md` §3.1 and §3.3.
+inspection recorded in the module docstring of `tests/datasets/picodomain.py` (the
+`docs/datasets.md` that used to carry it was archived and removed from the tree).
 
 These values stand independently of the Block 1 regeneration.
 

@@ -1,79 +1,111 @@
-# Baselines di confronto
+# Comparison baselines
 
-Queste baseline servono a quantificare *quanto* il Temporal Graph Network (TGN)
-aggiunga rispetto a metodi più semplici, andando oltre la sola `rule-based baseline`
-già presente in `graphagate.train_tgn` (che per costruzione è cieca alle anomalie
-`policy` e `lateral`, perché condividono le edge feature benigne).
+These baselines quantify *how much* the Temporal Graph Network (TGN)
+adds on top of simpler methods, going beyond the bare `rule-based baseline`
+already present in `graphagate.train_tgn` (which by construction is blind to the
+`policy` and `lateral` anomalies, because they share the benign edge features).
 
-## Protocollo comune (per confrontabilità 1:1 col TGN)
+## Common protocol (for 1:1 comparability with the TGN)
 
-Tutte le baseline **devono**:
+All baselines:
 
-1. Generare i dati con `graphagate.data.stream_synthetic.generate_streaming_data`
-   usando gli stessi iperparametri di `graphagate.config.TGNConfig`
-   (`num_users=50, num_ips=100, num_resources=20, num_events=50000, seed=42`).
-2. Usare lo **stesso split cronologico**: train 70% / val 10% / test 20%
-   (`train_frac=0.7`, `val_frac=0.1`).
-3. Addestrare **solo su traffico benigno** del segmento di train (`y == 0`):
-   è anomaly detection senza etichette di anomalia, come il TGN.
-4. Riportare sul segmento di **test** le stesse metriche del TGN:
-   - `roc_auc_score` e `average_precision_score` aggregate (benigno vs tutte le anomalie);
-   - breakdown **per tipo** (`types`: 1=policy, 2=contextual, 3=lateral) calcolato
-     benigno-vs-quel-tipo, con AUC / AP / Recall@threshold;
-   - la soglia si calibra sul segmento di **validazione benigno** al `target_fpr`
-     di `TGNConfig` (1%, ovvero 99° percentile degli score benigni), identico al TGN.
+1. Generate the stream with `generate_streaming_data(**stream_kwargs_from_cfg(cfg))`
+   (`graphagate.config`): a **single** TGNConfig→generator mapping, shared by the TGN,
+   the baselines, the live generator and the leakage audit. No driver passes the
+   generator parameters by hand: if the TGN configuration changes, the
+   baselines' stream changes too (same entity space, same counting statistics).
+2. Use the **same chronological split**: train 70% / val 10% / test 20%
+   (`train_frac=0.7`, `val_frac=0.1` of `TGNConfig`).
+3. The one-class models (IF, OC-SVM) train **on the benign traffic only** of the
+   train segment (`y == 0`), like the TGN. XGBoost is supervised (it sees the labels
+   in training) and is included only as a reference upper-bound.
+4. Report on the **test** segment the same metrics as the TGN:
+   - `roc_auc_score` and `average_precision_score` aggregate (benign vs all anomalies);
+   - breakdown **per type** (0=benign, 1=policy, 2=contextual, 3=lateral, 4=cred-theft,
+     5=exfil, 6=benign-denied — same set as the `train_tgn` breakdown),
+     benign-vs-that-type, with AUC / AP / Recall@threshold;
+   - the threshold is calibrated on the **benign validation** segment at the `target_fpr`
+     of `TGNConfig` (1%, 99th percentile of the benign scores), identical to the TGN.
 
-Lo score di anomalia deve essere "più alto = più anomalo", coerente con
-`graphagate.serve_tgn.infer_score` (che restituisce `1 - P(benign)`).
+The anomaly score is "higher = more anomalous", consistent with
+`graphagate.serve_tgn.infer_score` (which returns `1 - P(benign)`).
 
-## Formato dei dati
+## Data format
 
-`generate_streaming_data(...)` restituisce (tensori `torch`, già ordinati nel tempo):
+`generate_streaming_data(...)` returns a `StreamData` (torch tensors, already
+time-sorted):
 
-| nome | shape | significato |
+| field | shape | meaning |
 |------|-------|-------------|
-| `src` | `[N]` | indice nodo sorgente (IP) |
-| `dst` | `[N]` | indice nodo destinazione (risorsa) |
-| `t`   | `[N]` | timestamp (interi crescenti) |
-| `msg` | `[N,7]` | edge feature dinamica `[ja3, alertEdge, alertMid, alertInt, method, roleVal, clrVal]` |
-| `y`   | `[N]` | label binaria (0=benigno, 1=anomalo) |
-| `types` | `[N]` | 0=benigno, 1=policy, 2=contextual, 3=lateral |
-| `node_features` | `[total_nodes,16]` | attributi statici (device tier, trust_score) |
-| `resource_uris` | `list[str]` | URI delle risorse |
+| `src` | `[N]` | source node index of the chain (v4: source IP → config → device → user) |
+| `dst` | `[N]` | destination node index (resource) |
+| `t`   | `[N]` | timestamp (increasing integers) |
+| `msg` | `[N,10]` | dynamic v4 edge features |
+| `y`   | `[N]` | binary label (0=benign, 1=anomalous) |
+| `types` | `[N]` | 0=benign, 1=policy, 2=contextual, 3=lateral, 4=cred-theft, 5=exfil, 6=benign-denied |
+| `node_features` | `[num_nodes,16]` | static attributes per node type |
 
-Spazio indici nodi: `[0,num_users)` utenti, `[num_users,num_users+num_ips)` IP,
-`[num_users+num_ips, total_nodes)` risorse.
+Node indices are block-allocated per type (`num_users`, `num_ips`, `num_devices`,
+`num_configs`...), defined in `stream_synthetic.py`; the `config` node collapses to
+`conf:guest` for non-TLS clients according to `guest_device_fallback` (default True),
+consistent with the deployable protocol.
 
-## Esecuzione
+## Status of the cited numbers
 
-torch non è installato sull'host: eseguire dentro l'immagine Docker del progetto.
+The Panel A values (Table III of the paper) come from `tasks/runs/panelA.json`
+(2026-08-31) and predate the stream parity fix referred to in point 1:
+the baseline rows must be **regenerated** (`docker compose --profile regen-report up`)
+before the TGN-vs-baseline deltas are cited again. The TGN-2node row is already
+at parity (it received all the parameters) and its values remain valid.
+
+## Execution
+
+Because PyTorch and baseline dependencies are not installed on the host, run baselines inside the project's Docker container.
+
+### Direct Docker run
+
+From the repository root (after building the `graphagate` image with `docker build -f docker/Dockerfile -t graphagate .`):
 
 ```bash
-# dalla root del repo
-docker compose run --rm --no-deps train-tgn python -m graphagate.data.stream_synthetic  # esempio
-# oppure montare i tests ed eseguire lo script della baseline:
-docker run --rm --gpus all -v "$PWD:/work" -w /work graphagate \
-  python tests/baselines/isolation_forest/isolation_forest_baseline.py
+# Example: running the Isolation Forest baseline
+docker run --rm --gpus all -v "$PWD:/work" -w /work --entrypoint python graphagate \
+  /work/tests/baselines/isolation_forest/isolation_forest_baseline.py
 ```
 
-## Baseline implementate
+### Via Docker Compose
 
-- `isolation_forest/` — Isolation Forest (sklearn) su vettori statici per-evento
-  (edge feature ⊕ feature statiche dei due endpoint). Detector di anomalie
-  classico, non relazionale: misura quanto si ottiene **senza** struttura del grafo.
-- `ocsvm/` — One-Class SVM (sklearn, kernel RBF) sugli **stessi** vettori statici
-  per-evento dell'Isolation Forest (fit su subsample benigno per scalabilità). La
-  controparte kernel del "pavimento" non relazionale.
-- `tgn_2node/` — TGN **Vanilla a 2 nodi** (User -> Resource). Isola il contributo
-  della **decomposizione ZTA a 5 nodi** rispetto all'uso di un Temporal Graph Network
-  classico della letteratura su grafo di accesso diretto User-Resource. Mantiene la
-  stessa memoria ricorrente, time encoding e negative sampling, dimostrando che senza
-  gli archi di binding (Source -> Config -> Device -> User) il modello è cieco a
-  Credential Theft e Lateral Movement da nuove postazioni.
-- `simple_gnn/` — GNN **non temporale** (GraphSAGE) su grafo statico aggregato dal
-  train benigno + link predictor MLP. Ablation **equa** del TGN: mantiene lo *stesso*
-  curriculum **de-circolarizzato** (negativo strutturale a destinazione casuale +
-  contestuale gaussiano, pesi uguali — niente più hard-negative ×10 basato
-  sull'abitualità/autorizzazione, che era circolare), e rimuove **solo** la memoria
-  ricorrente e il vicinato temporale. Isola così il contributo della sola componente
-  *temporale* alla detection del lateral movement (lateral AUC 0.59 vs 0.71 del TGN).
+Alternatively, run each baseline using its dedicated Compose profile:
+
+```bash
+docker compose --profile baseline-tgn-2node up
+docker compose --profile baseline-iforest up
+docker compose --profile baseline-ocsvm up
+docker compose --profile baseline-gnn up
+docker compose --profile baseline-xgboost up
+```
+
+## Implemented baselines
+
+- `isolation_forest/` — Isolation Forest (sklearn) on per-event static vectors
+  (edge features ⊕ static features of the two endpoints ⊕ causal history counters).
+  A classic, non-relational anomaly detector: it measures what is obtained **without**
+  graph structure. Hyperparameters selected on the validation AUC
+  (standard compromise of the one-class setting: no labels in the fit).
+- `ocsvm/` — One-Class SVM (sklearn, RBF kernel) on the **same** per-event static
+  vectors as the Isolation Forest (fit on a benign subsample for scalability). The
+  kernel counterpart of the non-relational "floor".
+- `xgboost/` — **supervised** XGBoost (same static vectors + history
+  counters). Tuning via `RandomizedSearchCV` (10 iterations, CV=3, scoring `roc_auc`)
+  on the whole train segment with labels. Reference upper-bound, **not**
+  a comparable baseline within the one-class paradigm.
+- `simple_gnn/` — **non-temporal** GNN (GraphSAGE) on the static graph aggregated
+  from the benign train + MLP link predictor. A **fair** ablation of the TGN: it keeps
+  the *same* **de-circularised** curriculum (structural negative with a random
+  destination in the stream's real resource range + Gaussian context, equal weights)
+  and removes **only** the recurrent memory and the temporal neighbourhood. It
+  isolates the contribution of the *temporal* component to the lateral movement
+  detection.
+- `tgn_2node/` — **2-node** TGN (User → Resource). It isolates the contribution of
+  the **5-node ZTA decomposition** with respect to a classic literature TGN on the
+  direct User-Resource access graph. It keeps the same recurrent memory,
+  time encoding and negative sampling.

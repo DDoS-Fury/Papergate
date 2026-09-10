@@ -63,7 +63,7 @@ def test_schema_version_gate():
 
 def test_five_edge_chain_commits():
     model, reg = _fresh()
-    score, is_anom = score_event(
+    score, is_anom, _ = score_event(
         model, reg, 2.0, "alice", "tpm:0001", "/api/v1/documents", 100, FEAT, DEVICE,
         key_source="src:10.0.0.7", key_config="conf:0001", update=True,
     )
@@ -147,7 +147,7 @@ def test_key_source_none_skips_source_edge():
     ci = reg.get("conf:0001")
     n_before = len(reg)
 
-    score, _ = score_event(
+    score, _, _ = score_event(
         model, reg, 2.0, "alice", "tpm:0001", "/api/v1/documents", 200, FEAT, DEVICE,
         key_config="conf:0001", update=True,  # no key_source
     )

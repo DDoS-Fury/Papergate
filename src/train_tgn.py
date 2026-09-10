@@ -46,6 +46,7 @@ from graphagate.data.stream_synthetic import (
     SCEN_SHARED,
     SCEN_WIPED,
     generate_streaming_data,
+    stream_kwargs_from_cfg,
 )
 from graphagate.eval_common import causal_src_seen
 from graphagate.model.registry import NodeRegistry
@@ -127,7 +128,9 @@ def _replay(model, source_nodes, device_nodes, user, dst, t, msg, y, device, *,
     src_l = source_nodes.tolist() if source_nodes is not None else None
     cfg_l = config_nodes.tolist() if config_nodes is not None else None
     has_bind = device_nodes is not None
-    has_src = has_bind and source_nodes is not None
+    # Mirrors score_event: a missing device skips only the device's own edges
+    # (config→device, device→user); the source→config and config→user edges stay.
+    has_src = source_nodes is not None
     has_config = config_nodes is not None
     msg_dim = msg.shape[1]
     TRUST = 14  # runtime trust slot in node_feat (the only column replay mutates)
@@ -196,7 +199,7 @@ def _replay(model, source_nodes, device_nodes, user, dst, t, msg, y, device, *,
                     raw = torch.maximum(raw, _grp_anom(bcfg, bdev, cfgs, devs, zeros_msg, None))  # config→device
                 if has_src:
                     raw = torch.maximum(raw, _grp_anom(bsrc, bcfg, srcs, cfgs, zeros_msg, None))  # source→config
-            if has_src and not has_config:
+            if has_src and has_bind and not has_config:
                 raw = torch.maximum(raw, _grp_anom(bsrc, bdev, srcs, devs, zeros_msg, None))  # legacy source→device
             raw_np = raw.detach().cpu().numpy()
             bmsg_rows = bmsg.tolist()
@@ -258,7 +261,7 @@ def _replay(model, source_nodes, device_nodes, user, dst, t, msg, y, device, *,
                     _commit(bcfg[sel_t], bdev[sel_t], zb)
                 if has_config:
                     _commit(bcfg[sel_t], su, zb)
-                if has_src and not has_config:
+                if has_src and has_bind and not has_config:
                     _commit(bsrc[sel_t], bdev[sel_t], zb)
                 if has_bind:
                     _commit(bdev[sel_t], su, zb)
@@ -271,7 +274,7 @@ def _replay(model, source_nodes, device_nodes, user, dst, t, msg, y, device, *,
                         _bump(cfgs[j], devs[j], tv)
                     if has_config:
                         _bump(cfgs[j], u, tv)
-                    if has_src and not has_config:
+                    if has_src and has_bind and not has_config:
                         _bump(srcs[j], devs[j], tv)
                     if has_bind:
                         _bump(devs[j], u, tv)
@@ -339,13 +342,13 @@ def _sample_structural_negatives(num_events, num_res, res_lo, device, *, avoid=N
     violation) is scored as a low-likelihood event under the learned baseline.
 
     De-circularisation guard: this sampler takes only the resource id-range, **not**
-    the data generator's ``auth_mask`` / habitual sets. It therefore cannot encode
-    the evaluation's *specific* anomaly construction (authorised-but-non-habitual).
-    The previous hard-negative did exactly that (and weighted it 10x), which made
-    the reported recall a memorised curriculum rather than honest generalisation.
+    the data generator's ``auth_mask`` / habitual sets. A negative construction
+    derived from habituality/authorization would encode the evaluation's *specific*
+    anomaly definition (authorised-but-non-habitual), which would make the reported
+    recall a memorised curriculum rather than honest generalisation.
     NOTE: this is the standard self-supervised setup, **not** a zero-shot claim —
     random destinations are mostly non-habitual, so the objective does learn the
-    generic "unusual access" notion; it simply no longer mirrors the test rule.
+    generic "unusual access" notion; it does not mirror the test rule.
     """
     neg = torch.randint(0, num_res, (num_events,), device=device) + res_lo
     if avoid is not None:
@@ -406,32 +409,14 @@ class StreamData:
 
 
 def _synthetic_stream_data(cfg: TGNConfig) -> StreamData:
-    """Build :class:`StreamData` from the synthetic v2 generator (the default path).
+    """Build :class:`StreamData` from the synthetic v4 generator (the default path).
 
     Users are keyed by their integer ids, devices by ``tpm:<id>`` / ``ck:<uuid>``
     strings, sources by IP strings and resources by their URI strings (so the
     orchestrator can send all of them natively); structural negatives are sampled over
     the resource id-range.
     """
-    s = generate_streaming_data(
-        num_users=cfg.num_users,
-        num_devices=cfg.num_devices,
-        num_sources=cfg.num_sources,
-        num_configs=cfg.num_configs,
-        num_resources=cfg.num_resources,
-        num_events=cfg.num_events,
-        num_wipe_slots=cfg.num_wipe_slots,
-        num_theft_slots=cfg.num_theft_slots,
-        benign_explore_prob=cfg.benign_explore_prob,
-        p_roam=cfg.p_roam,
-        p_shared_device=cfg.p_shared_device,
-        p_cookie_wipe=cfg.p_cookie_wipe,
-        p_cred_theft=cfg.p_cred_theft,
-        seed=cfg.seed,
-        use_resource_risk=cfg.use_resource_risk,
-        use_source_internal=cfg.use_source_internal,
-        guest_device_fallback=cfg.guest_device_fallback,
-    )
+    s = generate_streaming_data(**stream_kwargs_from_cfg(cfg))
     return StreamData(
         user=s.user, dst=s.dst, t=s.t, msg=s.msg, y=s.y, types=s.types,
         node_features=s.node_features, keys=s.keys, num_nodes=s.num_nodes,
@@ -459,11 +444,10 @@ def train_tgn(cfg: TGNConfig = TGNConfig(), *, dataset: "StreamData | None" = No
     generator, reusing the whole pipeline for external validity; ``None`` is the default
     synthetic path. Returns a metrics dict.
     """
-    # Full seeding. `torch.manual_seed` alone left the CUDA generators and the
-    # non-deterministic scatter kernels free: two runs of the SAME config and SAME seed
-    # differed by up to 0.038 lateral AUC and 0.132 lateral recall — more than the
-    # across-seed standard deviation reported as the error bar, which made small effects
-    # (e.g. the +0.017 v3→v4 lateral AUC) indistinguishable from noise.
+    # Full seeding. `torch.manual_seed` alone leaves the CUDA generators and the
+    # non-deterministic scatter kernels free, so run-to-run spread on the same stream
+    # is not below the across-seed standard deviation — the reported sigmas
+    # (3 seeds x 1 run) therefore confound the two sources of variance.
     #
     # `warn_only=True` because the scatter-add in TransformerConv / TGNMemory has no
     # deterministic CUDA kernel: PyTorch warns instead of raising, and the residual
@@ -562,7 +546,7 @@ def train_tgn(cfg: TGNConfig = TGNConfig(), *, dataset: "StreamData | None" = No
     bs = cfg.batch_size
     # One-class, not unsupervised: labels select the training set (benign only). See the
     # module docstring for the full statement of what is and is not supervised.
-    print("--- INIZIO ADDESTRAMENTO ONE-CLASS (solo traffico benigno) ---")
+    print("--- ONE-CLASS TRAINING START (benign traffic only) ---")
     for epoch in range(1, cfg.epochs + 1):
         model.memory.reset_state()  # restart the recurrent memory each epoch
         model.neighbor_loader.reset_state()  # ...and the temporal neighbourhood
@@ -632,7 +616,8 @@ def train_tgn(cfg: TGNConfig = TGNConfig(), *, dataset: "StreamData | None" = No
             )
             user_rep = p_user.repeat_interleave(K)
             has_bind = p_device is not None and data.dev_num > 0
-            has_src = has_bind and p_source is not None
+            # A missing device skips only the device's own edges (score_event parity).
+            has_src = p_source is not None
             has_config = p_config is not None and data.cfg_num > 0
             if has_bind:
                 neg_usr = _sample_structural_negatives(
@@ -654,7 +639,7 @@ def train_tgn(cfg: TGNConfig = TGNConfig(), *, dataset: "StreamData | None" = No
                     neg_scfg = _sample_structural_negatives(  # source→config negatives
                         P * K, data.cfg_num, data.cfg_lo, device, avoid=cfg_rep
                     )
-            if has_src and not has_config:
+            if has_src and has_bind and not has_config:
                 # legacy source→device binding (no config node to route the chain through)
                 neg_dev = _sample_structural_negatives(
                     P * K, data.dev_num, data.dev_lo, device, avoid=dev_rep
@@ -672,7 +657,7 @@ def train_tgn(cfg: TGNConfig = TGNConfig(), *, dataset: "StreamData | None" = No
                     parts += [neg_cdev]
                 if has_src:
                     parts += [p_source, neg_scfg]
-            if has_src and not has_config:
+            if has_src and has_bind and not has_config:
                 parts += [p_source, neg_dev]
             nodes = torch.cat(parts).unique()
             n_id, edge_index, hist_t, hist_msg = model.neighbor_loader(nodes)
@@ -751,7 +736,7 @@ def train_tgn(cfg: TGNConfig = TGNConfig(), *, dataset: "StreamData | None" = No
                     loss = loss + _binding_loss(p_config, p_device, cfg_rep, neg_cdev, cfg_l, dev_l)  # config → device
                 if has_src:
                     loss = loss + _binding_loss(p_source, p_config, src_rep, neg_scfg, src_l, cfg_l)  # source → config
-            if has_src and not has_config:  # legacy source → device
+            if has_src and has_bind and not has_config:  # legacy source → device
                 loss = loss + _binding_loss(p_source, p_device, src_rep, neg_dev, src_l, dev_l)
 
             loss.backward()
@@ -778,7 +763,7 @@ def train_tgn(cfg: TGNConfig = TGNConfig(), *, dataset: "StreamData | None" = No
                 _commit_edge(p_config, p_device, zeros_msg)
             if has_config:
                 _commit_edge(p_config, p_user, zeros_msg)
-            if has_src and not has_config:
+            if has_src and has_bind and not has_config:
                 _commit_edge(p_source, p_device, zeros_msg)
             if has_bind:
                 _commit_edge(p_device, p_user, zeros_msg)
@@ -792,7 +777,7 @@ def train_tgn(cfg: TGNConfig = TGNConfig(), *, dataset: "StreamData | None" = No
                     pairs.append((cfg_l[j], dev_l[j]))
                 if has_config:
                     pairs.append((cfg_l[j], u))
-                if has_src and not has_config:
+                if has_src and has_bind and not has_config:
                     pairs.append((src_l[j], dev_l[j]))
                 if has_bind:
                     pairs.append((dev_l[j], u))
@@ -807,7 +792,7 @@ def train_tgn(cfg: TGNConfig = TGNConfig(), *, dataset: "StreamData | None" = No
         print(f"Epoch {epoch:02d} | Train Loss: {total_loss / max(num_train_batches, 1):.4f}")
 
     # --- THRESHOLD CALIBRATION (held-out benign slice) -----------------------
-    print("\n--- CALIBRAZIONE SOGLIA (su flusso di validazione benigno) ---")
+    print("\n--- THRESHOLD CALIBRATION (on the benign validation stream) ---")
     # The eval replay evolves the runtime trust feature (node_feat[:, 14]); snapshot the
     # post-training node features so calibration does not bleed trust state into the test
     # replay and so re-runs stay idempotent.
@@ -816,10 +801,10 @@ def train_tgn(cfg: TGNConfig = TGNConfig(), *, dataset: "StreamData | None" = No
         return arr[lo:hi] if arr is not None else None
 
     # The calibration replay runs the SAME gate as the test replay (``gate_by_label=False``:
-    # commit on the OPA-ALLOW proxy, not on ground truth). It used to run with
-    # ``gate_by_label=True``, which let the labels decide what entered memory, what the trust
-    # feature became and when the precursor armed — so the threshold was fitted on a score
-    # distribution that is not the one it is then applied to. Because the score-driven part
+    # commit on the OPA-ALLOW proxy, not on ground truth). Running with
+    # ``gate_by_label=True`` would let the labels decide what enters memory, what the trust
+    # feature becomes and when the precursor arms — and the threshold would be fitted on a
+    # score distribution that is not the one it is then applied to. Because the score-driven part
     # of that feedback needs a threshold that does not exist yet, calibration is a single
     # fixed-point iteration: pass A runs with no score threshold (sensor alarms only), its
     # scores yield provisional thresholds, and pass B re-runs the identical replay under
@@ -879,8 +864,9 @@ def train_tgn(cfg: TGNConfig = TGNConfig(), *, dataset: "StreamData | None" = No
         v_types = types[train_end:val_end].numpy()
         v_clean = ~_rule_baseline(msg[train_end:val_end].numpy()).astype(bool)
         # Label-free clean threshold: the benign-FPR quantile restricted to signal-clean
-        # events. Reported as the PRIMARY operating point because it needs no red-team
-        # labels in the validation window.
+        # events. Recorded in the artifact's calibration metadata as the alternative for
+        # deployments without red-team labels; the persisted serving threshold is the
+        # cost-sensitive t_clean below.
         clean_benign = scores[v_clean & (labels == 0)]
         t_unsup = float(np.quantile(clean_benign, 1.0 - cfg.target_fpr)) if clean_benign.size \
             else t_dirty
@@ -897,10 +883,10 @@ def train_tgn(cfg: TGNConfig = TGNConfig(), *, dataset: "StreamData | None" = No
             )
         return t_clean, t_dirty, t_unsup, benign
 
-    scores_a, labels_a = _cal_replay("Calibrazione pass A (replay val, no soglia)")
+    scores_a, labels_a = _cal_replay("Calibration pass A (val replay, no threshold)")
     thr_a, thr_dirty_a, _, _ = _fit_thresholds(scores_a, labels_a)
     val_scores, val_labels = _cal_replay(
-        "Calibrazione pass B (replay val, gate di test)", thr=thr_a, thr_dirty=thr_dirty_a
+        "Calibration pass B (val replay, test gate)", thr=thr_a, thr_dirty=thr_dirty_a
     )
     threshold, threshold_dirty, threshold_clean_unsup, benign_val_scores = _fit_thresholds(
         val_scores, val_labels
@@ -916,13 +902,14 @@ def train_tgn(cfg: TGNConfig = TGNConfig(), *, dataset: "StreamData | None" = No
         f"p95={np.quantile(benign_val_scores, 0.95):.4f}"
     )
     print(
-        f"threshold_dirty@FPR={cfg.target_fpr}: {threshold_dirty:.4f} | "
+        f"threshold@cost_ratio={cfg.cost_ratio}: {threshold:.4f} "
+        f"[PRIMARY — persisted and used by serving for signal-clean events; requires "
+        f"labelled lateral movement in the validation window; "
+        f"clean cal: n_benign={int((cal_labels == 0).sum())} n_lateral={int(cal_labels.sum())}] | "
+        f"threshold_dirty@FPR={cfg.target_fpr}: {threshold_dirty:.4f} "
+        f"[signal-dirty events] | "
         f"threshold_clean_unsup@FPR={cfg.target_fpr}: {threshold_clean_unsup:.4f} "
-        f"[PRIMARY, label-free] | "
-        f"threshold_clean@cost_ratio={cfg.cost_ratio}: {threshold:.4f} "
-        f"[SUPERVISED upper bound — requires labelled lateral movement in the validation "
-        f"window; clean cal: n_benign={int((cal_labels == 0).sum())} "
-        f"n_lateral={int(cal_labels.sum())}]"
+        f"[label-free alternative, calibration metadata only]"
     )
     # Lateral recall/FPR trade-off the clean threshold was picked from (operator/OPA reference).
     if cal_labels.sum() > 0:
@@ -933,13 +920,13 @@ def train_tgn(cfg: TGNConfig = TGNConfig(), *, dataset: "StreamData | None" = No
     # --- STREAMING EVALUATION (event-by-event, predicted-benign gating) ------
     if cfg.eval_batch_size > 1:
         print(
-            f"\n[!] eval_batch_size={cfg.eval_batch_size} > 1: i punteggi sono "
-            f"l'APPROSSIMAZIONE BATCHATA (veloce, ma NON identica al serving sequenziale: "
-            f"staleness intra-batch). Per numeri finali / da pubblicare usa eval_batch_size=1.",
+            f"\n[!] eval_batch_size={cfg.eval_batch_size} > 1: the scores are the "
+            f"BATCHED APPROXIMATION (fast, but NOT identical to sequential serving: "
+            f"intra-batch staleness). For final / publishable numbers use eval_batch_size=1.",
             file=sys.stderr,
         )
-    _mode = f"batch={cfg.eval_batch_size}" if cfg.eval_batch_size > 1 else "per-evento"
-    print(f"\n--- INIZIO FASE DI INFERENZA / ANOMALY DETECTION ({_mode}) ---")
+    _mode = f"batch={cfg.eval_batch_size}" if cfg.eval_batch_size > 1 else "per-event"
+    print(f"\n--- INFERENCE / ANOMALY DETECTION PHASE START ({_mode}) ---")
     # Memory + neighbour history legitimately continue from the (benign) calibration
     # slice, but reset the runtime trust feature to the post-training snapshot so the
     # test stream is not pre-conditioned by calibration.
@@ -1002,7 +989,7 @@ def train_tgn(cfg: TGNConfig = TGNConfig(), *, dataset: "StreamData | None" = No
     #   lateral -> rule-blind and the GENUINELY HARD case (authorised, signal-clean,
     #     indistinguishable from benign exploration except by temporal/relational pattern).
     #     This is the model's real target.
-    print("\n--- METRICHE PER TIPO DI ANOMALIA ---")
+    print("\n--- PER-ANOMALY-TYPE METRICS ---")
     vs_rule = {
         1: "OPA-owned  ", 2: "rule-trivial", 3: "rule-blind ", 4: "rule-blind ",
         5: "volume-tell", 6: "OPA-owned  ",
@@ -1154,6 +1141,7 @@ def train_tgn(cfg: TGNConfig = TGNConfig(), *, dataset: "StreamData | None" = No
             "use_resource_risk": cfg.use_resource_risk,
             "use_source_internal": cfg.use_source_internal,
             "guest_device_fallback": cfg.guest_device_fallback,
+            "use_precursor": use_precursor,
         }
         op_new = operating_point(test_scores, test_labels, test_types, threshold)
         save_model(

@@ -89,11 +89,15 @@
 \newcommand{\TheftRecOff}{0.206\,$\pm$\,0.039}
 \newcommand{\TheftN}{452}
 
-% --- Run-to-run variance: same configuration, same seed, two runs --------------------
-\newcommand{\RunToRunAuc}{0.038}
-\newcommand{\RunToRunRecall}{0.132}
-\newcommand{\PublishedSdAuc}{0.013--0.014}
-\newcommand{\PublishedSdRecall}{0.034--0.057}
+% --- Variance caveat: reported sigmas are over 3 seeds x 1 run -----------------------
+% The run-to-run spread previously cited here (0.038 lateral AUC / 0.132 lateral recall
+% between panelB.json and a per-cookie v3 log) was RETRACTED: the two files come from
+% different streams (n_lateral 3802 vs 3868), so the pair was not a same-stream run-to-run
+% measurement. Run-to-run variance on the same stream has not yet been re-measured on the
+% de-leaked generator; reported sigmas are therefore the sample standard deviation over
+% three seeds, one run per seed (ddof=1).
+\newcommand{\PublishedSdAuc}{0.008--0.017}
+\newcommand{\PublishedSdRecall}{0.006--0.091}
 
 % --- Single-feature floor, before and after the generator de-leakage -----------------
 \newcommand{\FloorPolicyPre}{0.930}   \newcommand{\FloorPolicyPost}{0.858}

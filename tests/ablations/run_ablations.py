@@ -24,6 +24,7 @@ Run inside the project's Docker image (torch required):
 import dataclasses
 
 import numpy as np
+from graphagate.report_metrics import mean_std
 
 from graphagate.config import TGNConfig
 from graphagate.train_tgn import train_tgn
@@ -78,7 +79,8 @@ def main():
 
     def ms(vals):
         a = np.array(vals, dtype=float)
-        return f"{np.nanmean(a):.3f}±{np.nanstd(a):.3f}"
+        m, sd = mean_std(a)
+        return f"{m:.3f}±{sd:.3f}"
 
     for name, _ in VARIANTS:
         arr = np.array(results[name], dtype=float)  # [seeds, 4]

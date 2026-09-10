@@ -1,38 +1,37 @@
-\section{External Validity}
+\section{External validity}
 \label{sec:external}
 
-\subsection{Evaluation of Public Corpora}
+\subsection{Evaluation of public corpora}
 
-We surveyed candidate public cybersecurity datasets to evaluate the feasibility of
-instantiating the five-node ZTA graph on real-world enterprise telemetry, yielding two
+Candidate public cybersecurity datasets were surveyed to evaluate the feasibility of
+instantiating the 5-node ZTA graph on real-world enterprise telemetry, yielding 2
 key findings:
 
-\textbf{Lack of Zero Trust benchmarks.} Existing Zero Trust literature on continuous
+\textit{Lack of Zero Trust benchmarks.} Existing Zero Trust literature on continuous
 trust scoring and policy decision points evaluates predominantly on proprietary or
 unreleased simulated environments, with no standardized benchmark for continuous authorization.
 
-\textbf{Absence of concurrent identity and TLS fingerprints.} Authentication graph
+\textit{Absence of concurrent identity and TLS fingerprints.} Authentication graph
 corpora (such as LANL~\cite{lanl}, DARPA OpTC~\cite{optc}, and CERT~\cite{cert}) provide
 extensive event volumes and lateral movement labels, but omit client TLS fingerprints entirely.
 Conversely, network testbeds providing packet captures (such as AIT~\cite{ait} and
 CIC-IDS2017~\cite{cicids}) enable TLS fingerprint extraction, but either lack user identity
 associations (precluding principal-centric modeling) or omit labeled lateral movement activity.
 
-One public dataset provides the required intersection of telemetry fields.
+A single public dataset provides the required intersection of telemetry fields.
 
 \subsection{PicoDomain}
 
 PicoDomain~\cite{picodomain} is a \PicoSpan-day capture of an enterprise Windows domain
-intrusion across five workstations and a domain controller, published as Zeek JSON logs
-with an annotated red-team activity log. It provides real telemetry covering all five node
-types in our graph schema: its \texttt{ssl.log} contains \PicoSSLrecords{} records with
+intrusion across 5 workstations and 1 domain controller, published as Zeek JSON logs
+with an annotated red-team activity log. It provides real telemetry covering all 5 node
+types in the graph schema (Table~\ref{tab:picomap}): its \texttt{ssl.log} contains \PicoSSLrecords{} records with
 \texttt{ja3} fingerprints over \PicoJAthree{} distinct client configurations, while
 \texttt{kerberos.log} and \texttt{ntlm.log} capture both human user principals and machine accounts.
 
-\begin{table}[t]
+\begin{table}[ht!]
 \centering
-\caption{PicoDomain mapped onto the five-node chain schema.}
-\label{tab:picomap}
+\renewcommand{\arraystretch}{1.5}
 \footnotesize
 \begin{tabular}{@{}ll@{}}
 \toprule
@@ -46,20 +45,22 @@ resource & \texttt{smb\_mapping:path}, \texttt{smb\_files:name}, \\
          & \texttt{http:uri}, \texttt{dce\_rpc:endpoint} \\
 \bottomrule
 \end{tabular}
+\caption{PicoDomain mapped onto the 5-node chain schema.}
+\label{tab:picomap}
 \end{table}
 
 The red-team exercise covers multi-stage lateral progression: initial compromise via a
 trojanized archive, privilege escalation, credential dumping via \emph{Mimikatz}, domain
-reconnaissance, remote execution across three additional hosts using DCOM and WMI, and
+reconnaissance, remote execution across 3 additional hosts using DCOM and WMI, and
 interactive command execution under an alternate domain account. Both lateral movement
 and credential reuse are present in the activity trace.
 
-\subsection{Telemetry Reconstruction and Limitations}
+\subsection{Telemetry reconstruction and limitations}
 
 In network monitoring telemetry, TLS handshakes and authentication transactions typically
 occur over separate transport connections. In PicoDomain's Zeek logs, connection identifiers
 (\texttt{uid}) between \texttt{ssl} and authentication protocols (\texttt{kerberos}/\texttt{ntlm})
-exhibit zero overlap (\PicoUidOverlap). Consequently, the \textit{config}\,$\rightarrow$\,\textit{user}
+exhibit 0 overlap (\PicoUidOverlap). Consequently, the \textit{config}\,$\rightarrow$\,\textit{user}
 binding is reconstructed temporally: for each client source address, the most recently observed
 authenticated principal and TLS fingerprint within an active session window are associated.
 
@@ -78,18 +79,18 @@ are assigned by matching access events against red-team activity logs within a $
 on host or principal identity. The red-team activity log timestamps carry an estimated uncertainty
 of $\pm1$ minute, reflecting manual operator logging.
 
-With eight distinct source addresses over \PicoSpan{} days, PicoDomain serves as an empirical
+With 8 distinct source addresses over \PicoSpan{} days, PicoDomain serves as an empirical
 case study rather than an enterprise-scale benchmark. Variance across the \PicoNlateral{} lateral
 events is inherently non-trivial, and policy violations cannot be evaluated due to the absence
 of authorization policy definitions. Nonetheless, it provides valuable empirical confirmation
-that the five-node graph schema maps directly to enterprise monitoring telemetry.
+that the 5-node graph schema maps directly to enterprise monitoring telemetry.
 
 \subsection{Model results on PicoDomain}
 \label{sec:pico-model}
 
-We evaluated the one-class temporal learning pipeline (\texttt{tests/eval\_picodomain.py})
-on the mapped PicoDomain stream (\PicoModelSettings) without per-corpus hyperparameter tuning.
-Ranking performance demonstrates discrimination across all three evaluable attack classes:
+The one-class temporal learning pipeline (\texttt{tests/eval\_picodomain.py}) is
+evaluated on the mapped PicoDomain stream (\PicoModelSettings) without per-corpus hyperparameter tuning.
+Ranking performance demonstrates discrimination across all 3 evaluable attack classes:
 aggregate AUC \PicoModelAggAuc{} (AP \PicoModelAggAp), lateral movement AUC \PicoModelLatAuc{}
 (AP \PicoModelLatAp, $n=\PicoNlateral$), credential reuse AUC \PicoModelTheftAuc{} (AP
 \PicoModelTheftAp, $n=\PicoNtheft$), and contextual anomaly AUC \PicoModelCtxAuc{} (AP
@@ -97,25 +98,26 @@ aggregate AUC \PicoModelAggAuc{} (AP \PicoModelAggAp), lateral movement AUC \Pic
 benchmark, reflecting the limited sample size and small entity population, the model successfully
 maintains inductive ranking ability on real network traces.
 
-We report ranking metrics (AUC and AP) rather than operating recall for this dataset due to the
-temporal distribution of attacks. In PicoDomain, red-team activities occur exclusively in the
+Ranking metrics (AUC and AP) are reported rather than operating recall for this dataset,
+due to the temporal distribution of attacks. In PicoDomain, red-team activities occur exclusively in the
 final segment of the capture (commencing after 84\% of the event stream). Under a strict
-chronological 70/10/20 split, the validation slice contains zero lateral movement or credential
+chronological 70/10/20 split, the validation slice contains 0 lateral movement or credential
 theft instances. Threshold calibration for specific recall operating points requires positive
 validation instances; calculating recall without validation instances would introduce threshold
 bias unrepresentative of actual detector capability.
 
-\subsection{LANL as an Architectural Ablation}
+\subsection{LANL as an architectural ablation}
 
 While LANL~\cite{lanl} is an established benchmark for lateral movement on authentication graphs,
 it lacks client application fingerprints, device attestation, and resource sensitivity metadata.
-Evaluating our five-node architecture on LANL necessarily requires ablating the client-configuration
-and device nodes, collapsing the schema onto a bipartite computer-to-computer graph. While evaluating
-this bipartite degradation provides a useful structural ablation, comparing LANL numbers directly
+Evaluating the 5-node architecture on LANL necessarily requires ablating the client-configuration
+and device nodes, collapsing the schema onto the single \textit{user}\,$\rightarrow$\,\textit{resource}
+access edge (the destination computer playing the role of the resource). While evaluating
+this degradation provides a useful structural ablation, comparing LANL numbers directly
 against systems designed exclusively for host authentication logs would evaluate the architecture
 with its core contextual components disabled.
 
-\subsection{Future Corpus Directions}
+\subsection{Future corpus directions}
 
 Future empirical validation on enterprise-scale data can build upon corpora such as the AIT
 Log Data Set~\cite{ait}, which features multiple testbeds with real network boundaries, diverse

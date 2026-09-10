@@ -1,17 +1,17 @@
-"""Baseline TGN Vanilla a 2 Nodi (User -> Resource) — Dynamic Graph standard.
+"""2-node Vanilla TGN baseline (User -> Resource) — standard Dynamic Graph.
 
-Questa baseline isola l'effetto della DECOMPOSIZIONE A 5 NODI rispetto all'uso di un
-Temporal Graph Network (TGN) continuo standard su grafo a 2 nodi (User -> Resource).
+This baseline isolates the effect of the 5-NODE DECOMPOSITION compared to a standard
+streaming Temporal Graph Network (TGN) on the 2-node graph (User -> Resource).
 
-Caratteristiche:
-  * Stessa architettura temporale (memoria GRU, time encoding, temporal neighbor loader,
+Characteristics:
+  * Same temporal architecture (GRU memory, time encoding, temporal neighbor loader,
     MLP + structural cosine similarity head).
-  * Grafo a 2 nodi: modella ogni richiesta esclusivamente come arco diretto User -> Resource,
-    senza gli archi di binding intermedi (Source -> Config -> Device -> User).
-  * Stesso curriculum: InfoNCE ranking su K=5 risorse negative casuali + anchor BCE positivo
-    + BCE contestuale su rumore gaussiano.
-  * Replay streaming strictly cronologico con calibrazione al target_fpr (1%) sul benigno
-    di validazione.
+  * 2-node graph: every request is modelled exclusively as the direct User -> Resource
+    edge, without the intermediate binding edges (Source -> Config -> Device -> User).
+  * Same curriculum: InfoNCE ranking over K=5 random negative resources + positive
+    anchor BCE + contextual BCE on Gaussian noise.
+  * Strictly chronological streaming replay, calibrated at target_fpr (1%) on the
+    benign validation slice.
 """
 
 from __future__ import annotations
@@ -27,7 +27,7 @@ from torch.optim import AdamW
 from sklearn.metrics import average_precision_score, roc_auc_score
 
 from graphagate.config import TGNConfig
-from graphagate.data.stream_synthetic import generate_streaming_data
+from graphagate.data.stream_synthetic import generate_streaming_data, stream_kwargs_from_cfg
 from graphagate.eval_common import causal_precursor_factor
 from graphagate.model.registry import NodeRegistry
 from graphagate.model.tgn import ZTATemporalGraphNetwork, stable_hash
@@ -45,7 +45,7 @@ def _binary_metrics(scores, labels, threshold):
 
 
 def tgn_2node_baseline(cfg: Optional[TGNConfig] = None) -> dict:
-    """Addestra e valuta la baseline TGN a 2 nodi (User -> Resource)."""
+    """Train and evaluate the 2-node TGN baseline (User -> Resource)."""
     if cfg is None:
         cfg = TGNConfig()
 
@@ -54,30 +54,12 @@ def tgn_2node_baseline(cfg: Optional[TGNConfig] = None) -> dict:
     random.seed(cfg.seed)
 
     print("Generating synthetic streaming data (TGN params)...")
-    stream = generate_streaming_data(
-        num_users=cfg.num_users,
-        num_devices=cfg.num_devices,
-        num_sources=cfg.num_sources,
-        num_configs=cfg.num_configs,
-        num_resources=cfg.num_resources,
-        num_events=cfg.num_events,
-        num_wipe_slots=cfg.num_wipe_slots,
-        num_theft_slots=cfg.num_theft_slots,
-        benign_explore_prob=cfg.benign_explore_prob,
-        p_roam=cfg.p_roam,
-        p_shared_device=cfg.p_shared_device,
-        p_cookie_wipe=cfg.p_cookie_wipe,
-        p_cred_theft=cfg.p_cred_theft,
-        seed=cfg.seed,
-        use_resource_risk=cfg.use_resource_risk,
-        use_source_internal=cfg.use_source_internal,
-        guest_device_fallback=cfg.guest_device_fallback,
-    )
+    stream = generate_streaming_data(**stream_kwargs_from_cfg(cfg))
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
 
-    # Spazio nodi a 2 entità (User e Resource)
+    # 2-entity node space (User and Resource)
     # user_nodes: [0, user_num), resource_nodes: [res_lo, res_lo + res_num)
     user = stream.user
     dst = stream.dst
@@ -89,7 +71,7 @@ def tgn_2node_baseline(cfg: Optional[TGNConfig] = None) -> dict:
     keys = stream.keys
     total_nodes = stream.num_nodes
 
-    # Inizializza il registro e il modello TGN (capacità standard)
+    # Initialise the registry and the TGN model (standard capacity)
     capacity = total_nodes + cfg.capacity_headroom
     registry = NodeRegistry(capacity=capacity)
     registry.preregister(keys)
@@ -121,20 +103,20 @@ def tgn_2node_baseline(cfg: Optional[TGNConfig] = None) -> dict:
     model.precursor_half_life = cfg.precursor_half_life
     model.precursor_max_boost = cfg.precursor_max_boost
 
-    # Split cronologico 70% train / 10% val / 20% test
+    # Chronological split: 70% train / 10% val / 20% test
     n = len(user)
     n_train = int(n * cfg.train_frac)
     n_val = int(n * cfg.val_frac)
     train_end, val_end = n_train, n_train + n_val
 
-    # Range negativi sulle risorse
+    # Negative sampling range over the resources
     res_lo = stream.res_lo
     res_num = stream.res_num
     K = cfg.infonce_k
     batch_size = cfg.batch_size
     optimizer = AdamW(model.parameters(), lr=cfg.learning_rate)
 
-    print("--- INIZIO ADDESTRAMENTO 2-NODE VANILLA TGN (User -> Resource) ---")
+    print("--- TRAINING START: 2-NODE VANILLA TGN (User -> Resource) ---")
     for epoch in range(1, cfg.epochs + 1):
         model.train()
         model.memory.reset_state()
@@ -151,7 +133,7 @@ def tgn_2node_baseline(cfg: Optional[TGNConfig] = None) -> dict:
             end = min(start + batch_size, train_end)
             bu, bd, bt, bmsg, by = user[start:end], dst[start:end], t[start:end], msg[start:end], y[start:end]
 
-            # Solo traffico benigno per il training one-class
+            # Benign traffic only for the one-class training
             benign_mask = by == 0
             if not benign_mask.any():
                 continue
@@ -162,13 +144,13 @@ def tgn_2node_baseline(cfg: Optional[TGNConfig] = None) -> dict:
             pmsg = bmsg[benign_mask].to(device).float()
             P = int(pu.shape[0])
 
-            # Negativi strutturali casuali sulle risorse
+            # Random structural negatives over the resources
             neg_res = torch.randint(res_lo, res_lo + res_num, (P * K,), device=device)
             pu_rep = pu.repeat_interleave(K)
             pt_rep = pt.repeat_interleave(K)
             pmsg_rep = pmsg.repeat_interleave(K, dim=0)
 
-            # Campiona vicini temporali per i nodi coinvolti (solo user e dst)
+            # Sample temporal neighbours for the involved nodes (user and dst only)
             query_nodes = torch.cat([pu, pd, neg_res]).unique()
             n_id, edge_index, hist_t, hist_msg = model.neighbor_loader(query_nodes)
             z = model.embed(n_id, edge_index, hist_t, hist_msg)
@@ -176,7 +158,7 @@ def tgn_2node_baseline(cfg: Optional[TGNConfig] = None) -> dict:
             nf = model.node_feat[n_id]
             h_idx = model.node_hash[n_id]
 
-            # Feature causali di interazione
+            # Causal interaction-history features
             u_list, d_list, t_list = pu.tolist(), pd.tolist(), pt.tolist()
             hist_pos = model.compute_hist_feats(u_list, d_list, device)
             hist_neg = model.compute_hist_feats(pu_rep.tolist(), neg_res.tolist(), device)
@@ -190,11 +172,11 @@ def tgn_2node_baseline(cfg: Optional[TGNConfig] = None) -> dict:
             pos_logits = model.score(z, nf, h_idx, assoc[pu], assoc[pd], pmsg, d_pair_pos, d_src_pos, hist_pos)
             neg_logits = model.score(z, nf, h_idx, assoc[pu_rep], assoc[neg_res], pmsg_rep, d_pair_neg, d_src_neg, hist_neg).view(P, K)
 
-            # Negativi contestuali (rumore gaussiano sul messaggio)
+            # Contextual negatives (Gaussian noise on the message)
             neg_msg_ctx = pmsg + torch.randn_like(pmsg) * 0.5
             ctx_logits = model.score(z, nf, h_idx, assoc[pu], assoc[pd], neg_msg_ctx, d_pair_pos, d_src_pos, hist_pos)
 
-            # Loss: InfoNCE + BCE positiva + BCE contestuale
+            # Loss: InfoNCE + positive BCE + contextual BCE
             target = torch.zeros(P, dtype=torch.long, device=device)
             loss = (
                 F.cross_entropy(torch.cat([pos_logits.unsqueeze(1), neg_logits], dim=1), target)
@@ -206,7 +188,7 @@ def tgn_2node_baseline(cfg: Optional[TGNConfig] = None) -> dict:
             loss.backward()
             optimizer.step()
 
-            # Predict-then-update: aggiorna memoria solo per gli eventi benigni
+            # Predict-then-update: advance memory only for benign events
             model.memory.update_state(pu, pd, pt, pmsg)
             model.memory.detach()
             model.neighbor_loader.insert(pu, pd, pt, pmsg)
@@ -222,7 +204,7 @@ def tgn_2node_baseline(cfg: Optional[TGNConfig] = None) -> dict:
 
         print(f"Epoch {epoch:02d} | Loss: {epoch_loss / max(1, num_batches):.4f}")
 
-    # Replay sequenziale di validazione e calibrazione soglia
+    # Sequential validation replay and threshold calibration
     model.eval()
     val_scores = []
     val_labels = y[train_end:val_end].numpy()
@@ -250,7 +232,7 @@ def tgn_2node_baseline(cfg: Optional[TGNConfig] = None) -> dict:
             score = 1.0 - torch.sigmoid(logit).item()
             val_scores.append(score)
 
-            # Gate di commit sul benigno durante la calibrazione
+            # Commit gate on benign events during calibration
             if yi == 0:
                 model.memory.update_state(b_u, b_d, b_t, b_msg)
                 model.memory.detach()
@@ -264,7 +246,7 @@ def tgn_2node_baseline(cfg: Optional[TGNConfig] = None) -> dict:
     threshold = float(np.quantile(benign_val, 1.0 - cfg.target_fpr))
     print(f"\nCalibrated Threshold @ FPR {cfg.target_fpr}: {threshold:.4f}")
 
-    # Replay sequenziale sul test set
+    # Sequential replay on the test set
     test_scores = []
     test_labels = y[val_end:].numpy()
     test_types = types[val_end:].numpy()
@@ -291,14 +273,14 @@ def tgn_2node_baseline(cfg: Optional[TGNConfig] = None) -> dict:
             logit = model.score(z, nf, h_idx, assoc[b_u], assoc[b_d], b_msg, d_pair, d_src, hist)
             raw_score = 1.0 - torch.sigmoid(logit).item()
 
-            # Precursor boost sul nodo utente
+            # Precursor boost on the user node
             score = min(1.0, raw_score * precursor_boost(model, ui, ti))
             test_scores.append(score)
 
             if msgi[1] > 0.5 or score >= threshold:
                 record_alert(model, ui, ti)
 
-            # Anti-poisoning gate: commit solo se non anomalo
+            # Anti-poisoning gate: commit only if not anomalous
             if score < threshold:
                 model.memory.update_state(b_u, b_d, b_t, b_msg)
                 model.memory.detach()
@@ -315,10 +297,11 @@ def tgn_2node_baseline(cfg: Optional[TGNConfig] = None) -> dict:
     print(f"\nTest 2-Node TGN | AUC: {auc:.4f} | AP: {ap:.4f}")
     print(f"At threshold {threshold:.4f} | Precision: {precision:.4f} | Recall: {recall:.4f}")
 
-    # Breakdown per tipo
+    # Per-type breakdown
     per_type = {}
     benign_mask = test_types == 0
-    for type_id, name in ((1, "policy"), (2, "contextual"), (3, "lateral"), (4, "cred-theft"), (5, "exfil")):
+    for type_id, name in ((1, "policy"), (2, "contextual"), (3, "lateral"),
+                          (4, "cred-theft"), (5, "exfil"), (6, "benign-denied")):
         sel = benign_mask | (test_types == type_id)
         s_sel, l_sel = test_scores_np[sel], (test_types[sel] == type_id).astype(int)
         if l_sel.sum() == 0:

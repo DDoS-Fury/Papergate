@@ -2,14 +2,14 @@
 
 The hashed-identity trick is only inductive/reproducible if the SAME entity key maps
 to the SAME bucket across processes, machines and restarts. Python's builtin ``hash()``
-is salted per process (``PYTHONHASHSEED``), so the previous ``hash(str(key)) % buckets``
-broke this. ``stable_hash`` uses BLAKE2b and must be invariant to ``PYTHONHASHSEED``.
+is salted per process (``PYTHONHASHSEED``), so a builtin-``hash``-based mapping would
+break this. ``stable_hash`` uses BLAKE2b and must be invariant to ``PYTHONHASHSEED``.
 
 This script proves it by computing ``stable_hash`` (and, for contrast, the builtin
 ``hash``) for the same keys in two child processes launched with different
 ``PYTHONHASHSEED`` values, then asserting:
-  * ``stable_hash`` is identical across the two processes (the fix), and
-  * the builtin ``hash`` differs (the bug it replaces) — informational, not fatal.
+  * ``stable_hash`` is identical across the two processes, and
+  * the builtin ``hash`` differs — informational, not fatal.
 
 No pytest dependency (not in the image): run directly inside the Docker image::
 

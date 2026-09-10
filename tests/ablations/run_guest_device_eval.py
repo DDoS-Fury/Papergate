@@ -1,6 +1,6 @@
 """Experiment: collapse every non-TPM device onto a single shared ``dev:guest`` node.
 
-Mirror of the ``conf:guest`` design, gated by ``SyntheticConfig.guest_device_fallback``.
+Mirror of the ``conf:guest`` design, gated by ``TGNConfig.guest_device_fallback``.
 Instead of keying each TPM-less machine by its own persistent cookie (``ck:<id>``), all
 non-TPM devices (benign machines AND the credential-theft attacker, which is TPM-less
 too) map to ONE anonymous low-trust device node. The device layer then no longer
@@ -21,6 +21,7 @@ nondeterminism.
 import dataclasses
 
 import numpy as np
+from graphagate.report_metrics import mean_std
 
 from graphagate.config import TGNConfig
 from graphagate.train_tgn import train_tgn
@@ -68,7 +69,8 @@ def _grab(m):
 
 def _ms(vals):
     a = np.array(vals, dtype=float)
-    return f"{np.nanmean(a):.3f}±{np.nanstd(a):.3f}"
+    m, sd = mean_std(a)
+    return f"{m:.3f}±{sd:.3f}"
 
 
 COLS = ["lat_auc", "lat_ap", "lat_rec", "lat_n", "theft_auc", "theft_rec", "theft_n",

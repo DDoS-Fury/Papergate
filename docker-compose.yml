@@ -17,24 +17,24 @@ services:
       - ./public:/app/public
       - ./src:/app/src
 
-  # --- PROFILO TRAINING TGN ---
+  # --- TGN TRAINING PROFILE ---
   train-tgn:
     <<: *base
     profiles: ["training-tgn"]
     container_name: graphagate-train-tgn
     command: ["graphagate.train_tgn"]
 
-  # Verifica della correttezza streaming del TGN (richiede gli artifact in public/).
+  # Streaming-correctness verification of the TGN (requires the artifacts in public/).
   verify-tgn:
     <<: *base
     profiles: ["verify-tgn"]
     container_name: graphagate-verify-tgn
     command: ["graphagate.verify_tgn"]
 
-  # --- SERVIZIO DI INFERENZA (long-running, REST/JSON) ---
-  # Carica gli artifact in public/ ed espone l'API HTTP (graphagate.serve_api).
-  # Referenziabile come servizio nel compose della ZTA (vedi docs/orchestrator_integration.md).
-  # NB: un solo container/processo — il modello è uno stato mutabile in RAM.
+  # --- INFERENCE SERVICE (long-running, REST/JSON) ---
+  # Loads the artifacts in public/ and exposes the HTTP API (graphagate.serve_api).
+  # Referenceable as a service in the ZTA compose (see docs/orchestrator_integration.md).
+  # NB: a single container/process — the model is a mutable in-RAM state.
   serve-tgn:
     <<: *base
     profiles: ["serve-tgn"]
@@ -43,20 +43,20 @@ services:
     ports:
       - "8888:8088"
     healthcheck:
-      # L'immagine CUDA non ha curl: si usa la stdlib Python.
+      # The CUDA image has no curl: the Python stdlib is used instead.
       test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0) if urllib.request.urlopen('http://localhost:8088/health').status==200 else sys.exit(1)"]
       interval: 30s
       timeout: 5s
       retries: 3
       start_period: 40s
 
-  # --- BASELINE DI CONFRONTO (batch, one-shot) ---
-  # Detector di anomalie più semplici, eseguibili in container dedicati per un
-  # confronto riproducibile col TGN (vedi tests/baselines/README.md). Gli script
-  # vivono in tests/ (non copiata nell'immagine): la si monta come volume e si
-  # sovrascrive l'entrypoint `python -m` con `python <path>`.
+  # --- COMPARISON BASELINES (batch, one-shot) ---
+  # Simpler anomaly detectors, runnable in dedicated containers for a reproducible
+  # comparison against the TGN (see tests/baselines/README.md). The scripts live in
+  # tests/ (not copied into the image): it is mounted as a volume and the
+  # `python -m` entrypoint is overridden with `python <path>`.
 
-  # TGN Vanilla 2 nodi (User -> Resource): ablation a 2 nodi della scomposizione ZTA.
+  # Vanilla 2-node TGN (User -> Resource): 2-node ablation of the ZTA decomposition.
   baseline-tgn-2node:
     <<: *base
     profiles: ["baseline-tgn-2node"]
@@ -68,7 +68,7 @@ services:
     entrypoint: ["python"]
     command: ["/app/tests/baselines/tgn_2node/tgn_2node_baseline.py"]
 
-  # Isolation Forest (sklearn): non-relazionale, solo feature statiche per-evento.
+  # Isolation Forest (sklearn): non-relational, per-event static features only.
   baseline-iforest:
     <<: *base
     profiles: ["baseline-iforest"]
@@ -80,7 +80,7 @@ services:
     entrypoint: ["python"]
     command: ["/app/tests/baselines/isolation_forest/isolation_forest_baseline.py"]
 
-  # GNN non temporale (GraphSAGE): ablation del TGN senza memoria/vicinato temporale.
+  # Non-temporal GNN (GraphSAGE): TGN ablation without temporal memory/neighbourhood.
   baseline-gnn:
     <<: *base
     profiles: ["baseline-gnn"]
@@ -92,8 +92,8 @@ services:
     entrypoint: ["python"]
     command: ["/app/tests/baselines/simple_gnn/simple_gnn_baseline.py"]
 
-  # One-Class SVM (sklearn): non-relazionale, solo feature statiche per-evento
-  # (controparte kernel dell'Isolation Forest).
+  # One-Class SVM (sklearn): non-relational, per-event static features only
+  # (kernel counterpart of the Isolation Forest).
   baseline-ocsvm:
     <<: *base
     profiles: ["baseline-ocsvm"]
@@ -105,7 +105,7 @@ services:
     entrypoint: ["python"]
     command: ["/app/tests/baselines/ocsvm/ocsvm_baseline.py"]
 
-  # XGBoost (sklearn): approccio ML supervisionato.
+  # XGBoost (sklearn): supervised ML approach.
   baseline-xgboost:
     <<: *base
     profiles: ["baseline-xgboost"]
@@ -117,10 +117,11 @@ services:
     entrypoint: ["python"]
     command: ["/app/tests/baselines/xgboost/xgboost_baseline.py"]
 
-  # Validità esterna: valuta il detector di movimenti laterali sul dataset PUBBLICO
-  # LANL auth (etichette red-team), rimappato come stream ZTA. Scarica auth.txt.gz e
-  # redteam.txt da https://csr.lanl.gov/data/cyber1/ e mettili in ./data (NON versionati);
-  # riusa l'intera pipeline via train_tgn(dataset=...). Vedi tests/eval_lanl.py.
+  # External validity: evaluates the lateral-movement detector on the PUBLIC
+  # LANL auth dataset (red-team labels), remapped as a ZTA stream. Download
+  # auth.txt.gz and redteam.txt from https://csr.lanl.gov/data/cyber1/ and put them
+  # in ./data (NOT versioned); it reuses the whole pipeline via train_tgn(dataset=...).
+  # See tests/eval_lanl.py.
   eval-lanl:
     <<: *base
     profiles: ["eval-lanl"]
@@ -141,9 +142,9 @@ services:
               "--train-frac", "0.3",
               "--eval-batch-size", "1024"]
 
-  # External validity su telemetria REALE con tutti e 5 i nodi popolati (ssl.log porta
-  # ja3): PicoDomain. Prerequisito: ./data contiene Zeek_Logs.7z estratto in ./data/logs
-  # e "Red Log.xlsx". Dataset: https://github.com/iHeartGraph/PicoDomain
+  # External validity on REAL telemetry with all 5 nodes populated (ssl.log carries
+  # ja3): PicoDomain. Prerequisite: ./data contains Zeek_Logs.7z extracted into
+  # ./data/logs plus "Red Log.xlsx". Dataset: https://github.com/iHeartGraph/PicoDomain
   eval-picodomain:
     <<: *base
     profiles: ["eval-picodomain"]
@@ -160,9 +161,9 @@ services:
               "--epochs", "15",
               "--eval-batch-size", "1024"]
 
-  # Ablation study: full vs no-struct-head vs no-hashed-identity (save=False, non
-  # tocca gli artifact in public/). Il contributo della parte temporale è invece
-  # isolato dalla baseline Static GNN.
+  # Ablation study: full vs no-struct-head vs no-hashed-identity (save=False, does
+  # not touch the artifacts in public/). The contribution of the temporal part is
+  # instead isolated by the Static GNN baseline.
   ablations:
     <<: *base
     profiles: ["ablations"]
@@ -174,8 +175,8 @@ services:
     entrypoint: ["python"]
     command: ["/app/tests/ablations/run_ablations.py"]
 
-  # Validazione mirata del nodo config (v4): stream theft-rich (gli incidenti arrivano
-  # nel test split) + confronto v4 vs ablazione nodo-config (~v3). save=False.
+  # Focused validation of the config node (v4): theft-rich stream (the incidents land
+  # in the test split) + v4 vs config-node ablation comparison (~v3). save=False.
   config-eval:
     <<: *base
     profiles: ["config-eval"]
@@ -187,8 +188,8 @@ services:
     entrypoint: ["python"]
     command: ["/app/tests/ablations/run_config_eval.py"]
 
-  # Esperimento: device senza TPM collassati su un unico nodo dev:guest (mirror di
-  # conf:guest) vs keying per-cookie. Stream theft-rich + save=False (non tocca public/).
+  # Experiment: TPM-less devices collapsed onto a single dev:guest node (mirror of
+  # conf:guest) vs per-cookie keying. Theft-rich stream + save=False (does not touch public/).
   guest-device-eval:
     <<: *base
     profiles: ["guest-device-eval"]
@@ -200,9 +201,9 @@ services:
     entrypoint: ["python"]
     command: ["/app/tests/ablations/run_guest_device_eval.py"]
 
-  # Colma il gap del report: valuta il deployable (v4 + dev:guest) sullo stream STANDARD
-  # (protocollo Pannello B, 200k/15ep, decisione instradata) vs v4 per-cookie, a parità di
-  # dati. I numeri standard pubblicati erano solo per-cookie. Stream standard + save=False.
+  # Fills the report gap: evaluates the deployable (v4 + dev:guest) on the STANDARD
+  # stream (Panel B protocol, 200k/15ep, routed decision) vs v4 per-cookie, at equal
+  # data. The published standard numbers were per-cookie only. Standard stream + save=False.
   guest-standard-eval:
     <<: *base
     profiles: ["guest-standard-eval"]
@@ -214,8 +215,8 @@ services:
     entrypoint: ["python"]
     command: ["/app/tests/ablations/run_guest_standard_eval.py"]
 
-  # Sweep architetturale (v4): layer MLP extra, memory_dim, teste di attenzione.
-  # save=False (non tocca public/); adozione solo se migliora oltre il rumore multi-seed.
+  # Architectural sweep (v4): extra MLP layers, memory_dim, attention heads.
+  # save=False (does not touch public/); adoption only if it improves beyond multi-seed noise.
   arch-sweep:
     <<: *base
     profiles: ["arch-sweep"]
@@ -227,9 +228,9 @@ services:
     entrypoint: ["python"]
     command: ["/app/tests/ablations/run_arch_sweep.py"]
 
-  # Rigenerazione riproducibile dei Pannelli A/B del report (tab:baselines, tab:v3v4)
-  # multi-seed (save=False, non tocca public/). Scrive i JSON delle metriche in
-  # tasks/runs/ e i frammenti LaTeX in docs/latex/generated/.
+  # Reproducible regeneration of the report's Panels A/B (tab:baselines, tab:v3v4),
+  # multi-seed (save=False, does not touch public/). Writes the metric JSONs to
+  # tasks/runs/ and the LaTeX fragments to docs/paper/generated/.
   #   docker compose --profile regen-report up
   regen-report:
     <<: *base
@@ -244,9 +245,9 @@ services:
     entrypoint: ["python"]
     command: ["/app/tests/regen_report_tables.py"]
 
-  # Ablation study per valutare l'efficacia del modello senza il device edge.
-  # Utilizza il test client per inviare stream al serve-tgn omettendo il parametro key_device.
-  # Dipende dal serve-tgn che deve essere già in esecuzione (o avviato insieme con i due profili).
+  # Ablation study to assess the model's effectiveness without the device edge.
+  # Uses the test client to stream requests to serve-tgn omitting the key_device parameter.
+  # Depends on serve-tgn, which must already be running (or started together via the two profiles).
   test-ablation:
     <<: *base
     profiles: ["ablation-no-device"]

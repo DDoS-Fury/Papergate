@@ -1,19 +1,19 @@
-\section{Conclusion and Future Work}
+\section{Conclusion and future work}
 \label{sec:conclusion}
 
 Detecting lateral movement via anomalous-edge detection over dynamic authentication graphs
 provides an important foundation for network defense. However, conventional formulations
-operating strictly over host-to-host edges discard critical client execution context available
-at Zero-Trust policy decision points. By decomposing requests into a five-node relational chain
-and introducing an explicit client-configuration node, our approach enables detection of
+operating strictly over host-to-host edges discard the client execution context available
+at Zero Trust policy decision points. By decomposing requests into a 5-node relational chain
+and introducing an explicit client-configuration node, the approach enables detection of
 credential reuse from unfamiliar tools as a structural anomaly.
 
-Furthermore, our findings emphasize two broader architectural requirements for continuous
+Furthermore, the findings emphasize 2 broader architectural requirements for continuous
 streaming detectors. First, streaming memory updates must be decoupled from the detector's
 own predictions through an external commit gate to prevent runaway baseline drift and
 adversarial poisoning. Second, synthetic security benchmarks require systematic leakage audits
-to prevent models from exploiting unconstrained synthetic artifacts. On our verified benchmark,
-the five-node TGN clears the single-feature baseline floor on lateral movement by a substantial
+to prevent models from exploiting unconstrained synthetic artifacts. On the verified benchmark,
+the 5-node TGN clears the single-feature baseline floor on lateral movement by a substantial
 margin under one-class training.
 
 \ifpreliminary

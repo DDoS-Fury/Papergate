@@ -17,7 +17,10 @@ Usage (files downloaded from https://csr.lanl.gov/data/cyber1/, not committed):
         --auth-path /data/auth.txt.gz --redteam-path /data/redteam.txt \
         --max-events 200000 --epochs 8
 
-or via the docker-compose ``eval-lanl`` profile (mounts ./data → /data).
+or via the docker-compose ``eval-lanl`` profile (mounts ./data → /data). The profile
+runs the full 10M-event log with a 30% train split, 2 epochs and ``eval-batch-size=1024``
+— a different (larger, cheaper-per-epoch) configuration than the quick example above, on
+purpose.
 """
 
 from __future__ import annotations

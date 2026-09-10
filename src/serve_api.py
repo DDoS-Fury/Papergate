@@ -11,8 +11,10 @@ Run it (mirrors the ``python -m`` entrypoint convention of the Docker image)::
 
 Endpoints
 ---------
-- ``GET  /health``  — readiness + loaded parameters.
-- ``POST /infer``   — score an event **without** mutating state (step 1 of the
+- ``GET  /health``  — readiness + loaded parameters. Returns 503 while the
+  checkpoint is still loading, so container healthchecks gate on real readiness.
+- ``POST /infer``   — score an event **without advancing memory** (admits unseen
+  entity keys into the registry, which is state by design; step 1 of the
   anti-poisoning flow: orchestrator scores, asks OPA, then commits only on ALLOW).
 - ``POST /update``  — commit an event the caller already judged benign (post-ALLOW).
 - ``POST /score``   — score + internal gate + conditional update (OPA-less / testing).
@@ -53,6 +55,7 @@ from typing import Optional, Union
 
 import torch
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, BackgroundTasks
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 import asyncio
 
@@ -258,8 +261,8 @@ async def websocket_endpoint(websocket: WebSocket):
             STATE.active_websockets.remove(websocket)
 
 @app.get("/health")
-def health() -> dict:
-    return {
+def health():
+    body = {
         "status": "ok" if STATE.loaded else "loading",
         "model_loaded": STATE.loaded,
         "device": str(STATE.device),
@@ -271,15 +274,21 @@ def health() -> dict:
         "node_feat_dim": int(STATE.hp.get("node_feat_dim", 0)),
         "schema_version": int(STATE.hp.get("schema_version", 1)),
     }
+    # 503 until the checkpoint is loaded: a 200-while-loading let the compose
+    # healthcheck (and any service_healthy dependency) pass before the model was
+    # actually ready.
+    if not STATE.loaded:
+        return JSONResponse(status_code=503, content=body)
+    return body
 
 
 @app.post("/infer", response_model=ScoreOut)
 def infer(ev: EventIn, background_tasks: BackgroundTasks) -> ScoreOut:
-    """Score an event read-only (admits the entities, never advances memory)."""
+    """Score an event without advancing memory (admits the entities)."""
     _validate_dims(ev)
     t0 = time.perf_counter()
     with STATE.lock:
-        score, is_anomaly = score_event(
+        score, is_anomaly, eff_threshold = score_event(
             STATE.model, STATE.registry, STATE.threshold,
             ev.key_user, ev.key_device, ev.key_dst, ev.timestamp, ev.features, STATE.device,
             key_source=ev.key_source, key_config=ev.key_config,
@@ -303,7 +312,7 @@ def infer(ev: EventIn, background_tasks: BackgroundTasks) -> ScoreOut:
         "cpu_percent": sys_stats["cpu_percent"],
         "ram_gb": sys_stats["ram_gb"]
     })
-    return ScoreOut(anomaly_score=score, is_anomaly=is_anomaly, threshold=STATE.threshold)
+    return ScoreOut(anomaly_score=score, is_anomaly=is_anomaly, threshold=eff_threshold)
 
 
 @app.post("/update", response_model=OkOut)
@@ -328,7 +337,7 @@ def score(ev: EventIn, background_tasks: BackgroundTasks) -> ScoreOut:
     _validate_dims(ev)
     t0 = time.perf_counter()
     with STATE.lock:
-        s, is_anomaly = score_event(
+        s, is_anomaly, eff_threshold = score_event(
             STATE.model, STATE.registry, STATE.threshold,
             ev.key_user, ev.key_device, ev.key_dst, ev.timestamp, ev.features, STATE.device,
             key_source=ev.key_source, key_config=ev.key_config,
@@ -352,7 +361,7 @@ def score(ev: EventIn, background_tasks: BackgroundTasks) -> ScoreOut:
         "cpu_percent": sys_stats["cpu_percent"],
         "ram_gb": sys_stats["ram_gb"]
     })
-    return ScoreOut(anomaly_score=s, is_anomaly=is_anomaly, threshold=STATE.threshold)
+    return ScoreOut(anomaly_score=s, is_anomaly=is_anomaly, threshold=eff_threshold)
 
 
 @app.post("/persist", response_model=PersistOut)

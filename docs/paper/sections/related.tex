@@ -1,34 +1,33 @@
-\section{Related Work}
+\section{Related work}
 \label{sec:related}
 
 \subsection{Lateral movement as anomalous-edge detection}
 
 Casting lateral movement as anomalous-edge detection over a temporal graph of
-authentication events is an established approach. \textbf{Euler}~\cite{euler} composes
+authentication events is an established approach. \textit{Euler}~\cite{euler} composes
 a graph neural network with a recurrent encoder over discrete snapshots of a
 host-to-host authentication graph and detects red-team activity on LANL~\cite{lanl}.
-\textbf{Argus}~\cite{argus} reports comparable performance on the same corpus and is
-treated as a standard baseline in subsequent literature. \textbf{LMDetect}~\cite{lmdetect}
+\textit{Argus}~\cite{argus} reports comparable performance on the same corpus and is
+treated as a standard baseline in subsequent literature. \textit{LMDetect}~\cite{lmdetect}
 classifies time-aware subgraphs extracted around each authentication event over a
-heterogeneous multigraph. A recent \textbf{graph foundation model}~\cite{gfm} pretrains
+heterogeneous multigraph. A recent \textit{graph foundation model}~\cite{gfm} pretrains
 on host-to-host structure and reports results on both LANL and DARPA OpTC with fixed
-split conventions (first 41 hours for training on LANL, six days for training and
-three for evaluation on OpTC) that have become a standard benchmark protocol.
+split conventions (first 41 hours for training on LANL, 6 days for training and
+3 for evaluation on OpTC) that have become a standard benchmark protocol.
 
 These systems take an authentication log as their substrate: nodes are
 hosts (or hosts and users), and edges represent logon events. That formulation fixes what is
 detectable. It also explains why they are directly comparable with each other:
 LANL carries host-level authentications without client application fingerprints.
-We evaluate LANL in Section~\ref{sec:external} as an architectural ablation
+LANL is evaluated in Section~\ref{sec:external} as an architectural ablation
 (the configuration node removed) rather than as a direct peer comparison.
 
 \subsection{Temporal graph learning}
 
-We build on the Temporal Graph Network of Rossi et al.~\cite{tgn}, which
-maintains a recurrent per-node memory updated by event messages and computes
+The architecture builds on the Temporal Graph Network (TGN) of Rossi et al.~\cite{tgn},
+which maintains a recurrent per-node memory updated by event messages and computes
 embeddings by attending over recent temporal neighbours. The relevant distinction
-against the snapshot systems above is temporal granularity. Euler and snapshot-based
-methods discretise the stream into fixed windows and encode snapshot sequences;
+against the snapshot systems above is temporal granularity. \textit{Euler} and snapshot-based methods discretize the stream into fixed windows and encode snapshot sequences;
 a TGN consumes events continuously and updates only the participating entities.
 For a PDP that evaluates per request, the continuous formulation directly satisfies
 real-time operational constraints, as decisions cannot await window closure. Related continuous
@@ -43,16 +42,16 @@ enforcement point and mandates continuous evaluation. In practice the PDP is a p
 engine such as Open Policy Agent~\cite{opa} evaluating declarative rules. A learned
 detector in this setting acts as an advisor to that engine, not a replacement.
 Consequently, the detector must not unilaterally govern what enters its own baseline,
-a requirement we enforce via the external commit gate (Section~\ref{sec:problem}).
+a requirement enforced via the external commit gate (Section~\ref{sec:problem}).
 Surveys of the ZTA literature observe that trust-scoring and PDP proposals
 are evaluated predominantly on synthetic simulations, a gap discussed in Section~\ref{sec:external}.
 
-Two recent systems combine Zero Trust with graph neural networks directly.
-\textbf{TrustGraph}~\cite{trustgraph} builds a heterogeneous graph from windowed
+2 recent systems combine Zero Trust with graph neural networks directly.
+\textit{TrustGraph}~\cite{trustgraph} builds a heterogeneous graph from windowed
 microservice telemetry (logs, metrics, traces, authentication records), scores it
 by reconstruction error, and feeds the result through a temporal-decay trust equation
-into closed-loop policy enforcement across microservice benchmarks. \textbf{ZT-GSAD}~\cite{ztgsad}
-applies GraphSAGE under zero-trust principles to a graph of financial transactions
+into closed-loop policy enforcement across microservice benchmarks. \textit{ZT-GSAD}~\cite{ztgsad}
+applies GraphSAGE under Zero Trust principles to a graph of financial transactions
 (accounts, projects, suppliers) for fraud detection. Neither operates on an access-request
 stream, includes a node for the client TLS configuration, or evaluates lateral movement
 and credential reuse. Furthermore, neither implements a commit gate on detector memory updates.
@@ -63,16 +62,16 @@ rather than the underlying substrate, threat model, or streaming protocol.
 
 JA3~\cite{ja3} hashes the ordered parameters of a TLS \texttt{ClientHello} into a
 fingerprint of the originating client library and its configuration. While widely deployed for
-malware-family attribution, we employ JA3 as a \emph{node identity} whose habitual
+malware-family attribution, JA3 is employed as a \emph{node identity} whose habitual
 association with a principal is learned. Consequently, a familiar credential arriving
 under an unfamiliar fingerprint represents a structural anomaly rather than a signature match.
 This inductive property accommodates previously unseen client tools, provided an adversary
 does not replicate the legitimate client TLS parameters.
 
-\subsection{System Positioning}
+\subsection{System positioning}
 
-Our contributions focus on the substrate, the gate, and the deployment protocol:
-(i) a five-node ZTA chain including a configuration node, making credential reuse
+The contributions focus on the substrate, the gate, and the deployment protocol:
+(i) a 5-node ZTA chain including a configuration node, making credential reuse
 from an unfamiliar client explicitly detectable; (ii) an anti-poisoning commit gate driven
 by external policy validation, preventing memory corruption; and (iii) an inductive streaming
 architecture with hashed node identity and validated inference parity.

@@ -1,8 +1,9 @@
 """Contract tests for the PicoDomain → StreamData mapping.
 
-The training pipeline cannot run on a MacBook (PyTorch's ``scatter_reduce_`` rejects
-int64 on MPS/CPU, so even the synthetic path fails locally — see ``docs/docker.md``),
-which means a broken adapter would only surface on the GPU box. These tests check the
+The full training pipeline needs the Docker GPU image (PyTorch's ``scatter_reduce_``
+rejects int64 on MPS, so even the synthetic path fails locally — see
+``docker/Dockerfile`` and the ``eval-picodomain`` compose profile), which means a broken
+adapter would only surface on the GPU box. These tests check the
 part that can be checked anywhere: that the tensors satisfy the invariants
 ``train_tgn`` relies on. In particular the per-group index ranges, because the
 binding-edge negative samplers draw from ``[*_lo, *_lo + *_num)`` and an off-by-one

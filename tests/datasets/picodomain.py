@@ -17,7 +17,7 @@ It is the only public corpus we found in which **all five nodes of the v4 chain 
 by a real field** — including the ``config`` node: ``ssl.log`` carries the ``ja3`` column
 (verified: 3433/3433 records, 12 distinct fingerprints). Public authentication-graph
 datasets (LANL, OpTC) have no client fingerprint at all, so on them the config node
-degenerates and the credential-theft class is unevaluable. See ``docs/datasets.md``.
+degenerates and the credential-theft class is unevaluable. See ``docs/paper/PROVENANCE.md`` (Block 2).
 
 Schema mapping → :class:`graphagate.train_tgn.StreamData`
 --------------------------------------------------------
@@ -49,8 +49,8 @@ Edge message (``msg_dim=10``, same layout as the synthetic generator)::
 The four alarm columns are held **clean**: PicoDomain ships no IDS alert stream, and the
 red-team activity here is signal-clean by construction, so a rule baseline must stay blind
 to it and the temporal/relational pattern remains the sole discriminator — the honest test.
-``bytes_resp`` is held at 0 for the same reason ``http_status`` was removed from the
-synthetic message: a response size is not available at decision
+``bytes_resp`` is held at 0 for the same reason no response field (e.g. the HTTP
+status) enters the synthetic message: a response size is not available at decision
 time, and using it violates causality.
 
 Static node features are neutral (PicoDomain has no roles, clearances or asset

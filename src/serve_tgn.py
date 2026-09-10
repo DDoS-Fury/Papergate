@@ -75,6 +75,13 @@ def build_model(hp: dict, device: torch.device) -> ZTATemporalGraphNetwork:
     # Fallbacks track TGNConfig, not the historical 100000.0 / 3.0 that saturated scores.
     model.precursor_half_life = float(hp.get("precursor_half_life", TGNConfig.precursor_half_life))
     model.precursor_max_boost = float(hp.get("precursor_max_boost", TGNConfig.precursor_max_boost))
+    # Plain-attribute toggles are not in the state_dict: restore them from hp so the
+    # serving path behaves exactly like the training run that produced the checkpoint
+    # (before this, use_precursor silently fell back to False after a checkpoint
+    # round-trip and the kill-chain prior was dead in deployment). The default is True:
+    # the default training entrypoint trains with the prior on, so pre-fix artifacts
+    # keep the behaviour their numbers were produced under.
+    model.use_precursor = bool(hp.get("use_precursor", True))
     # v3 static-feature toggles: must match the values the checkpoint was trained with,
     # else the source node would carry a feature the model never learned from.
     model.use_source_internal = bool(hp.get("use_source_internal", False))
@@ -240,16 +247,16 @@ def apply_feedback(model, user_idx: int, device_idx: int | None, timestamp: int,
 def signal_dirty(features) -> bool:
     """Whether an event's edge signal already fires (the observable, class-free split).
 
-    ``features`` is the message vector ``[ja3, s1, s2, s3, method, role, clearance]``:
-    the signal is "dirty" when TLS trust is broken (``ja3==0``) or any Snort/sensor probe
-    fires — the same condition as the rule baseline. (``features[4]`` is the HTTP method,
-    NOT a sensor: including it — as an earlier revision did — silently routed every
-    non-GET request to the conservative threshold.) The true anomaly class is unknown at
-    serving time, but this *is* observable, so the decision threshold is routed on it:
-    dirty events keep the conservative FPR threshold (the cheap rule already catches
-    them), while signal-clean events — where lateral movement is indistinguishable from
-    benign except by temporal pattern — get the recall-oriented cost-sensitive
-    threshold. See ``score_event``.
+    ``features`` is the 10-dim message vector ``[ja3, s1, s2, s3, method, role,
+    clearance, bytes_in, bytes_out, log1p(user Δt)/10]``: the signal is "dirty" when TLS
+    trust is broken (``ja3==0``) or any Snort/sensor probe fires — the same condition as
+    the rule baseline. (``features[4]`` is the HTTP method, NOT a sensor: including it —
+    as an earlier revision did — silently routed every non-GET request to the
+    conservative threshold.) The true anomaly class is unknown at serving time, but this
+    *is* observable, so the decision threshold is routed on it: dirty events keep the
+    conservative FPR threshold (the cheap rule already catches them), while signal-clean
+    events — where lateral movement is indistinguishable from benign except by temporal
+    pattern — get the recall-oriented cost-sensitive threshold. See ``score_event``.
     """
     ja3, s1, s2, s3 = (float(features[i]) for i in range(4))
     return ja3 <= 0.5 or s1 > 0.5 or s2 > 0.5 or s3 > 0.5
@@ -371,7 +378,10 @@ def score_event(
     is omitted, that slot keeps whatever features it already has (e.g. those learned
     for preregistered entities at train time).
 
-    Returns ``(anomaly_score, is_anomaly)``.
+    Returns ``(anomaly_score, is_anomaly, effective_threshold)`` — the third element is
+    the threshold actually used for the decision (``threshold_dirty`` for signal-dirty
+    events, ``threshold`` otherwise), so callers can report a consistent
+    (score, verdict, threshold) triple.
     """
     model.eval()
     if key_config is None:
@@ -440,7 +450,7 @@ def score_event(
         update_memory(model, user_idx, dst_idx, timestamp, features, device,
                       aux_pair=(device_idx, dst_idx) if device_idx is not None else None)
 
-    return score, is_anomaly
+    return score, is_anomaly, eff_threshold
 
 
 def commit_event(

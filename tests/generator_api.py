@@ -4,33 +4,13 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
 from graphagate.config import TGNConfig
-from graphagate.data.stream_synthetic import ZTAStreamSimulator
+from graphagate.data.stream_synthetic import ZTAStreamSimulator, stream_kwargs_from_cfg
 
 app = FastAPI(title="ZTA Synthetic Generator API")
 
-# Global simulator instance
+# Global simulator instance (same entity space as the trained checkpoint).
 cfg = TGNConfig()
-simulator = ZTAStreamSimulator(
-    num_users=cfg.num_users,
-    num_devices=cfg.num_devices,
-    num_sources=cfg.num_sources,
-    # Same reason as tests/generator.py: these two must track the trained config, or the
-    # generated stream lives in a different entity space than the checkpoint.
-    num_configs=cfg.num_configs,
-    guest_device_fallback=cfg.guest_device_fallback,
-    num_resources=cfg.num_resources,
-    num_wipe_slots=cfg.num_wipe_slots,
-    num_theft_slots=cfg.num_theft_slots,
-    benign_explore_prob=cfg.benign_explore_prob,
-    p_roam=cfg.p_roam,
-    p_shared_device=cfg.p_shared_device,
-    p_cookie_wipe=cfg.p_cookie_wipe,
-    p_cred_theft=cfg.p_cred_theft,
-    admission_horizon=None,
-    seed=cfg.seed,
-    use_resource_risk=cfg.use_resource_risk,
-    use_source_internal=cfg.use_source_internal,
-)
+simulator = ZTAStreamSimulator(**stream_kwargs_from_cfg(cfg), admission_horizon=None)
 
 class AddResourceRequest(BaseModel):
     uri: str

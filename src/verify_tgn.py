@@ -12,7 +12,7 @@ Checks, each independent of the trained metric value:
   3. Dynamic node — a never-before-seen entity key is admitted without error and
      grows the registry by exactly one slot.
   4. Source fallback — scoring without ``key_source`` (no client IP available)
-     works and skips the source→device edge.
+     works and skips the source→config edge.
 """
 
 from __future__ import annotations
@@ -72,13 +72,13 @@ def main() -> int:
     # 1. Reload determinism.
     m1, r1, thr, feat = load()
     m2, r2, _, _ = load()
-    s1, _ = score(m1, r1, thr, feat)
-    s2, _ = score(m2, r2, thr, feat)
+    s1, _, _ = score(m1, r1, thr, feat)
+    s2, _, _ = score(m2, r2, thr, feat)
     results.append(_check("reload determinism", abs(s1 - s2) < 1e-6, f"s1={s1:.6f} s2={s2:.6f}"))
 
     # 2a. Benign event (threshold forced high -> not anomaly -> memory advances).
     m, r, _, feat = load()
-    _, is_anom = score(m, r, 2.0, feat, update=True)
+    _, is_anom, _ = score(m, r, 2.0, feat, update=True)
     idx = r.get(KEY_USER)
     lu = int(m.memory.last_update[idx])
     results.append(_check("benign event updates memory", (not is_anom) and lu == TS,
@@ -88,7 +88,7 @@ def main() -> int:
     m, r, _, feat = load()
     idx = r.get(KEY_USER)
     lu0 = int(m.memory.last_update[idx])
-    _, is_anom = score(m, r, -1.0, feat, update=True)
+    _, is_anom, _ = score(m, r, -1.0, feat, update=True)
     lu1 = int(m.memory.last_update[idx])
     results.append(_check("anomaly does NOT poison memory", is_anom and lu1 == lu0,
                           f"is_anom={is_anom} before={lu0} after={lu1}"))
@@ -98,7 +98,7 @@ def main() -> int:
     new_key = "ck:never-seen-before"
     seen_before = r.get(new_key)
     n_before = len(r)
-    s, _ = score_event(m, r, thr, KEY_USER, new_key, KEY_DST, TS, feat, device,
+    s, _, _ = score_event(m, r, thr, KEY_USER, new_key, KEY_DST, TS, feat, device,
                        update=False)
     new_idx = r.get(new_key)
     ok = (
@@ -111,10 +111,10 @@ def main() -> int:
     results.append(_check("dynamic node admitted", ok,
                           f"new_idx={new_idx} score={s:.4f} registry {n_before}->{len(r)}"))
 
-    # 4. Source fallback: no client IP -> the source→device edge is skipped.
+    # 4. Source fallback: no client IP -> the source→config edge is skipped.
     m, r, thr, feat = load()
     n_before = len(r)
-    s, _ = score(m, r, thr, feat, key_source=None)
+    s, _, _ = score(m, r, thr, feat, key_source=None)
     no_src = r.get(KEY_SOURCE) is None
     results.append(_check("key_source=None fallback", math.isfinite(s) and no_src,
                           f"score={s:.4f} source_admitted={not no_src} "
