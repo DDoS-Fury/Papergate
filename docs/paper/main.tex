@@ -13,6 +13,30 @@
 \usepackage[hidelinks]{hyperref}
 \usepackage{url}
 
+% --- Caption format: "Fig. N: text" / "Table N: text", left-justified ----------------
+% IEEEtran default renders table captions as two centered lines (an all-caps label
+% line, then a small-caps title line), which reads as a detached block. The
+% redefinition below produces a single left-justified paragraph for tables and
+% figures alike, keeping the IEEE footnotesize caption font and the float spacing
+% hooks.
+\renewcommand{\tablename}{Table}
+\makeatletter
+\long\def\@makecaption#1#2{%
+\ifx\@captype\@IEEEtablestring
+\footnotesize\bgroup\par\@IEEEtabletopskipstrut\vspace{0.2cm}\noindent{\normalfont\footnotesize #1:}\nobreakspace #2\par\addvspace{0.5\baselineskip}\egroup%
+\@IEEEtablecaptionsepspace
+\else
+\@IEEEfigurecaptionsepspace
+\setbox\@tempboxa\hbox{\normalfont\footnotesize {#1:}\nobreakspace #2}%
+\ifdim\wd\@tempboxa>\hsize
+\setbox\@tempboxa\hbox{\normalfont\footnotesize {#1:}}%
+\parbox[t]{\hsize}{\normalfont\footnotesize\noindent\unhbox\@tempboxa\nobreakspace #2}%
+\else
+\hbox to\hsize{\normalfont\footnotesize\box\@tempboxa\hfil}%
+\fi
+\fi}
+\makeatother
+
 % --- Preliminary-draft switch --------------------------------------------------------
 \newif\ifpreliminary
 \preliminaryfalse
@@ -31,8 +55,8 @@
 
 \begin{document}
 
-\title{Beyond the Authentication Graph: A Five-Node Temporal Graph Network
-for Lateral Movement and Credential Reuse in Zero-Trust Access Streams}
+\title{Beyond the authentication graph: a 5-node temporal graph network
+for lateral movement and credential reuse in Zero Trust access streams}
 
 \author{%
   \IEEEauthorblockN{Author names withheld for review}%
@@ -58,23 +82,24 @@ for Lateral Movement and Credential Reuse in Zero-Trust Access Streams}
 
 \begin{abstract}
 Detecting lateral movement as anomalous-edge detection over a temporal graph of
-authentication events is an established line of work. We argue that the substrate,
-not the task, is where the remaining headroom lies. A Zero-Trust policy decision
-point observes strictly more than a host-to-host authentication log: for every
-request it sees the client network origin, the client's TLS configuration
-fingerprint, the device posture identity, the authenticated principal and the
-requested asset. We model this as a five-node causal chain per request and evaluate
-a Temporal Graph Network over it under a protocol that keeps the deployment honest:
-one-class training on benign traffic only, event-by-event chronological scoring, and
-a memory-commit gate driven by an \emph{external} policy engine rather than by the
-model's own verdict. Two properties follow from the extra nodes. Credential reuse
+authentication events is an established line of work. This paper argues that the
+substrate, not the task, is where the remaining headroom lies. A Zero Trust policy
+decision point observes strictly more than a host-to-host authentication log: for
+every request it sees the client network origin, the client's TLS configuration
+fingerprint, the device posture identity, the authenticated principal, and the
+requested asset. The substrate is modelled as a 5-node causal chain per request, and
+a Temporal Graph Network is evaluated over it under a protocol that keeps the
+deployment honest: one-class training on benign traffic only, event-by-event
+chronological scoring, and a memory-commit gate driven by an \emph{external} policy
+engine rather than by the model's own verdict. 2 properties follow from the extra
+nodes. Credential reuse
 from an unfamiliar client tool becomes expressible as an anomalous
 configuration-to-principal binding, a class not representable on a host-to-host
 graph. Furthermore, the anti-poisoning commit gate provides verifiable resilience against
 adversarial baseline drift, as entity memory advances strictly on events admitted by
-external policy. We further report an automated label-leakage audit for the synthetic
-generator, along with an empirical case study on PicoDomain, where all five nodes are
-grounded in real enterprise telemetry, providing JA3 fingerprints alongside Kerberos principals.
+external policy. An automated label-leakage audit for the synthetic generator is reported alongside
+an empirical case study on PicoDomain, where all 5 nodes are grounded in real
+enterprise telemetry, providing JA3 fingerprints alongside Kerberos principals.
 \end{abstract}
 
 \begin{IEEEkeywords}

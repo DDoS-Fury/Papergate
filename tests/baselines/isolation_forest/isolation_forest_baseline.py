@@ -40,7 +40,7 @@ from sklearn.metrics import average_precision_score, roc_auc_score
 from sklearn.model_selection import ParameterSampler
 
 from graphagate.config import TGNConfig
-from graphagate.data.stream_synthetic import generate_streaming_data
+from graphagate.data.stream_synthetic import generate_streaming_data, stream_kwargs_from_cfg
 from graphagate.eval_common import causal_hist_features, causal_precursor_factor
 
 
@@ -62,22 +62,22 @@ def _binary_metrics(scores, labels, threshold):
 def _build_features(msg, src, dst, node_features, y):
     """Per-event feature matrix for the Isolation Forest.
 
-    The 6-dim edge feature ``msg[i]`` concatenated with the 16-dim static attributes of
-    both endpoints (source IP, destination resource) — 38 dims — PLUS the 3-dim causal
+    The 10-dim edge feature ``msg[i]`` concatenated with the 16-dim static attributes of
+    both endpoints (device, destination resource) — 42 dims — PLUS the 3-dim causal
     interaction-history features (per-pair / per-src benign access counts; see
-    ``graphagate.eval_common``), giving a 41-dim vector. The history columns are the same
-    tabular signal the TGN receives, so this non-relational baseline is compared fairly:
-    its remaining gap to the TGN measures the value of the temporal-graph machinery, not
-    of the counters.
+    ``graphagate.eval_common``), giving a 45-dim vector. The history columns are the same
+    counter statistics the TGN maintains online (flat per-event vector, device actor), so
+    this non-relational baseline is compared fairly: its remaining gap to the TGN measures
+    the value of the temporal-graph machinery, not of the counters.
 
     Tensors are torch tensors → converted to numpy here (sklearn input).
     """
-    msg_np = msg.numpy()                       # [N, 6]
-    nf_np = node_features.numpy()              # [total_nodes, 16]
-    src_feat = nf_np[src.numpy()]              # [N, 16]  source (IP) attributes
+    msg_np = msg.numpy()                       # [N, msg_dim]
+    nf_np = node_features.numpy()              # [num_nodes, 16]
+    src_feat = nf_np[src.numpy()]              # [N, 16]  device attributes
     dst_feat = nf_np[dst.numpy()]              # [N, 16]  destination (resource) attributes
     hist = causal_hist_features(src.numpy(), dst.numpy(), y.numpy())  # [N, 3] causal, benign-gated
-    return np.concatenate([msg_np, src_feat, dst_feat, hist], axis=1)  # [N, 41]
+    return np.concatenate([msg_np, src_feat, dst_feat, hist], axis=1)
 
 
 def isolation_forest_baseline(cfg: TGNConfig = TGNConfig()):
@@ -88,21 +88,7 @@ def isolation_forest_baseline(cfg: TGNConfig = TGNConfig()):
     random.seed(cfg.seed)
 
     print("Generating synthetic streaming data (same params as TGN)...")
-    stream = generate_streaming_data(
-        num_users=cfg.num_users,
-        num_devices=cfg.num_devices,
-        num_sources=cfg.num_sources,
-        num_resources=cfg.num_resources,
-        num_events=cfg.num_events,
-        num_wipe_slots=cfg.num_wipe_slots,
-        num_theft_slots=cfg.num_theft_slots,
-        benign_explore_prob=cfg.benign_explore_prob,
-        p_roam=cfg.p_roam,
-        p_shared_device=cfg.p_shared_device,
-        p_cookie_wipe=cfg.p_cookie_wipe,
-        p_cred_theft=cfg.p_cred_theft,
-        seed=cfg.seed,
-    )
+    stream = generate_streaming_data(**stream_kwargs_from_cfg(cfg))
     # Tabular actor = the DEVICE node (hardware id), the v2 analogue of the old
     # IP-keyed src; the access target stays the resource.
     src, dst, t, msg, y, types, node_features = (
@@ -133,9 +119,9 @@ def isolation_forest_baseline(cfg: TGNConfig = TGNConfig()):
     test_types = types_np[val_end:]
 
     # --- FIT (unsupervised, benign train events only) ------------------------
-    print("--- INIZIO ADDESTRAMENTO E TUNING UNSUPERVISED (Isolation Forest) ---")
+    print("--- UNSUPERVISED TRAINING AND TUNING START (Isolation Forest) ---")
     X_train_benign = X_train[y_train == 0]
-    print(f"Train benigni: {X_train_benign.shape[0]} / {X_train.shape[0]} eventi")
+    print(f"Train benign: {X_train_benign.shape[0]} / {X_train.shape[0]} events")
     
     param_grid = {
         'n_estimators': [100, 200, 300, 400],
@@ -161,11 +147,11 @@ def isolation_forest_baseline(cfg: TGNConfig = TGNConfig()):
         model.fit(X_train_benign)
         
         # Validazione sul validation set per trovare il miglior set di iperparametri
-        # L'orientamento è: più alto = più anomalo
+        # Orientation: higher = more anomalous
         val_scores_raw = -model.score_samples(X_val)
         val_scores = val_scores_raw * precursor_fac[train_end:val_end]
         
-        # Se nel validation set è presente almeno un'anomalia, calcoliamo l'AUC
+        # If the validation set contains at least one anomaly, compute the AUC
         if len(np.unique(y_val)) > 1:
             auc = roc_auc_score(y_val, val_scores)
         else:
@@ -186,7 +172,7 @@ def isolation_forest_baseline(cfg: TGNConfig = TGNConfig()):
         return -model.score_samples(features)
 
     # --- THRESHOLD CALIBRATION (held-out benign slice) -----------------------
-    print("\n--- CALIBRAZIONE SOGLIA (su flusso di validazione benigno) ---")
+    print("\n--- THRESHOLD CALIBRATION (on the benign validation stream) ---")
     val_scores = anomaly_score(X_val) * precursor_fac[train_end:val_end]
     benign_val_scores = val_scores[y_val == 0]
     if benign_val_scores.size == 0:
@@ -199,7 +185,7 @@ def isolation_forest_baseline(cfg: TGNConfig = TGNConfig()):
     )
 
     # --- TEST EVALUATION -----------------------------------------------------
-    print("\n--- INIZIO FASE DI INFERENZA / ANOMALY DETECTION ---")
+    print("\n--- INFERENCE / ANOMALY DETECTION PHASE START ---")
     test_scores = anomaly_score(X_test) * precursor_fac[val_end:]
 
     auc = roc_auc_score(y_test, test_scores)
@@ -215,10 +201,11 @@ def isolation_forest_baseline(cfg: TGNConfig = TGNConfig()):
     # lateral anomalies share benign edge features and are the genuinely hard cases
     # for a non-relational detector — that is exactly the contrast this baseline
     # is meant to expose.
-    print("\n--- METRICHE PER TIPO DI ANOMALIA ---")
+    print("\n--- PER-ANOMALY-TYPE METRICS ---")
     per_type = {}
     benign = test_types == 0
-    for type_id, name in ((1, "policy"), (2, "contextual"), (3, "lateral")):
+    for type_id, name in ((1, "policy"), (2, "contextual"), (3, "lateral"),
+                          (4, "cred-theft"), (5, "exfil"), (6, "benign-denied")):
         sel = benign | (test_types == type_id)
         s_sel, l_sel = test_scores[sel], (test_types[sel] == type_id).astype(int)
         if l_sel.sum() == 0:

@@ -8,17 +8,18 @@ cannot be solved without the graph. This module is the regression test for that
 precondition, and it is deliberately strict: a dataset artifact that makes a class
 trivially separable inflates every downstream number and is invisible in the metrics.
 
-It caught three real defects when it was written:
+The three classes of defects it guards against:
 
-  * ``node_feat[dst, 3]`` carried the raw resource index. Benign traffic concentrated on
-    popular resources and popularity was the index, while attacks drew destinations
-    uniformly — so that one column reached **AUC 0.92-0.94 on every anomaly class**,
-    matching the model's own reported lateral AUC.
-  * Per-class constants in the edge message (``bytes_in``/``bytes_out``/``http_status``)
-    identified policy violations, credential theft, exfiltration and even benign service
+  * A popularity-encoding column: a column carrying the raw resource index would reach
+    **AUC 0.92-0.94 on every anomaly class**, matching the model's own reported lateral
+    AUC, because benign traffic concentrates on popular resources (popularity is the
+    index) while attacks draw destinations uniformly.
+  * Per-class constants in the edge message (e.g. ``bytes_in``/``bytes_out``): they
+    identify policy violations, credential theft, exfiltration and even benign service
     accounts with **100% precision and recall**.
-  * Exfiltration was labelled as lateral movement, putting a sub-population separable by
-    a single feature inside the class whose premise is that it has no feature tell.
+  * Mislabelled volume events: labelling exfiltration as lateral movement puts a
+    sub-population separable by a single feature inside the class whose premise is that
+    it has no feature tell.
 
 Runs on the generator alone (no training), a few seconds per seed.
 """
@@ -31,7 +32,7 @@ from scipy import stats
 from sklearn.metrics import roc_auc_score
 
 from graphagate.config import TGNConfig
-from graphagate.data.stream_synthetic import generate_streaming_data
+from graphagate.data.stream_synthetic import generate_streaming_data, stream_kwargs_from_cfg
 
 SEEDS = [42, 7, 123]
 N_EVENTS = 40_000
@@ -83,25 +84,7 @@ CRITICAL_TYPES = (3, 4)  # lateral movement, credential theft
 
 def _stream(seed: int, n_events: int = N_EVENTS):
     cfg = TGNConfig(num_events=n_events, seed=seed)
-    return generate_streaming_data(
-        num_users=cfg.num_users,
-        num_devices=cfg.num_devices,
-        num_sources=cfg.num_sources,
-        num_configs=cfg.num_configs,
-        num_resources=cfg.num_resources,
-        num_events=cfg.num_events,
-        num_wipe_slots=cfg.num_wipe_slots,
-        num_theft_slots=cfg.num_theft_slots,
-        benign_explore_prob=cfg.benign_explore_prob,
-        p_roam=cfg.p_roam,
-        p_shared_device=cfg.p_shared_device,
-        p_cookie_wipe=cfg.p_cookie_wipe,
-        p_cred_theft=cfg.p_cred_theft,
-        seed=cfg.seed,
-        use_resource_risk=cfg.use_resource_risk,
-        use_source_internal=cfg.use_source_internal,
-        guest_device_fallback=cfg.guest_device_fallback,
-    )
+    return generate_streaming_data(**stream_kwargs_from_cfg(cfg))
 
 
 def _columns(s):
@@ -167,7 +150,7 @@ def test_no_exact_value_fingerprint(seed):
     types = s.types.numpy()
     msg = s.msg.numpy().round(6)
 
-    # Single columns, and the (bytes_in, bytes_out) pair that used to be a class tell.
+    # Single columns, plus the (bytes_in, bytes_out) pair as a potential class tell.
     candidates = [(j,) for j in range(msg.shape[1])] + [(7, 8)]
 
     violations = []

@@ -5,16 +5,16 @@ import rego.v1
 # =============================================================================
 # OPA Policy — Zero Trust Authorization for ZTALeaks Nuclear Plant
 # =============================================================================
-# Decisione di accesso basata su 4 dimensioni indipendenti, tutte richieste:
+# Access decision based on 4 independent dimensions, all required:
 #
-#   1. Public path     — alcune rotte sono aperte (login, register, JWKS, etc.)
-#   2. Tier admission  — certificato e/o TPM determinano il tier (0/1/2);
-#                        ogni rotta dichiara il `min_tier` richiesto
-#   3. Role            — ogni (path, method) ha la sua lista `roles` ammessi
-#   4. Clearance       — gerarchia PUBLIC<INTERNAL<CONFIDENTIAL<SECRET<TOP_SECRET;
-#                        l'utente deve ≥ `min_clearance` della rotta
+#   1. Public path     — some routes are open (login, register, JWKS, etc.)
+#   2. Tier admission  — certificate and/or TPM determine the tier (0/1/2);
+#                        each route declares its required `min_tier`
+#   3. Role            — each (path, method) has its allowed `roles` list
+#   4. Clearance       — PUBLIC<INTERNAL<CONFIDENTIAL<SECRET<TOP_SECRET hierarchy;
+#                        the user must have ≥ the route's `min_clearance`
 #
-# Input atteso (popolato da security-orchestrator):
+# Expected input (populated by the security-orchestrator):
 #   {
 #     "request": {"method", "path", "headers"},
 #     "claims":  {"sub", "role", "clearance_level", "mfa_verified", "device_id"} | null,
@@ -27,16 +27,16 @@ import rego.v1
 #                  "session_age_seconds": int, "client_ip": str} (opt)
 #   }
 #
-# Output esposti:
-#   - allow:        bool — decisione finale (PEP la consuma)
-#   - risk_bucket:  "low"|"medium"|"high" — usato dall'orchestrator per audit
-#   - risk_score:   int — fallback deterministico (solo per confidence=low)
+# Exposed outputs:
+#   - allow:        bool — final decision (the PEP consumes it)
+#   - risk_bucket:  "low"|"medium"|"high" — used by the orchestrator for audit
+#   - risk_score:   int — deterministic fallback (only for confidence=low)
 # =============================================================================
 
 default allow := false
 
 # -----------------------------------------------------------------------------
-# 1. PUBLIC PATHS — accesso libero, niente JWT richiesto
+# 1. PUBLIC PATHS — open access, no JWT required
 # -----------------------------------------------------------------------------
 public_paths := {
     "/",
@@ -47,9 +47,9 @@ public_paths := {
     "/api/v1/auth/login",
     "/api/v1/auth/register",
     "/api/v1/auth/verify-otp",
-    # /api/v1/auth/register/begin richiede ora autenticazione: iam-service
-    # legge X-Current-User iniettato dalla security-orchestrator dopo verifica
-    # del JWT. Match esplicito sotto in route_rules.
+    # /api/v1/auth/register/begin now requires authentication: iam-service
+    # reads the X-Current-User header injected by the security-orchestrator after
+    # JWT verification. Explicit match below in route_rules.
     "/api/v1/auth/login/begin",
     "/api/v1/auth/login/finish",
     "/.well-known/jwks.json",
@@ -66,9 +66,9 @@ allow if {
 
 # -----------------------------------------------------------------------------
 # 2. TIER ADMISSION
-#    0 = né cert né TPM (login con sola password+OTP)
-#    1 = solo certificato client (mTLS riconosciuto)
-#    2 = certificato + TPM/WebAuthn enrollato
+#    0 = neither cert nor TPM (login with password+OTP only)
+#    1 = client certificate only (mTLS recognised)
+#    2 = certificate + enrolled TPM/WebAuthn
 # -----------------------------------------------------------------------------
 user_tier := 2 if {
     input.cert_present
@@ -97,12 +97,12 @@ clearance_order := {
 
 # -----------------------------------------------------------------------------
 # 4. ROLE × ROUTE MATRIX
-#    Per ogni (path, method): {roles, min_tier, min_clearance}.
-#    Path matching: esatto, oppure prefisso "{path}/" (es. /personnel/EMP-001).
+#    For each (path, method): {roles, min_tier, min_clearance}.
+#    Path matching: exact, or "{path}/" prefix (e.g. /personnel/EMP-001).
 # -----------------------------------------------------------------------------
 route_rules := {
-    # TPM enrollment: l'utente deve essere gia' autenticato (post password+OTP)
-    # per registrare un device. Tier 1 (mTLS) richiesto perche' l'enrollment è blindato.
+    # TPM enrollment: the user must already be authenticated (post password+OTP)
+    # to register a device. Tier 1 (mTLS) required because the enrollment is blind.
     "/api/v1/auth/register/begin": {
         "POST": {"roles": {"plant_manager", "operator", "maintenance_technician", "radiation_protection_officer", "security_officer", "inspector"}, "min_tier": 1, "min_clearance": "PUBLIC"},
     },
@@ -153,8 +153,8 @@ route_rules := {
     },
 }
 
-# matched_route trova la voce di route_rules che matcha input.request.path:
-# match esatto OPPURE prefisso "{key}/" (consente subpath /{id}).
+# matched_route finds the route_rules entry matching input.request.path:
+# exact match OR the "{key}/" prefix (allows /{id} subpaths).
 matched_route := key if {
     some key, _ in route_rules
     input.request.path == key
@@ -166,9 +166,9 @@ matched_route := key if {
 }
 
 # -----------------------------------------------------------------------------
-# 5. ALLOW principale: richiede claims, tier, role e clearance sufficienti.
-#    Il guard `risk_bucket != "high"` consente l'override di anomaly detection
-#    (sezione 6) anche se l'utente sarebbe normalmente autorizzato.
+# 5. Main ALLOW: requires sufficient claims, tier, role and clearance.
+#    The `risk_bucket != "high"` guard lets the anomaly-detection override
+#    (section 6) apply even when the user would normally be authorised.
 # -----------------------------------------------------------------------------
 allow if {
     authn_authz_ok
@@ -176,10 +176,10 @@ allow if {
 }
 
 authn_authz_ok if {
-    # Claims presenti (utente autenticato)
+    # Claims present (authenticated user)
     input.claims.sub
 
-    # Match della rotta nella matrix
+    # Route match in the matrix
     rule := route_rules[matched_route][input.request.method]
 
     # Tier admission
@@ -193,14 +193,14 @@ authn_authz_ok if {
 }
 
 # -----------------------------------------------------------------------------
-# 6. AI RISK SCORING — consuma score dal microservizio AI o calcola fallback.
+# 6. AI RISK SCORING — consumes the score from the AI microservice or computes a fallback.
 #
-# Confidence "high" (AI ha risposto) → fasce dirette sullo score.
-# Confidence "low" (AI giù/timeout) → score deterministico dal contesto.
-# Input `ai` assente → bucket "low" (retrocompat con i test storici).
+# Confidence "high" (the AI answered) → direct bands on the score.
+# Confidence "low" (AI down/timeout) → deterministic score from the context.
+# `ai` input absent → bucket "low" (backward-compatible with the historical tests).
 #
-# Fasce:
-#   "low":    score < 0.3              → nessun impatto
+# Bands:
+#   "low":    score < 0.3              → no impact
 #   "medium": 0.3 ≤ score < 0.7        → allow + audit log (orchestrator)
 #   "high":   score ≥ 0.7              → deny override
 # -----------------------------------------------------------------------------
@@ -222,18 +222,18 @@ risk_bucket := "high" if {
     input.ai.score >= 0.7
 }
 
-# Fallback: AI ha fallito → calcola bucket dal contesto disponibile.
+# Fallback: the AI failed → compute the bucket from the available context.
 risk_bucket := bucket if {
     input.ai.confidence == "low"
     bucket := fallback_bucket
 }
 
-# Fallback score: somma di indicatori deterministici (0..100).
+# Fallback score: sum of deterministic indicators (0..100).
 risk_score := s if {
     s := off_hours_score + missing_cert_score + stale_session_score
 }
 
-# Off-hours: fuori 06–22 e ruolo non operativo (gli operator fanno turni).
+# Off-hours: outside 06-22 and non-operational role (operators work shifts).
 default off_hours_score := 0
 
 off_hours_score := 25 if {
@@ -246,7 +246,7 @@ off_hours_score := 25 if {
     input.claims.role != "operator"
 }
 
-# Cert mancante su rotta che richiede tier ≥ 1.
+# Missing certificate on a route that requires tier ≥ 1.
 default missing_cert_score := 0
 
 missing_cert_score := 20 if {
@@ -255,14 +255,14 @@ missing_cert_score := 20 if {
     rule.min_tier >= 1
 }
 
-# Sessione vecchia: > 8h dal login.
+# Stale session: > 8h since login.
 default stale_session_score := 0
 
 stale_session_score := 15 if {
     input.context.session_age_seconds > 28800
 }
 
-# Mappatura score → bucket per il fallback.
+# Score → bucket mapping for the fallback.
 fallback_bucket := "high" if risk_score >= 50
 
 fallback_bucket := "medium" if {

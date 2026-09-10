@@ -25,9 +25,9 @@ async def test_client(host="localhost", port=8888, duration_seconds=120, no_devi
             label = event.pop("label")
             etype = event.pop("type")
             # SIMULATE NEW ENTITIES (Cold-Start in Production)
-            # Prefixiamo gli attori in modo che l'API non li trovi in memoria e li tratti
-            # come utenti/dispositivi vergini appena approdati nella ZTA.
-            # I nodi risorsa (es. le rotte API) non vengono modificati.
+            # Actors are prefixed so the API does not find them in memory and treats
+            # them as virgin users/devices that just entered the ZTA. Resource nodes
+            # (e.g. the API routes) are left unmodified.
             event["key_user"] = f"prod_{event['key_user']}"
             if event.get("key_device") is not None:
                 event["key_device"] = f"prod_{event['key_device']}"
@@ -58,7 +58,9 @@ async def test_client(host="localhost", port=8888, duration_seconds=120, no_devi
             # Per protocol, memory commits advance on events admitted by external policy/sensor
             # validation, never on the model's own anomaly verdict.
             user_counts[key_actor] = user_counts.get(key_actor, 0) + 1
-            is_policy_violation = (etype == 1)
+            # OPA would DENY both genuine policy violations (etype 1) and benign
+            # human-error denials (etype 6): neither may commit into the baseline.
+            is_policy_violation = etype in (1, 6)
             feats = event.get("features", [])
             is_signal_dirty = bool(feats and (feats[0] <= 0.5 or any(s > 0.5 for s in feats[1:4])))
             allow = (not is_policy_violation) and (not is_signal_dirty)

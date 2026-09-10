@@ -1,6 +1,7 @@
 """Central configuration: hyper-parameters and paths for the streaming TGN.
 
-The streaming Temporal Graph Network (v2) consumes synthetic ZTA access events
+The streaming Temporal Graph Network (v4 schema: the 5-node causal chain) consumes
+synthetic ZTA access events
 and scores each interaction online. Its memory is sized for ``capacity`` slots so
 previously unseen entities can be admitted at inference time via the
 :class:`~graphagate.model.registry.NodeRegistry`.
@@ -29,11 +30,12 @@ class TGNConfig:
     inference time through the :class:`~graphagate.model.registry.NodeRegistry`.
     """
 
-    # Synthetic stream shape (entity counts + number of events). v2 schema: the old
-    # single "IP/device" entity is split into SOURCE (network context: the client IP)
-    # and DEVICE (hardware context: TPM id or persistent device cookie), so an IP
-    # change (smart working) no longer looks like a brand-new machine, while a new
-    # device suddenly binding to a known user (credential theft) stands out.
+    # Synthetic stream shape (entity counts + number of events). Since the v3 split
+    # (kept in v4), the old single "IP/device" entity is split into SOURCE (network
+    # context: the client IP) and DEVICE (hardware context: TPM id or persistent device
+    # cookie), so an IP change (smart working) no longer looks like a brand-new
+    # machine, while a new device suddenly binding to a known user (credential theft)
+    # stands out.
     num_users: int = 50
     num_devices: int = 80
     num_sources: int = 150
@@ -71,8 +73,8 @@ class TGNConfig:
     # ``conf:guest``) instead of giving each TPM-less machine its own cookie (``ck:``)
     # identity. The device layer no longer distinguishes individual cookie-keyed machines
     # and the cookie-wipe scenario is neutralised (no per-machine cookie to reset). This is
-    # the DEPLOYABLE default on this branch: the multi-seed A/B (tests/ablations/
-    # run_guest_device_eval.py) showed it is a Pareto improvement on the synthetic stream
+    # the DEPLOYABLE default: the multi-seed A/B (tests/ablations/
+    # run_guest_device_eval.py) shows it is a Pareto improvement on the synthetic stream
     # (lower benign FPR, lower seed variance, no cookie-wipe false positives), at the cost
     # of per-machine device attribution. Set False to restore per-cookie keying.
     guest_device_fallback: bool = True
@@ -126,13 +128,13 @@ class TGNConfig:
     infonce_k: int = 5
     # Recency cap, in the stream's own clock unit (seconds). Both Δt inputs — pair
     # recency and src activity — are clamped here, and a pair/entity never observed
-    # before is given exactly this value as a sentinel. Without it "never seen" was
-    # encoded as Δt = t_now (the absolute clock): it grew monotonically along the
-    # stream, so train / val / test saw systematically different encodings of the same
-    # state and a long-running server drifted away from both. It was also a shortcut in
-    # the InfoNCE objective — every random negative carried an absolute-clock Δt while
-    # every positive carried a small one, making the ranking task solvable from one
-    # scalar. One week: a pair silent for longer is operationally indistinguishable
+    # before is given exactly this value as a sentinel. Encoding "never seen" as
+    # Δt = t_now (the absolute clock) instead would grow monotonically along the
+    # stream: train / val / test would see systematically different encodings of the
+    # same state and a long-running server would drift away from both. It is also a
+    # shortcut in the InfoNCE objective — every random negative would carry an
+    # absolute-clock Δt while every positive carries a small one, making the ranking
+    # task solvable from one scalar. One week: a pair silent for longer is operationally indistinguishable
     # from one never seen, which is exactly what the sentinel asserts.
     delta_t_cap: float = 604800.0
 
@@ -171,11 +173,11 @@ class TGNConfig:
     # Cost-sensitive calibration for the *signal-clean* stream, where lateral movement is
     # indistinguishable from benign except by temporal pattern. The clean threshold minimises
     # ``cost_ratio * FN + FP`` (FN = missed detection ≫ FP = false alarm the orchestrator can
-    # re-challenge), turning the ~0.76 lateral AUC ranking into operational recall. See
+    # re-challenge), turning the ~0.72 lateral AUC ranking into operational recall. See
     # graphagate.calibration.cost_sensitive_threshold.
     cost_ratio: float = 20.0
     # Guardrail on the cost-sensitive search: cap the *clean-stream* benign false-positive rate.
-    # Lateral AUC ~0.70 is a steep recall/FPR trade-off, so an uncapped cost ratio would chase
+    # Lateral AUC ~0.72 is a steep recall/FPR trade-off, so an uncapped cost ratio would chase
     # recall to an absurd FPR; the cap fixes the operating point at the max recall achievable
     # while no more than this fraction of benign clean events are re-challenged by the orchestrator.
     clean_fpr_cap: float = 0.05
@@ -186,11 +188,11 @@ class TGNConfig:
     # 5-node schema: the client CONFIGURATION (JA3) node is inserted into the causal
     # chain as ``source → config → device → user → resource`` plus a ``config → user``
     # binding (config keys namespaced ``conf:<ja3>`` / ``conf:guest``). v3 was the
-    # 4-node / 3-edge schema with type-namespaced keys (src:/ipdev:/tpm:/ck:) plus two
-    # static node features — node_feat[*,4]=resource RISK, node_feat[*,5]=source
-    # network internal/external. node_feat index map (unchanged in v4): [2]=device tier,
-    # [3]=resource priority, [4]=resource risk, [5]=source internal, [14]=trust. Earlier
-    # checkpoints (v1/v2/v3) are rejected at load time.
+    # 4-node / 3-edge schema with type-namespaced keys (src:/ipdev:/tpm:/ck:). node_feat
+    # index map: [2]=device tier, [3]=unused (held at 0.0 on purpose — a resource index
+    # would be a single-feature shortcut, and the zero is a regression invariant),
+    # [4]=resource risk, [5]=source network internal/external, [14]=trust.
+    # Earlier checkpoints (v1/v2/v3) are rejected at load time.
     schema_version: int = 4
 
     @property

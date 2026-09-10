@@ -1,15 +1,15 @@
-# Override per i test live SENZA sovrascrivere i pesi puliti.
-# serve-tgn carica e (su shutdown, lifespan save_model) RISALVA nella COPIA ./.test_public,
-# mai in ./public: così ripetere un test NON richiede di riaddestrare il modello.
-# Aggiunge il servizio test-client standard (with-device), assente nel compose base.
+# Override for live tests WITHOUT overwriting the clean weights.
+# serve-tgn loads and (on shutdown, lifespan save_model) RE-SAVES into the COPY ./.test_public,
+# never into ./public: this way repeating a test does NOT require re-training the model.
+# Adds the standard test-client service (with-device), absent from the base compose.
 #
-# PREREQUISITO (una volta, e per ripartire da pesi puliti): copia gli artifact in ./.test_public
+# PREREQUISITE (once, and to restart from clean weights): copy the artifacts to ./.test_public
 #   cp -r public .test_public
 #
-# Test standard (with-device):
+# Standard test (with-device):
 #   docker compose -f docker-compose.yml -f docker-compose.test.yml --profile serve-tgn \
 #       --profile test-client up --abort-on-container-exit --no-build
-# Test no-device (ablation):
+# No-device test (ablation):
 #   docker compose -f docker-compose.yml -f docker-compose.test.yml --profile serve-tgn \
 #       --profile ablation-no-device up --abort-on-container-exit --no-build
 services:
@@ -18,7 +18,7 @@ services:
       - ./.test_public:/app/public
       - ./src:/app/src
 
-  # test client standard (stream completo source->device->user->dst)
+  # standard test client (full source->device->user->dst stream)
   test-client:
     profiles: ["test-client"]
     build:

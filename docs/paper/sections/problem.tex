@@ -1,4 +1,4 @@
-\section{Threat Model and Problem Statement}
+\section{Threat model and problem statement}
 \label{sec:problem}
 
 \subsection{Setting}
@@ -11,7 +11,7 @@ method, sensor state, TLS-trust bit, request volume, inter-arrival gap). The det
 must emit an anomaly score $a_i \in [0,1]$ using strictly $e_1, \dots, e_i$, without access
 to future events or batch-level lookahead, matching operational streaming conditions.
 
-Two consequences follow directly. Response-side fields are excluded from
+2 direct consequences follow. Response-side fields are excluded from
 $m_i$, because HTTP response status codes and byte sizes are unavailable when authorization
 decisions occur; empirical validation confirmed that including response features introduces
 deterministic label leakage. Furthermore, the evaluation replays the test stream event by
@@ -26,35 +26,37 @@ prior to moving laterally. The adversary is assumed not to have simultaneously r
 the victim's TLS configuration, device attestation, and behavioral history, as discussed
 in Section~\ref{sec:limits}.
 
-We categorize access requests into four classes:
+Access requests are categorized into 4 classes:
 
 \begin{itemize}
-  \item \textbf{Policy violation}: Role, clearance, or sensitivity constraints are unsatisfied.
+  \item \textit{Policy violation}: Role, clearance, or sensitivity constraints are unsatisfied.
   These requests are rejected upstream by the policy engine.
-  \item \textbf{Contextual}: Requests exhibiting invalid TLS posture or deterministic
+  \item \textit{Contextual}: Requests exhibiting invalid TLS posture or deterministic
   intrusion alerts, which are predominantly handled by static rule engines.
-  \item \textbf{Lateral movement}: Authorized but non-habitual requests that are feature-identical
+  \item \textit{Lateral movement}: Authorized but non-habitual requests that are feature-identical
   to legitimate traffic, forming the primary objective of temporal graph modeling.
-  \item \textbf{Credential reuse}: Valid credentials presented from a client TLS configuration
+  \item \textit{Credential reuse}: Valid credentials presented from a client TLS configuration
   never previously associated with that principal, identifiable via the
   \textit{config}\,$\rightarrow$\,\textit{user} binding.
 \end{itemize}
 
-The five-node graph architecture is designed to capture these latter two classes, for which
+The 5-node graph architecture is designed to capture these latter 2 classes, for which
 the leakage audit described in Section~\ref{sec:setup} strictly applies.
 
 \subsection{Learning regime}
 
-Training follows a \textbf{one-class} semi-supervised regime. Labels are used exclusively
-in two stages: to filter the training set (benign access events only) and to calibrate the
+Training follows a \textit{one-class} semi-supervised regime. Labels are used exclusively
+in 2 stages: to filter the training set (benign access events only) and to calibrate the
 decision threshold on a validation slice. No ground-truth label enters test-time inference.
-The primary operational threshold is label-free, set as a quantile of the benign score
-distribution at a target false-positive rate. A cost-sensitive threshold, calibrated using
-validation lateral movement events, is reported alongside as an upper-bound reference.
+The primary operational threshold (persisted and served) is the \textit{cost-sensitive}
+threshold, calibrated with labeled lateral movement events in the validation window. A
+label-free variant (a quantile of the benign score distribution at a target false-positive
+rate) is recorded in the calibration metadata for deployments where red-team labels are
+unavailable.
 
 \subsection{The commit gate}
 
-\begin{figure}[t]
+\begin{figure}[ht!]
 \centering
 \begin{tikzpicture}[
   font=\sffamily\scriptsize,
@@ -79,9 +81,9 @@ and can be overridden by external policy rules.}
 
 A streaming detector maintaining a dynamic baseline faces potential self-poisoning: if the
 model ingests traffic based solely on its own classification, an adversary can gradually
-shift the baseline. We address this by decoupling inference from memory updates (Fig.~\ref{fig:gate}):
-the entity memory and temporal neighborhood store advance only on requests admitted by the
-external policy engine.
+shift the baseline. The decoupling of inference from memory updates (Fig.~\ref{fig:gate})
+addresses this: the entity memory and temporal neighborhood store advance only on requests
+admitted by the external policy engine.
 
 Decoupling the detector's score from the commit gate prevents error compounding and runaway
 false-positive drift. All experimental evaluations in this paper operate under this external
@@ -97,7 +99,7 @@ admitted to memory, maintaining realistic stream poisoning challenges during eva
 Direct integration with an interactive external policy service (\texttt{policy\_allows},
 evaluated in \texttt{tests/test\_policy\_blp.py}) serves as the reference architecture.
 
-Two operational considerations follow from this design: authorized adversary activity that
+2 operational considerations follow from this design: authorized adversary activity that
 passes policy checks will still update entity memory, and benign entities persistently flagged
 as anomalous risk starvation if denied updates. In practice, authorization frameworks address
 these trade-offs through strict organizational boundary policies and warm-up grace periods

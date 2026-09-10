@@ -1,4 +1,4 @@
-"""Async event generator for the live API test client (v2 schema).
+"""Async event generator for the live API test client (v4 schema).
 
 Thin wrapper around :class:`graphagate.data.stream_synthetic.ZTAStreamSimulator` —
 the SAME simulator the offline training stream is built from, so the live test
@@ -13,31 +13,16 @@ same clock, same kill-chain state, same device admission.
 import asyncio
 
 from graphagate.config import TGNConfig
-from graphagate.data.stream_synthetic import ZTAStreamSimulator
+from graphagate.data.stream_synthetic import ZTAStreamSimulator, stream_kwargs_from_cfg
 
 
 async def event_generator(seed=None, warmup_steps=None, cfg: TGNConfig = TGNConfig(), omit_device: bool = False):
+    # All generator parameters come from cfg via the shared mapping, so the live stream
+    # is guaranteed to live in the same entity space as the trained checkpoint.
     sim = ZTAStreamSimulator(
-        num_users=cfg.num_users,
-        num_devices=cfg.num_devices,
-        num_sources=cfg.num_sources,
-        # num_configs and guest_device_fallback MUST come from cfg: omitting them let the
-        # live stream run 400 configs / per-cookie device keying against a model trained
-        # on 40 configs / dev:guest, i.e. a different entity space than the checkpoint's.
-        num_configs=cfg.num_configs,
-        guest_device_fallback=cfg.guest_device_fallback,
-        num_resources=cfg.num_resources,
-        num_wipe_slots=cfg.num_wipe_slots,
-        num_theft_slots=cfg.num_theft_slots,
-        benign_explore_prob=cfg.benign_explore_prob,
-        p_roam=cfg.p_roam,
-        p_shared_device=cfg.p_shared_device,
-        p_cookie_wipe=cfg.p_cookie_wipe,
-        p_cred_theft=cfg.p_cred_theft,
+        **stream_kwargs_from_cfg(cfg),
         admission_horizon=warmup_steps if warmup_steps else None,
         seed=seed,
-        use_resource_risk=cfg.use_resource_risk,
-        use_source_internal=cfg.use_source_internal,
     )
     if warmup_steps is None:
         warmup_steps = cfg.num_events if seed == cfg.seed else 0

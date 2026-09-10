@@ -13,7 +13,7 @@ from sklearn.model_selection import RandomizedSearchCV
 from sklearn.metrics import average_precision_score, roc_auc_score
 
 from graphagate.config import TGNConfig
-from graphagate.data.stream_synthetic import generate_streaming_data
+from graphagate.data.stream_synthetic import generate_streaming_data, stream_kwargs_from_cfg
 from graphagate.eval_common import causal_hist_features, causal_precursor_factor
 
 def _binary_metrics(scores, labels, threshold):
@@ -28,33 +28,19 @@ def _binary_metrics(scores, labels, threshold):
 
 def _build_features(msg, src, dst, node_features, y):
     """Per-event feature matrix for XGBoost."""
-    msg_np = msg.numpy()                       # [N, 6]
-    nf_np = node_features.numpy()              # [total_nodes, 16]
+    msg_np = msg.numpy()                       # [N, msg_dim]
+    nf_np = node_features.numpy()              # [num_nodes, 16]
     src_feat = nf_np[src.numpy()]              # [N, 16]
     dst_feat = nf_np[dst.numpy()]              # [N, 16]
     hist = causal_hist_features(src.numpy(), dst.numpy(), y.numpy())  # [N, 3]
-    return np.concatenate([msg_np, src_feat, dst_feat, hist], axis=1)  # [N, 41]
+    return np.concatenate([msg_np, src_feat, dst_feat, hist], axis=1)
 
 def xgboost_baseline(cfg: TGNConfig = TGNConfig()):
     np.random.seed(cfg.seed)
     random.seed(cfg.seed)
 
     print("Generating synthetic streaming data (same params as TGN)...")
-    stream = generate_streaming_data(
-        num_users=cfg.num_users,
-        num_devices=cfg.num_devices,
-        num_sources=cfg.num_sources,
-        num_resources=cfg.num_resources,
-        num_events=cfg.num_events,
-        num_wipe_slots=cfg.num_wipe_slots,
-        num_theft_slots=cfg.num_theft_slots,
-        benign_explore_prob=cfg.benign_explore_prob,
-        p_roam=cfg.p_roam,
-        p_shared_device=cfg.p_shared_device,
-        p_cookie_wipe=cfg.p_cookie_wipe,
-        p_cred_theft=cfg.p_cred_theft,
-        seed=cfg.seed,
-    )
+    stream = generate_streaming_data(**stream_kwargs_from_cfg(cfg))
     src, dst, t, msg, y, types, node_features = (
         stream.device, stream.dst, stream.t, stream.msg, stream.y, stream.types,
         stream.node_features,
@@ -79,8 +65,8 @@ def xgboost_baseline(cfg: TGNConfig = TGNConfig()):
     test_types = types_np[val_end:]
 
     # --- FIT (supervised, all train events) ------------------------
-    print("--- INIZIO ADDESTRAMENTO E TUNING SUPERVISIONATO (XGBoost) ---")
-    print(f"Train eventi totali: {X_train.shape[0]} (di cui {y_train.sum()} anomalie)")
+    print("--- SUPERVISED TRAINING AND TUNING START (XGBoost) ---")
+    print(f"Train total events: {X_train.shape[0]} (of which {y_train.sum()} anomalies)")
     
     base_model = XGBClassifier(
         tree_method="hist",
@@ -97,8 +83,8 @@ def xgboost_baseline(cfg: TGNConfig = TGNConfig()):
         "colsample_bytree": [0.6, 0.8, 1.0]
     }
 
-    # Impostiamo n_jobs=1 per la ricerca in sé per non sovraccaricare la CPU,
-    # dal momento che XGBoost userà internamente i thread disponibili (n_jobs=-1).
+    # The search itself runs with n_jobs=1 to avoid CPU oversubscription, since
+    # XGBoost uses all available threads internally (n_jobs=-1).
     search = RandomizedSearchCV(
         base_model,
         param_distributions=param_grid,
@@ -123,7 +109,7 @@ def xgboost_baseline(cfg: TGNConfig = TGNConfig()):
         return model.predict_proba(features)[:, 1]
 
     # --- THRESHOLD CALIBRATION (held-out benign slice) -----------------------
-    print("\n--- CALIBRAZIONE SOGLIA (su flusso di validazione benigno) ---")
+    print("\n--- THRESHOLD CALIBRATION (on the benign validation stream) ---")
     val_scores = anomaly_score(X_val) * precursor_fac[train_end:val_end]
     benign_val_scores = val_scores[y_val == 0]
     if benign_val_scores.size == 0:
@@ -136,7 +122,7 @@ def xgboost_baseline(cfg: TGNConfig = TGNConfig()):
     )
 
     # --- TEST EVALUATION -----------------------------------------------------
-    print("\n--- INIZIO FASE DI INFERENZA / ANOMALY DETECTION ---")
+    print("\n--- INFERENCE / ANOMALY DETECTION PHASE START ---")
     test_scores = anomaly_score(X_test) * precursor_fac[val_end:]
 
     auc = roc_auc_score(y_test, test_scores)
@@ -146,10 +132,11 @@ def xgboost_baseline(cfg: TGNConfig = TGNConfig()):
     print(f"At threshold {threshold:.4f} | Precision: {precision:.4f} | Recall: {recall:.4f}")
 
     # --- PER-ANOMALY-TYPE BREAKDOWN ------------------------------------------
-    print("\n--- METRICHE PER TIPO DI ANOMALIA ---")
+    print("\n--- PER-ANOMALY-TYPE METRICS ---")
     per_type = {}
     benign = test_types == 0
-    for type_id, name in ((1, "policy"), (2, "contextual"), (3, "lateral")):
+    for type_id, name in ((1, "policy"), (2, "contextual"), (3, "lateral"),
+                          (4, "cred-theft"), (5, "exfil"), (6, "benign-denied")):
         sel = benign | (test_types == type_id)
         s_sel, l_sel = test_scores[sel], (test_types[sel] == type_id).astype(int)
         if l_sel.sum() == 0:

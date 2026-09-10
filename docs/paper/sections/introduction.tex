@@ -1,7 +1,7 @@
 \section{Introduction}
 \label{sec:intro}
 
-A Zero-Trust architecture (ZTA) replaces the perimeter with per-request
+A Zero Trust architecture (ZTA) replaces the perimeter with per-request
 authorization: every access is evaluated against identity, device posture and
 resource sensitivity, continuously, for the lifetime of a session~\cite{nist800207}.
 This shifts the detection problem. The question is no longer whether a packet crossed
@@ -14,8 +14,7 @@ feature, indistinguishable from legitimate traffic: the request is authenticated
 policy permits it, and no sensor fires. What separates it from benign activity is
 relational and temporal: the pair has no history, and the access follows a
 reconnaissance burst on the same origin. Detecting it as anomalous-edge detection over
-a temporal graph is an established formulation, with Euler~\cite{euler} and
-Argus~\cite{argus} as reference systems and the LANL authentication
+a temporal graph is an established formulation, with \textit{Euler}~\cite{euler} and \textit{Argus}~\cite{argus} as reference systems and the LANL authentication
 corpus~\cite{lanl} as the benchmark. While formulating lateral movement as dynamic
 graph link prediction is well explored, existing systems operate on substrates
 that discard rich contextual signals that a ZTA policy decision point (PDP) already possesses.
@@ -24,7 +23,7 @@ The gap is concrete. A host-to-host authentication log records that computer $A$
 authenticated to computer $B$ as user $u$. A ZTA request carries, in addition, the
 client network origin, the TLS fingerprint of the issuing client application, the
 attested device identity, and the specific asset requested. Collapsing those into
-$(A, B, u)$ makes one attack class \emph{inexpressible}: an adversary who replays a
+$(A, B, u)$ makes 1 attack class \emph{inexpressible}: an adversary who replays a
 stolen credential from an external machine produces a request whose principal is
 familiar but whose client configuration is novel. On an authentication graph there is
 no node to capture that discrepancy.
@@ -32,29 +31,29 @@ no node to capture that discrepancy.
 \subsection*{Contributions}
 
 \begin{enumerate}
-  \item \textbf{A five-node causal chain per request.} We decompose each ZTA access
+  \item \textit{A 5-node causal chain per request.} Each ZTA access is decomposed
   into \textit{source} $\rightarrow$ \textit{config} $\rightarrow$ \textit{device}
   $\rightarrow$ \textit{user} $\rightarrow$ \textit{resource}, with an explicit
   \textit{config}\,$\rightarrow$\,\textit{user} binding edge. The \textit{config}
   node, keyed by the client TLS fingerprint (JA3), enables detection of credential reuse
   from an unfamiliar tool as a structural anomaly (Section~\ref{sec:approach}).
 
-  \item \textbf{An external policy-driven commit gate.} To mitigate self-poisoning
+  \item \textit{An external policy-driven commit gate.} To mitigate self-poisoning
   in streaming settings, entity memory and temporal neighbourhoods advance only on
   events admitted by an external policy engine, decoupling memory retention from the
   detector's own predictions (Section~\ref{sec:problem}).
 
-  \item \textbf{A rigorous leakage audit for synthetic benchmarks.} To prevent
-  unintended feature shortcuts common in synthetic benchmark generation, we develop
-  a regression audit that bounds single-feature separability, forbids exact-value
-  fingerprints, and equalises destination marginals across benign and anomalous classes
+  \item \textit{A rigorous leakage audit for synthetic benchmarks.} To prevent
+  unintended feature shortcuts common in synthetic benchmark generation, a regression
+  audit is developed that bounds single-feature separability, forbids exact-value
+  fingerprints, and equalizes destination marginals across benign and anomalous classes
   (Section~\ref{sec:setup}).
 
-  \item \textbf{An external-validity study on real enterprise telemetry.} We survey
-  public cybersecurity datasets and identify the absence of corpora uniting user identity
+  \item \textit{An external-validity study on real enterprise telemetry.} A survey of
+  public cybersecurity datasets identifies the absence of corpora uniting user identity
   and TLS fingerprints. On PicoDomain~\cite{picodomain}, the only corpus providing both,
-  we implement the schema adapter, quantify session-binding coverage, and evaluate
-  transferability (Section~\ref{sec:external}).
+  the schema adapter is implemented, session-binding coverage is quantified, and
+  transferability is evaluated (Section~\ref{sec:external}).
 \end{enumerate}
 
 Section~\ref{sec:related} positions the work against the temporal-graph lateral

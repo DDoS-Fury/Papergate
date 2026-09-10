@@ -1,6 +1,6 @@
 """Decision-threshold calibration for the streaming TGN.
 
-The model *ranks* anomalies well (lateral-movement AUC ~0.76) but a single threshold
+The model *ranks* anomalies well (lateral-movement AUC ~0.72) but a single threshold
 picked only to hold a benign false-positive rate (``target_fpr``) sits above where the
 signal-clean lateral scores cluster, so operational recall collapses to a few percent.
 

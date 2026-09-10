@@ -1,34 +1,44 @@
-# Baseline: GNN non temporale (ablation del TGN)
+# Baseline: Non-Temporal GNN (TGN Ablation)
 
-GNN **statico** che isola il contributo della componente *temporale* del TGN.
-Costruisce UN grafo non orientato aggregando gli archi benigni del solo segmento
-di train (`y==0`), feature dei nodi = matrice statica `node_features [N,16]`.
-Un encoder 2-layer GraphSAGE (hidden=64, ReLU + dropout 0.1) produce embedding
-`z`; un link-predictor MLP su `[z_src ‖ z_dst ‖ msg]` dà un logit di benignità.
-Training self-supervised solo-benigno con lo **stesso curriculum del TGN** (per
-un'ablation equa): positivo = arco reale; negativo strutturale = `(src, nodo_casuale)`
-in `[num_users, total_nodes)`; **hard-negative ×10** = `(src, risorsa NON abituale)`,
-con l'abitualità IP→risorsa letta dal grafo statico (esiste un arco benigno di train);
-negativo contestuale = stessa dst, 20% dei bit del `msg` invertiti. `BCEWithLogitsLoss`,
-`AdamW` lr=1e-3, 15 epoche. Score di anomalia = `1 - sigmoid(link_pred)`
-(più alto = più anomalo). Soglia calibrata sul benigno di validazione al
-`target_fpr` (1%); metriche aggregate + breakdown per tipo come `train_tgn`.
+A **static** GNN that isolates the contribution of the TGN's *temporal*
+component. It builds a graph by aggregating the benign edges of the train
+segment only (`y==0`), node features = the static `node_features [N,16]` matrix.
+A GraphSAGE encoder produces the `z` embeddings; an MLP link predictor over
+`[z_src ‖ z_dst ‖ msg ‖ hist]` gives a benignity logit.
 
-L'unica differenza col TGN è l'assenza di **memoria ricorrente** e **vicinato
-temporale** (più testa a coseno e identità hashata): si isola così il contributo
-della sola temporalità. Esito atteso e osservato: pareggia il TGN su *policy* e
-*contextual*, ma resta molto sotto sul *lateral movement* (Recall ~9% vs ~50%),
-perché un grafo statico aggregato appiattisce la cronologia che lo rivela.
+Benign-only self-supervised training with the **same curriculum as the TGN**
+(for a fair ablation): positive = real edge; **structural negative** =
+`(src, random resource)` sampled in the stream's **real resource range**
+(`stream.res_lo`/`stream.res_num` — not an arbitrary slot of the total node
+space, which would count users/source/config); **contextual negative** =
+same dst with `msg` corrupted by Gaussian noise; equal weights. No
+habituality/authorization-based hard-negative ×10: that construction was
+circular (it used the very notion the ablation had to measure) and was
+removed. `BCEWithLogitsLoss`. Anomaly score = `1 - sigmoid(link_pred)`
+(higher = more anomalous). Threshold calibrated on the benign validation
+slice at `target_fpr` (1%); aggregate metrics + per-type breakdown as in
+`train_tgn`.
 
-Avvio riproducibile anche via profilo Compose dedicato: `docker compose --profile baseline-gnn up`.
+The only difference with the TGN is the absence of **recurrent memory** and
+**temporal neighbourhood**: this isolates the contribution of the temporal
+component alone. On Panel A (`tasks/runs/panelA.json`, to be regenerated — see
+the baselines README) the static GNN stalls at lateral AUC 0.602, practically
+on the single-feature floor (0.603), against 0.721 for the TGN: the aggregated
+graph flattens the chronology that reveals the lateral.
 
-## Esecuzione (torch non è sull'host: usare l'immagine Docker del progetto)
+## Execution
+
+Because PyTorch and baseline dependencies are not installed on the host, run the baseline inside the project's Docker container:
 
 ```bash
-# dalla root del repo, dopo aver buildato l'immagine `graphagate`
-# (docker compose --profile training-tgn build, oppure docker build -f docker/Dockerfile -t graphagate .)
 docker run --rm --gpus all \
-  -v "$PWD/tests:/app/tests" \
+  -v "$PWD:/work" -w /work \
   --entrypoint python \
-  graphagate /app/tests/baselines/simple_gnn/simple_gnn_baseline.py
+  graphagate /work/tests/baselines/simple_gnn/simple_gnn_baseline.py
+```
+
+Alternatively, run via Docker Compose:
+
+```bash
+docker compose --profile baseline-gnn up
 ```

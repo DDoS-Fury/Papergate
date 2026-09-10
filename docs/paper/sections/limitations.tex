@@ -1,22 +1,26 @@
 \section{Limitations}
 \label{sec:limits}
 
-We outline several technical and operational limitations inherent to our approach and evaluation methodology.
+Several technical and operational limitations inherent to the approach and evaluation methodology are outlined.
 
 \subsection{Run-to-run variance and multi-seed dispersion}
 
-Two runs of the identical configuration under the same random seed, evaluated on an
-identical event stream, exhibited minor dispersion (\RunToRunAuc{} in lateral AUC and
-\RunToRunRecall{} in lateral recall). While the observed lateral-AUC improvement from the
-configuration node (\BlatAucD) exceeds this baseline variation, current benchmark dispersions
-(\PublishedSdAuc{} on AUC, \PublishedSdRecall{} on recall) reflect three independent seeds.
-Extending evaluations across wider hyperparameter and seed grids remains valuable future work.
+All reported dispersions are the sample standard deviation over 3 independent
+seeds (1 run per seed, \texttt{ddof}=1): \PublishedSdAuc{} on AUC and \PublishedSdRecall{} on
+recall across the tables. 2 caveats follow. First, this conflates between-seed variance with
+run-to-run variance; the run-to-run spread on the \emph{same} stream was not re-measured after
+the generator de-leakage, so no run-to-run figure is reported. Second, with 3 seeds the
+paired Wilcoxon signed-rank test has a minimum attainable $p$ of $0.25$, so the configuration
+node's lateral-improvement deltas (\BlatAucD{} AUC, \BlatRecD{} routed recall) cannot be called
+statistically significant as such; the sign pattern is reported instead (positive on
+all 3 seeds), and the effect is treated as consistent but unproven. Extending evaluations to $\geq$5
+seeds with $\geq$3 same-stream replicates remains future work.
 
 \subsection{Synthetic benchmark fidelity}
 
 While synthetic access streams enable controlled parameter variation and multi-seed benchmarking,
 synthetic simulations inherently cannot capture the full behavioral heterogeneity of enterprise
-networks. To mitigate this risk, our leakage audit (Section~\ref{sec:setup}) enforces invariance
+networks. To mitigate this risk, the leakage audit (Section~\ref{sec:setup}) enforces invariance
 against trivial separability across generator revisions. Furthermore, empirical evaluation on
 PicoDomain (Section~\ref{sec:external}) provides qualitative grounding on real enterprise telemetry.
 
@@ -28,7 +32,7 @@ inherent trade-off with the false-positive rate on benign activity. In productio
 operators must tune threshold operating points based on organizational risk tolerance and alert
 triage capacity.
 
-\subsection{State Complexity and Scalability}
+\subsection{State complexity and scalability}
 \label{sec:limits-state}
 
 Constant-time tensor lookups and bounded memory consumption apply directly to the GPU/CPU
@@ -41,7 +45,7 @@ deployments serving millions of concurrent entities require distributed cache ev
 
 \subsection{Commit gate boundary conditions}
 
-Decoupling memory updates via an external policy gate introduces two boundary conditions.
+Decoupling memory updates via an external policy gate introduces 2 boundary conditions.
 First, if an adversary executes an unauthorized action that satisfies external policy constraints,
 the event will be committed to graph memory. Second, if a benign entity undergoes a legitimate
 operational change that triggers persistent anomaly flags, its memory updates risk starvation.

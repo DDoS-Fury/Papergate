@@ -1,4 +1,4 @@
-\section{Experimental Setup}
+\section{Experimental setup}
 \label{sec:setup}
 
 \subsection{Why a synthetic primary benchmark}
@@ -6,10 +6,10 @@
 Section~\ref{sec:external} reports the public dataset survey in full; the conclusion
 directly motivates this section. No public cybersecurity benchmark is designed for
 continuous Zero Trust authorization, and none provides principal identity alongside
-client TLS fingerprints. A corpus populating the five-node chain at scale with labeled
-lateral movement and credential reuse does not currently exist in the literature. We therefore
-construct a synthetic streaming environment and systematically validate its statistical
-properties to eliminate trivial separability shortcuts.
+client TLS fingerprints. A corpus populating the 5-node chain at scale with labeled
+lateral movement and credential reuse does not currently exist in the literature. A synthetic streaming
+environment is therefore constructed, and its statistical properties are systematically
+validated, to eliminate trivial separability shortcuts.
 
 \subsection{The generator}
 
@@ -20,7 +20,7 @@ generated resources, with circadian arrival rates, roaming and NAT, shared devic
 cookie wipes, periodic service account batch traffic, and benign human error.
 It emits binary anomaly labels, per-class type vectors, and a benign-context bitmask.
 
-Crucially, benign principals perform legitimate non-habitual accesses with non-zero
+Benign principals perform legitimate non-habitual accesses with non-zero
 probability. Without exploratory benign traffic, lateral movement would trivially coincide
 with destination novelty, allowing models to achieve high performance without modeling temporal
 dynamics. By introducing benign exploration, an individual lateral event cannot be separated
@@ -29,22 +29,25 @@ and temporal sequences.
 
 \subsection{The leakage audit}
 
-\begin{table}[t]
+\begin{table}[ht!]
 \centering
-\caption{Best single-feature AUC per class, before and after de-leakage. A high value
-indicates that a single input column separates the class on its own, trivializing the task
-and obscuring model evaluation. \prelim{Values from the audit run; regeneration pending.}}
-\label{tab:floor}
+\renewcommand{\arraystretch}{1.5}
 \begin{tabular}{lcc}
 \toprule
 Class & Before & After \\
 \midrule
 Policy      & \FloorPolicyPre & \FloorPolicyPost~\textit{(risk; semantic, declared)} \\
 Contextual  & \FloorCtxPre    & \FloorCtxPost~\textit{(sensors; by design)} \\
-\textbf{Lateral}    & \textbf{\FloorLatPre} & \textbf{\FloorLatPost} \\
+\textit{Lateral}    & \textit{\FloorLatPre} & \textit{\FloorLatPost} \\
 Credential reuse & \FloorTheftPre & \FloorTheftPost \\
 \bottomrule
 \end{tabular}
+\caption{Best single-feature AUC per class, before and after de-leakage. A high value
+indicates that a single input column separates the class on its own, trivializing the task
+and obscuring model evaluation. Post-de-leakage values from
+\texttt{tasks/runs/leakage\_audit\_floor.log}; pre-de-leakage values are from the earlier
+audit on the enriched (pre-de-leak) generator.}
+\label{tab:floor}
 \end{table}
 
 In synthetic security benchmarks, unconstrained parameter spaces frequently introduce
@@ -53,7 +56,7 @@ while benign traffic follows a power law causes resource identifiers to become a
 shortcut (\FloorLatPre{} single-feature AUC). Similarly, response-side features (such as HTTP
 status codes or payload volume) act as direct label proxies unavailable at decision time.
 
-To eliminate these artifacts, we enforce strict synthetic invariance: resource popularity
+To eliminate these artifacts, strict synthetic invariance is enforced: resource popularity
 is decoupled from indexing via seed-dependent permutations, attack destinations are drawn
 from the identical marginal distribution as benign traffic, deterministic categorical signatures
 are replaced with continuous variations, and response-side fields are strictly excluded.
@@ -61,12 +64,12 @@ As shown in Table~\ref{tab:floor}, the single-feature baseline AUC on lateral mo
 from \FloorLatPre{} to \FloorLatPost{}, establishing that no individual feature trivially
 separates the attack classes.
 
-We formalize these constraints into an automated leakage audit suite executed across random
-seeds. The audit verifies: (1) an upper bound on single-feature AUC; (2) absence of exact
+These constraints are formalized into an automated leakage audit suite executed across
+random seeds. The audit verifies: (1) an upper bound on single-feature AUC; (2) absence of exact
 constant fingerprints; (3) statistical equivalence between benign and anomalous destination
 marginal distributions (evaluated by effect size rather than asymptotic $p$-values, avoiding
 spurious rejections at large sample sizes); and (4) valid routing semantics for all emitted
-requests. Crucially, lateral movement and credential reuse are subject to zero single-feature
+requests. Lateral movement and credential reuse are subject to no single-feature
 leakage exemptions.
 
 \subsection{Protocol}
@@ -74,18 +77,25 @@ leakage exemptions.
 Unless stated otherwise, experiments follow the standard configuration (\PanelAsettings).
 Training is conducted on benign events only. The test stream is replayed chronologically,
 event by event, under the external commit gate described in Section~\ref{sec:problem}.
-Dispersion is reported as sample standard deviation over seeds with $\text{ddof}=1$;
-paired comparisons use per-seed differences evaluated with a Wilcoxon signed-rank test
-and bootstrap confidence intervals.
+Dispersion is reported as the sample standard deviation over the 3 seeds, 1 run
+per seed, with $\text{ddof}=1$; paired comparisons use per-seed differences evaluated with a
+Wilcoxon signed-rank test and bootstrap confidence intervals. With 3 seeds the signed-rank
+test has a minimum attainable $p$ of $0.25$, so the sign pattern of the
+per-seed differences is additionally reported, and significance is not claimed from the test alone.
 
 \subsection{Baselines}
 
-We evaluate five baselines alongside our model: Isolation Forest, One-Class SVM,
+5 baselines are evaluated alongside the model: Isolation Forest, One-Class SVM,
 XGBoost, a static graph neural network (identical graph structure without temporal memory),
 and a standard 2-node bipartite TGN (\textit{user} $\rightarrow$ \textit{resource}).
-All baselines receive the same tabular features and causal history counters as the TGN,
-ensuring the comparison isolates the specific contribution of temporal graph modeling.
+All baselines receive the same per-event tabular signals as the TGN: the edge message
+features, the static attributes of both endpoints, causal benign-gated interaction
+counters, and the identical precursor prior. The baselines consume these as a flat
+per-event vector for the device actor, so the comparison isolates the specific
+contribution of temporal graph modeling.
 The static GNN isolates the role of recurrent temporal state, while the 2-node TGN isolates
 the effect of the 5-node decomposition against conventional bipartite link prediction.
 XGBoost is fully supervised (trained on ground-truth labels) and is included solely as an
-empirical upper-bound reference.
+empirical upper-bound reference. For the one-class Isolation Forest, hyperparameters are
+selected on the validation slice by validation AUC (a standard compromise of the one-class
+setting, in which no labels enter the training fit itself).

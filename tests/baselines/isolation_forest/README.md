@@ -1,24 +1,37 @@
 # Baseline: Isolation Forest
 
-Detector di anomalie classico e **non relazionale**. Ogni evento di accesso ZTA
-viene descritto da un vettore statico di 38 dim: edge feature `msg` (6) ⊕ feature
-statiche del nodo sorgente IP (16) ⊕ feature statiche del nodo risorsa (16). Nessuna
-memoria, nessun vicinato temporale: è il massimo che un detector può vedere di un
-singolo evento isolato.
+A classic, **non-relational** anomaly detector. Every ZTA access event
+is described by a 45-dim static vector: edge features `msg` (10) ⊕
+static features of the device node (16) ⊕ static features of the resource node (16) ⊕
+causal benign-gated history counters (3; the same statistics the TGN maintains
+online, consumed here as a flat tabular vector by the device actor). No
+memory, no temporal neighbourhood: it is the most a detector can see of a
+single, isolated event.
 
-Protocollo identico a `graphagate.train_tgn` (stesso `TGNConfig` + seed, stesso split
-cronologico 70/10/20). L'`IsolationForest` (sklearn, `n_estimators=200`,
-`contamination='auto'`) è addestrato **solo sugli eventi benigni del train**. Lo score
-di anomalia è `-score_samples(X)` (più alto = più anomalo, coerente con `1 - P(benign)`
-del TGN). La soglia si calibra sugli score benigni di validazione al `target_fpr` (99°
-percentile). Si riportano su test: AUC/AP aggregate, precision/recall alla soglia e il
-breakdown per tipo (policy / contextual / lateral). Il gap con il TGN misura quanto la
-detection dipenda dalla struttura del grafo e dalla storia delle interazioni.
+Protocol identical to `graphagate.train_tgn` (same `TGNConfig`, same seed,
+same chronological split 70/10/20, same precursor prior). The `IsolationForest`
+(sklearn) is trained **on the benign train events only**; the 10 hyperparameter
+sets sampled by `ParameterSampler` are selected
+**by the AUC on the validation segment** (standard compromise of the one-class
+setting: no labels enter the fit). The anomaly score is
+`-score_samples(X)` (higher = more anomalous, consistent with the TGN's `1 - P(benign)`).
+The threshold is calibrated on the benign validation scores at `target_fpr`
+(99th percentile). Reported on test: aggregate AUC/AP, precision/recall at the
+threshold and the per-type breakdown (policy / contextual / lateral / cred-theft / exfil /
+benign-denied). The gap to the TGN measures how much the detection depends on the
+graph structure and on the interaction history.
 
-## Esecuzione (torch non è installato sull'host: usare l'immagine Docker)
+## Execution
+
+Because PyTorch and baseline dependencies are not installed on the host, run the baseline inside the project's Docker container:
 
 ```bash
-# dalla root del repo
-docker run --rm -v "$PWD:/work" -w /work graphagate \
-  python tests/baselines/isolation_forest/isolation_forest_baseline.py
+docker run --rm --gpus all -v "$PWD:/work" -w /work --entrypoint python graphagate \
+  /work/tests/baselines/isolation_forest/isolation_forest_baseline.py
+```
+
+Alternatively, run via Docker Compose:
+
+```bash
+docker compose --profile baseline-iforest up
 ```

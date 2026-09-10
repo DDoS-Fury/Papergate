@@ -205,8 +205,8 @@ def main() -> int:
                          sl["t"], sl["msg"], sl["y"], device,
                          config_nodes=sl["config_nodes"], **kw, **extra)[0]
 
-    # v4 (the chain the evaluation actually runs) first; v3 kept so the legacy branch,
-    # which is what this harness used to exercise exclusively, still has coverage.
+    # v4 (the chain the evaluation actually runs) first; v3 kept so the legacy
+    # branch still has coverage.
     schemas = [("v4 5-edge", True)] if has_cfg else []
     schemas.append(("v3 3-edge (legacy)", False))
 

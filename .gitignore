@@ -34,8 +34,9 @@ data/
 # Throwaway weight copy for weight-safe live tests (docker-compose.test.yml)
 .test_public/
 
-docs/latex/*.out
-docs/latex/*.log
-docs/latex/*.aux
+docs/paper/*.out
+docs/paper/*.log
+docs/paper/*.aux
+docs/paper/generated/
 !docs/paper/main.pdf
 backups/

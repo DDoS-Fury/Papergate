@@ -1,7 +1,7 @@
 """Concurrent load + registry-capacity stress harness for the serve_api service.
 
 The functional client (`test_client.py`) is strictly sequential — one request in
-flight — so it never exercises the two things that actually stress the v3 service:
+flight — so it never exercises the two things that actually stress the v4 service:
 
   Phase A — CONCURRENCY/LOAD: the service runs sync endpoints in FastAPI's
     threadpool but serialises every model-touching request on a single global
@@ -12,7 +12,7 @@ flight — so it never exercises the two things that actually stress the v3 serv
 
   Phase B — REGISTRY CAPACITY/EVICTION: ``NodeRegistry`` maps unbounded external
     keys onto ``capacity`` slots and evicts the least-recently-updated slot when
-    full (registry.py). We flood UNIQUE namespaced v3 keys (``src:``/``ck:``/user)
+    full (registry.py). We flood UNIQUE namespaced v4 keys (``src:``/``ck:``/user)
     to drive ``registry_size`` (read live from ``/health``) toward ``capacity`` and
     assert it stays bounded, the service stays healthy, and — if capacity is
     reached within the budget — that eviction kicks in (size plateaus at capacity).
@@ -37,10 +37,11 @@ TYPE_NAMES = {
     0: "Benign", 1: "Policy", 2: "Contextual", 3: "Lateral", 4: "CredTheft",
     5: "Exfil", 6: "BenignDenied",
 }
-# Unloaded single-client P50 round-trip (measured by test_client.py) — the yardstick
-# the load phase reports contention against. The service serialises on one global
+# Unloaded single-client P50 round-trip (measured by test_client.py, see
+# tasks/runs/serving_client.log: P50 9.81 ms / P99 12.33 ms) — the yardstick the
+# load phase reports contention against. The service serialises on one global
 # lock, so the headline finding is the lock-bound throughput ceiling, NOT scaling.
-UNLOADED_P50_MS = 6.5
+UNLOADED_P50_MS = 9.81
 # Real, preregistered resource routes (so Phase-B dst nodes stay valid while the
 # user/device/source keys are the unique ones doing the registry churn).
 RESOURCE_URIS = [
@@ -83,16 +84,18 @@ async def _load_worker(wid, session, seed, deadline, lat, preds, errors, counts)
             errors.append(("infer", repr(e))); continue
         lat.append((time.perf_counter() - t0) * 1000)
 
-        score = data.get("anomaly_score", 1.0)
-        thr = data.get("threshold", 0.5)
         is_anom = data.get("is_anomaly", False)
         preds.append((is_anom, label == 1, etype))
         counts[0] += 1
 
-        # OPA decision, then conditional /update.
+        # OPA decision, then conditional /update. Same proxy as test_client.py:
+        # the commit follows the EXTERNAL policy/sensor signal, never the model's
+        # own score (a self-gating loop would let the model decide its own baseline).
         user_counts[key_actor] = user_counts.get(key_actor, 0) + 1
-        policy_violation = (etype == 1)
-        allow = (not policy_violation) and (not (score > thr))
+        feats = ev.get("features", [])
+        is_policy_violation = etype in (1, 6)
+        is_signal_dirty = bool(feats and (feats[0] <= 0.5 or any(x > 0.5 for x in feats[1:4])))
+        allow = (not is_policy_violation) and (not is_signal_dirty)
         if allow:
             try:
                 async with session.post(f"{BASE_URL}/update", json=ev) as r:
@@ -130,7 +133,7 @@ async def phase_load(concurrency, seconds, base_seed):
     # accuracy by type (cold-start streams, no warmup => lower than the functional
     # client; reported only to show scoring stays sane under load, not as a gate)
     print("Accuracy by type (cold-start, informational):")
-    for t in range(5):
+    for t in sorted(TYPE_NAMES):
         tp = [p for p in preds if p[2] == t]
         if tp:
             ok = sum(1 for p in tp if p[0] == p[1])

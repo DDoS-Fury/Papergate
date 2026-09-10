@@ -1,212 +1,268 @@
-# Integrazione Orchestrator ZTA e Modello TGN
+# ZTA Orchestrator and TGN Model Integration
 
-Questo documento chiarisce l'architettura di integrazione tra il Security Orchestrator (che comunica con il Policy Decision Point, es. OPA) e il microservizio AI basato su TGN (Temporal Graph Network).
+This document clarifies the integration architecture between the Security Orchestrator (which talks to the Policy Decision Point, e.g. OPA) and the TGN (Temporal Graph Network) AI microservice.
 
-## Nessun Database Vettoriale Necessario
+## No Vector Database Needed
 
-Una domanda comune nell'integrazione di modelli AI per l'Anomaly Detection strutturale (come i grafi) è se sia necessario mantenere un vector database esterno (es. Milvus, Pinecone) per storicizzare gli embedding o le tuple delle richieste passate.
+A common question when integrating AI models for structural Anomaly Detection (such as graphs) is whether an external vector database (e.g. Milvus, Pinecone) is needed to store past embeddings or request tuples.
 
-**La risposta per il TGN è no.**
+**The answer for the TGN is no.**
 
-Il modello TGN è stato progettato appositamente per essere **stateful** e gestire autonomamente la propria memoria temporale in RAM tramite tensori PyTorch. Anche la storia strutturale (gli ultimi `K` vicini temporali di ogni entità) è mantenuta in RAM da un **neighbour loader bounded** (`MessageNeighborLoader`, un ring-buffer a dimensione fissa `O(num_nodes·K)`): è ciò che consente il rilevamento del *lateral movement* **senza** alcun graph database esterno.
+The TGN model was designed specifically to be **stateful** and to autonomously manage its own temporal memory in RAM via PyTorch tensors. The structural history (the last `K` temporal neighbours of each entity) is also kept in RAM by a **bounded neighbour loader** (`MessageNeighborLoader`, a fixed-size ring buffer `O(num_nodes·K)`): this is what enables *lateral movement* detection **without** any external graph database.
 
-### Flusso di Esecuzione (Serving)
+### Execution Flow (Serving)
 
-1. **Inoltro della Richiesta (Tupla, schema v4 a 5 nodi)**
-   L'orchestrator ZTA non deve pre-processare vettori né interrogare database storici. Deve semplicemente inoltrare la singola transazione (o evento) grezza all'API di serving del modello (`src/serve_tgn.py -> score_event`). Ogni richiesta è modellata come catena causale a **5 archi**: `sorgente → config`, `config → dispositivo`, `config → utente`, `dispositivo → utente` e l'accesso `utente → risorsa`. **Le chiavi sono namespaced per TIPO** così un IP non può mai aliasare uno slot dispositivo nel `NodeRegistry` condiviso (che è un unico keyspace per tutti i tipi di nodo). La tupla richiesta include:
-   - `key_user`: identità (es. user id dal JWT; `anonymous` per i guest).
-   - `key_device`: contesto hardware — `tpm:<id>` se il TPM è attestato, altrimenti `ck:<cookie>` (cookie/UUID persistente firmato; un cookie nuovo = macchina mai vista). In assenza totale di id hardware, fallback `ipdev:<ip>` (IP come device debole) **senza** `key_source`. **Non** usare mai l'IP nudo come device.
-   - `key_source` (opzionale): contesto di rete — `src:<ip>` (IP del client, namespaced). Se assente, l'arco sorgente→config viene semplicemente saltato. Il modello deriva da questo IP il bit **internal/external** (RFC1918) scritto in `node_feat[*,5]` del nodo sorgente — è una *feature*, non un gate di autorizzazione (la rete non concede privilegi: ZTA).
-   - `key_config` (opzionale): configurazione del client — il fingerprint TLS/JA3, `conf:<ja3>`. Se omesso il server sostituisce `conf:guest`, quindi **il nodo config è sempre presente**.
-   - `key_dst`: URI della risorsa.
-   - Timestamp (es. Unix epoch).
-   - `features`: messaggio d'arco a **`msg_dim` float** (attualmente **10**, vedi
-     `TGNConfig.msg_dim`; `/infer` rifiuta con 422 una lunghezza diversa):
-     `[ja3, s1, s2, s3, metodo, ruolo, clearance, bytes_in, bytes_out, log1p(Δt utente)/10]`.
-     Solo campi disponibili **al momento della decisione**: nessun campo di risposta
-     (lo status HTTP è stato rimosso proprio per questo — vedi il docstring di
+1. **Request forwarding (tuple, 5-node v4 schema)**
+   The ZTA orchestrator must not pre-process vectors nor query historical databases. It simply forwards the single raw transaction (or event) to the model serving API (`src/serve_tgn.py -> score_event`). Every request is modelled as a **5-edge** causal chain: `source → config`, `config → device`, `config → user`, `device → user` and the access `user → resource`. **The keys are namespaced by TYPE** so an IP can never alias a device slot in the shared `NodeRegistry` (which is a single keyspace for all node types). The requested tuple includes:
+   - `key_user`: identity (e.g. user id from the JWT; `anonymous` for guests).
+   - `key_device`: hardware context — `tpm:<id>` if the TPM is attested, otherwise `ck:<cookie>` (signed persistent cookie/UUID; a new cookie = a never-seen machine). With no hardware id at all, fallback `ipdev:<ip>` (the IP as a weak device) **without** `key_source`. Never use a bare IP as the device.
+   - `key_source` (optional): network context — `src:<ip>` (the client IP, namespaced). If absent, the source→config edge is simply skipped. The model derives from this IP the **internal/external** bit (RFC1918) written to `node_feat[*,5]` of the source node — it is a *feature*, not an authorization gate (the network grants no privileges: ZTA).
+   - `key_config` (optional): client configuration — the TLS/JA3 fingerprint, `conf:<ja3>`. If omitted the server substitutes `conf:guest`, so **the config node is always present**.
+   - `key_dst`: resource URI.
+   - Timestamp (e.g. Unix epoch).
+   - `features`: edge message of **`msg_dim` floats** (currently **10**, see
+     `TGNConfig.msg_dim`; `/infer` rejects a different length with 422):
+     `[ja3, s1, s2, s3, method, role, clearance, bytes_in, bytes_out, log1p(Δt user)/10]`.
+     Only fields available **at decision time**: no response field (the HTTP status
+     is deliberately not part of the message — see the docstring of
      `stream_synthetic`).
-   - **Attributi statici delle entità** (`user_feat` / `device_feat` / `dst_feat`, len ==
-     `node_feat_dim` = 16): ruolo, clearance, device tier. L'orchestrator/OPA li conosce
-     già per ogni richiesta, quindi vengono passati per-evento (nessun datastore
-     aggiuntivo). Sono il segnale che permette al modello di rilevare le **violazioni di
-     policy** — anomalie che hanno feature d'arco identiche al traffico benigno. Poiché il
-     training avviene su dati sintetici, gli utenti in produzione saranno tutti "nuovi": è
-     **obbligatorio** passare queste feature perché il modello conosca i privilegi
-     dell'utente reale appena incontrato. *Non esiste alcun campo `src_feat`*: le
-     revisioni precedenti di questo documento lo citavano, ma l'API non l'ha mai avuto.
+   - **Entity static attributes** (`user_feat` / `device_feat` / `dst_feat`, len ==
+     `node_feat_dim` = 16): role, clearance, device tier. The orchestrator/OPA already
+     knows them for every request, so they are passed per-event (no extra datastore).
+     They are the signal that lets the model detect **policy violations** — anomalies
+     whose edge features are identical to benign traffic. Because training happens on
+     synthetic data, production users will all be "new": it is **mandatory** to pass these
+     features so the model knows the privileges of the real user just met. *There is no
+     `src_feat` field*: earlier revisions of this document mentioned it, but the API never
+     had it.
 
-2. **Gestione del `NodeRegistry`**
-   All'arrivo di una tupla, il TGN utilizza il suo `NodeRegistry` per mappare le chiavi alfanumeriche (es. un nuovo indirizzo IP mai visto prima) in indici interi in tempo reale. Il sistema supporta l'ingresso di nodi non visti durante il training (spazio dei nodi dinamico e illimitato).
+2. **`NodeRegistry` handling**
+   On arrival of a tuple, the TGN uses its `NodeRegistry` to map alphanumeric keys (e.g. a
+   never-seen IP address) to integer indices in real time. The system supports the entry of
+   nodes unseen during training (dynamic and unbounded node space).
 
-3. **Integrazione con la Memoria TGN e il vicinato**
-   Il modello accede allo stato storico dei nodi coinvolti leggendo i propri tensori interni: la memoria ricorrente (`model.memory`) **e** il vicinato temporale recente (`model.neighbor_loader`). Concatena la memoria con l'identità hashata di nodo (**Hashed Identity**), fa girare la GNN multi-hop sui vicini reali e combina la *feature head* (policy/contestuale) con la *structural head* (lateral movement). Viene calcolato l'anomaly score (`1 − P(benigno)`, da `0.0` a `1.0`) e restituito all'orchestrator, che lo girerà ad OPA.
+3. **TGN memory and neighbourhood integration**
+   The model accesses the historical state of the involved nodes by reading its internal
+   tensors: the recurrent memory (`model.memory`) **and** the recent temporal neighbourhood
+   (`model.neighbor_loader`). It concatenates the memory with the hashed node identity
+   (**Hashed Identity**), runs the multi-hop GNN over the real neighbours and combines the
+   *feature head* (policy/contextual) with the *structural head* (lateral movement). The
+   anomaly score (`1 − P(benign)`, from `0.0` to `1.0`) is computed and returned to the
+   orchestrator, which will pass it to OPA.
 
-4. **Aggiornamento "Anti-Poisoning" (Gatekeeper OPA)**
-   Affinché OPA sia il vero decisore finale, l'Orchestrator gestisce le primitive del modello in due step (invece del gate interno di `score_event`):
-   - Chiama **`infer_score`** per ottenere l'anomaly score (operazione di sola lettura: non muta né memoria né vicinato).
-   - Invia la richiesta e lo score a OPA.
-   - Se **OPA risponde ALLOW** (l'evento è totalmente lecito e non anomalo), l'Orchestrator chiama **`update_memory`**, che avanza la memoria TGN **e** inserisce l'arco nel neighbour loader.
-   - Se **OPA risponde DENY**, la chiamata a `update_memory` viene omessa. Questo impedisce in modo assoluto agli attaccanti di fare "poisoning" sul modello, garantendo che il TGN impari solo da ciò che OPA ha esplicitamente approvato — sia nella memoria sia nella storia dei vicini.
+4. **"Anti-Poisoning" update (OPA gatekeeper)**
+   For OPA to be the true final decider, the Orchestrator drives the model primitives in two
+   steps (instead of `score_event`'s internal gate):
+   - It calls **`infer_score`** to obtain the anomaly score (read-only operation with respect
+     to the baseline: it mutates neither memory nor neighbourhood). The only side effect is
+     that the `/infer` endpoint admits never-seen keys in the `NodeRegistry` (slot allocation,
+     bookkeeping to be able to score): it is not learning, and the baseline (memory +
+     neighbourhood) stays intact even for events later DENYed. The slot admission is declared
+     in the endpoint table below (`no (admission only)`).
+   - It sends the request and the score to OPA.
+   - If **OPA answers ALLOW** (the event is fully legitimate and not anomalous), the
+     Orchestrator calls **`update_memory`**, which advances the TGN memory **and** inserts
+     the edge into the neighbour loader.
+   - If **OPA answers DENY**, the `update_memory` call is omitted. This absolutely prevents
+     attackers from "poisoning" the model, guaranteeing that the TGN learns only from what
+     OPA explicitly approved — both in memory and in the neighbour history.
 
-   > Nota: `infer_score` / `update_memory` lavorano su indici di slot già mappati dal
-   > `NodeRegistry`; gli attributi statici per-evento vanno scritti nello slot prima dello
-   > scoring (è ciò che fa internamente `score_event`).
+   > Note: `infer_score` / `update_memory` work on slot indices already mapped by the
+   > `NodeRegistry`; the per-event static attributes must be written into the slot before
+   > scoring (that is what `score_event` does internally).
 
-### Persistenza
+### Persistence
 
-L'unico storage richiesto per questo strato AI è il filesystem. Il comando di salvataggio del modello (`save_model`) serializza sul disco l'intero stato:
-- I pesi addestrati della rete (inclusi l'identità di nodo e le due teste di scoring).
-- I tensori in memoria con le cronologie degli accessi (TGN Memory) + il raw-message store.
-- I buffer del neighbour loader (gli ultimi `K` vicini temporali per nodo).
-- Il dizionario del NodeRegistry.
+The only storage required for this AI layer is the filesystem. The model save command
+(`save_model`) serializes the entire state to disk:
+- The trained network weights (including the node identity and the two scoring heads).
+- The in-memory tensors with the access histories (TGN Memory) + the raw-message store.
+- The neighbour loader buffers (the last `K` temporal neighbours per node).
+- The NodeRegistry dictionary.
 
-Questo file (`public/tgn_checkpoint.pt`) assieme ai metadati (`public/tgn_stats.json`) consente al microservizio AI di ripartire esattamente dal punto in cui era stato interrotto senza perdere il contesto storico degli utenti.
+This file (`public/tgn_checkpoint.pt`) together with the metadata (`public/tgn_stats.json`)
+lets the AI microservice restart exactly from where it was interrupted without losing the
+users' historical context.
 
-## API HTTP (servizio di inferenza)
+## HTTP API (inference service)
 
-Le primitive descritte sopra sono esposte come **microservizio REST/JSON** da
-`src/serve_api.py` (FastAPI + uvicorn), avviato con `python -m graphagate.serve_api`
-(profilo Docker Compose `serve-tgn`, porta `8088`). L'orchestrator Go vi parla con
-`net/http` + `encoding/json` — nessun `.proto`/gRPC da mantenere.
+The primitives described above are exposed as a **REST/JSON microservice** by
+`src/serve_api.py` (FastAPI + uvicorn), started with `python -m graphagate.serve_api`
+(Docker Compose profile `serve-tgn`; container port `8088`, exposed on the host as
+`8888`). The Go orchestrator talks to it with
+`net/http` + `encoding/json` — no `.proto`/gRPC to maintain.
 
-### Avvio del servizio
+### Starting the service
 
-**Prerequisito**: il servizio carica gli artifact `public/tgn_checkpoint.pt` e
-`public/tgn_stats.json`. Vanno prodotti **prima**, una volta, dal training
-(`docker compose --profile training-tgn up`). Senza di essi il servizio non parte.
+**Prerequisite**: the service loads the artifacts `public/tgn_checkpoint.pt` and
+`public/tgn_stats.json`. They must be produced **first**, once, by the training
+(`docker compose --profile training-tgn up`; the artifacts are **generated** by the
+training, gitignored). Without them the service does not start.
 
-Avvio come servizio (long-running):
+Start as a service (long-running):
 
 ```bash
-# Via Docker Compose (profilo dedicato, espone :8088 e l'healthcheck su /health)
+# Via Docker Compose (dedicated profile, exposes :8888 on the host and the healthcheck on /health)
 docker compose --profile serve-tgn up
 
-# Oppure standalone, riusando la stessa immagine
-docker run --rm --gpus all -p 8088:8088 \
+# Or standalone, reusing the same image
+docker run --rm --gpus all -p 8888:8088 \
   -v "$PWD/public:/app/public" graphagate graphagate.serve_api
 ```
 
-Il servizio è pronto quando `GET /health` risponde `{"status":"ok","model_loaded":true,...}`
-(in Compose l'healthcheck del container lo fa già: dipendere da
-`condition: service_healthy` dal lato orchestrator garantisce l'ordine di avvio).
+The service is ready when `GET /health` answers `200` with
+`{"status":"ok","model_loaded":true,...}`. **While the checkpoint is loading it answers
+`503`** (body `{"status":"loading",...}`): the readiness gate — and the Compose
+healthcheck — treat the 503 as "not ready yet", so depending on
+`condition: service_healthy` from the orchestrator side guarantees the startup order
+without a race on the loading.
 
-Configurazione via variabili d'ambiente (tutte opzionali):
+Configuration via environment variables (all optional):
 
-| Variabile | Default | Ruolo |
+| Variable | Default | Role |
 |---|---|---|
-| `GRAPHAGATE_CHECKPOINT` | `public/tgn_checkpoint.pt` | path del checkpoint (pesi + memoria + vicinato) |
-| `GRAPHAGATE_STATS` | `public/tgn_stats.json` | path di soglia calibrata + `NodeRegistry` |
-| `GRAPHAGATE_HOST` | `0.0.0.0` | indirizzo di bind |
-| `GRAPHAGATE_PORT` | `8088` | porta di bind |
+| `GRAPHAGATE_CHECKPOINT` | `public/tgn_checkpoint.pt` | path of the checkpoint (weights + memory + neighbourhood) |
+| `GRAPHAGATE_STATS` | `public/tgn_stats.json` | path of the calibrated threshold + `NodeRegistry` |
+| `GRAPHAGATE_HOST` | `0.0.0.0` | bind address |
+| `GRAPHAGATE_PORT` | `8088` | bind port |
 
-### Endpoint
+### Endpoints
 
-| Metodo · path | Ruolo | Muta lo stato? |
+| Method · path | Role | Mutates state? |
 |---|---|---|
-| `GET /health` | Readiness + parametri caricati (device, soglia, dimensioni, slot registry) | no |
-| `POST /infer` | Calcola l'anomaly score **senza** avanzare memoria/vicinato (ammette solo l'entità nel registry) — *passo 1* del flusso anti-poisoning | no (solo admission) |
-| `POST /update` | Committa un evento **già approvato** (post-ALLOW di OPA): avanza memoria + storia dei vicini | sì |
-| `POST /score` | Score + gate interno + update condizionale (uso senza OPA / test) | sì se benigno |
-| `POST /persist` | Riscrive lo stato evoluto su `public/` (anche automatico allo shutdown) | scrive su disco |
+| `GET /health` | Readiness + loaded parameters (device, threshold, dimensions, registry slots) | no |
+| `POST /infer` | Computes the anomaly score **without** advancing memory/neighbourhood (only admits the entity in the registry) — *step 1* of the anti-poisoning flow | no (admission only) |
+| `POST /update` | Commits an **already approved** event (post-OPA-ALLOW): advances memory + neighbour history | yes |
+| `POST /score` | Score + internal gate + conditional update (OPA-less use / tests) | yes if benign |
+| `POST /persist` | Rewrites the evolved state to `public/` (also automatic at shutdown) | writes to disk |
 
-### Schema della richiesta (eventi)
+### Request schema (events)
 
-`/infer`, `/update`, `/score` accettano lo stesso corpo JSON:
+`/infer`, `/update`, `/score` accept the same JSON body:
 
 ```json
 {
-  "key_user": "alice",             // chiave utente (string o int); "anonymous" per guest
-  "key_device": "tpm:a1b2c3",      // chiave dispositivo: "tpm:<id>" | "ck:<cookie>" | "ipdev:<ip>"
-  "key_source": "src:10.0.0.7",    // opz.: "src:<ip>" del client (se assente, niente arco source→config)
-  "key_config": "conf:771,4865-...", // opz.: fingerprint TLS/JA3; default "conf:guest"
-  "key_dst": "/api/v1/documents",  // chiave risorsa (URI normalizzato)
-  "timestamp": 1717000000,         // intero (es. Unix epoch)
+  "key_user": "alice",             // user key (string or int); "anonymous" for guests
+  "key_device": "tpm:a1b2c3",      // device key: "tpm:<id>" | "ck:<cookie>" | "ipdev:<ip>"
+  "key_source": "src:10.0.0.7",    // opt.: the client "src:<ip>" (if absent, no source→config edge)
+  "key_config": "conf:771,4865-...", // opt.: TLS/JA3 fingerprint; default "conf:guest"
+  "key_dst": "/api/v1/documents",  // resource key (normalized URI)
+  "timestamp": 1717000000,         // integer (e.g. Unix epoch)
   "features": [1.0, 0.0, 0.0, 0.0, 0.0, 0.67, 0.5, 0.12, 0.08, 0.31],
-                                              // messaggio d'arco: len == msg_dim (10)
-                                              // [0] JA3: 1.0 (ok), 0.0 (anomalia)
-                                              // [1-3] Sonde Snort s1, s2, s3 (0.0 o 1.0)
-                                              // [4] Metodo HTTP (0=GET, 1=POST, 2=PUT, 3=DELETE, 4=PATCH)
-                                              // [5] Ruolo normalizzato (idx/(len-1))
-                                              // [6] Clearance normalizzata (idx/4)
-                                              // [7] bytes_in normalizzati
-                                              // [8] bytes_out normalizzati
-                                              // [9] log1p(Δt dall'ultima richiesta dell'utente)/10
-  "user_feat": [/* ... */],        // opz., attributi statici, len == node_feat_dim (16)
-  "device_feat": [/* ... */],      // opz., idem (tier in node_feat[2])
-  "dst_feat": [/* ... */],         // opz.; per le risorse preregistrate il RISCHIO
-                                   // (node_feat[*,4]) è già baked nel checkpoint, quindi
-                                   // dst_feat NON è necessario in produzione.
-  "flagged": false                 // solo /update: l'is_anomaly restituito dal /infer
-                                   // precedente. OPA può fare ALLOW su un evento che il
-                                   // modello ha segnalato: rimandarlo indietro è ciò che
-                                   // arma il precursore kill-chain e abbassa il trust.
+                                              // edge message: len == msg_dim (10)
+                                              // [0] JA3: 1.0 (ok), 0.0 (anomaly)
+                                              // [1-3] Snort probes s1, s2, s3 (0.0 or 1.0)
+                                              // [4] HTTP method (0=GET, 1=POST, 2=PUT, 3=DELETE, 4=PATCH)
+                                              // [5] Normalized role (idx/(len-1))
+                                              // [6] Normalized clearance (idx/4)
+                                              // [7] Normalized bytes_in
+                                              // [8] Normalized bytes_out
+                                              // [9] log1p(Δt since the user's last request)/10
+  "user_feat": [/* ... */],        // opt., static attributes, len == node_feat_dim (16)
+  "device_feat": [/* ... */],      // opt., same (tier in node_feat[2])
+  "dst_feat": [/* ... */],         // opt.; for preregistered resources the RISK
+                                   // (node_feat[*,4]) is already baked in the checkpoint, so
+                                   // dst_feat is NOT required in production.
+  "flagged": false                 // only /update: the is_anomaly returned by the
+                                   // previous /infer. OPA can ALLOW an event the model
+                                   // flagged: sending it back is what arms the kill-chain
+                                   // precursor and lowers the trust.
 }
 ```
 
-> ⚠️ Non esiste un campo `src_feat` (le revisioni precedenti di questo documento lo
-> mostravano): i nomi corretti sono `user_feat` / `device_feat` / `dst_feat`. Le lunghezze
-> di `features` e delle `*_feat` sono validate: una lunghezza sbagliata riceve un **422**.
+> ⚠️ There is no `src_feat` field (earlier revisions of this document showed it): the
+> correct names are `user_feat` / `device_feat` / `dst_feat`. The lengths of `features`
+> and of the `*_feat` are validated: a wrong length receives a **422**.
 
-Il messaggio d'arco viaggia sull'arco di accesso `utente → risorsa`; i quattro archi di
-binding (`source → config`, `config → device`, `config → utente`, `device → utente`)
-portano messaggi nulli e catturano le rotture di pattern relazionale (es. furto di
-credenziali: IP, config e device mai visti che si agganciano a un utente noto). Lo score
-restituito è il massimo sugli archi presenti.
+The edge message travels on the access edge `user → resource`; the four binding edges
+(`source → config`, `config → device`, `config → user`, `device → user`)
+carry null messages and capture the relational pattern breaks (e.g. credential theft:
+never-seen IP, config and device attaching to a known user). The returned score is the
+maximum over the edges present.
 
-Risposta di `/infer` e `/score`:
+Response of `/infer` and `/score`:
 
 ```json
 { "anomaly_score": 0.83, "is_anomaly": true, "threshold": 0.6264 }
 ```
 
-### Mapping del flusso anti-poisoning (gatekeeper OPA)
+### Anti-poisoning flow mapping (OPA gatekeeper)
 
-Lo schema in due step della sezione precedente si realizza così:
+The two-step schema of the previous section is realized as follows:
 
-1. Orchestrator → `POST /infer` → ottiene `anomaly_score` (sola lettura).
-2. Orchestrator → OPA con richiesta + score.
-3. Se **ALLOW** → `POST /update` (committa nel modello). Se **DENY** → nessuna chiamata
-   a `/update`: l'evento ostile non entra mai nella baseline.
+1. Orchestrator → `POST /infer` → obtains `anomaly_score` (read-only with respect to the
+   baseline; only admits new keys in the registry).
+2. Orchestrator → OPA with the request + score.
+3. If **ALLOW** → `POST /update` (commits into the model). If **DENY** → no call to
+   `/update`: the hostile event never enters the baseline (memory + neighbourhood). The
+   only trace of a DENYed event is the registry slot allocated at admission, which does
+   not modify the model's learned state.
 
-### Gestione Identità (Nuovi Utenti e Guest, Hashed Identity)
+### Identity handling (new users and guests, Hashed Identity)
 
-Essendo stato addestrato su dati sintetici, in produzione il modello vedrà solo entità (utenti/IP) mai viste prima. Grazie alla gestione dinamica della memoria e all'uso dell'**Hashed Identity**, il modello alloca in tempo reale un nuovo slot in RAM per ogni identità sconosciuta (cold-start) calcolando al volo l'hashing scalabile dell'URI (`hash(URI) % buckets`). Questo fornisce da sùbito una base di embedding coerente e induttiva anche per i nodi appena scoperti.
+Being trained on synthetic data, in production the model will only see entities
+(users/IPs) never seen before. Thanks to the dynamic memory handling and the use of the
+**Hashed Identity**, the model allocates a new RAM slot in real time for every unknown
+identity (cold-start) by computing the scalable URI hashing on the fly
+(`hash(URI) % buckets`). This provides at once a coherent and inductive embedding base
+even for the just-discovered nodes.
 
-Per questo motivo, l'Orchestrator deve iniettare i privilegi a runtime tramite `user_feat`:
+For this reason, the Orchestrator must inject the privileges at runtime via `user_feat`:
 
-- **Utenti Autenticati (Nuovi nodi)**: L'Orchestrator deve calcolare ruolo e clearance (es. estratti dal JWT) in valori float e passarli in `user_feat`. Il modello li scriverà nello slot appena allocato, e da quel momento saprà applicare le policy corrette per quell'utente.
-- **Utenti Guest (Non autenticati)**: Quando la richiesta (es. a `/login` o endpoint pubblici) arriva da un IP senza sessione, `key_user` sarà `anonymous`, la chiave sorgente `src:<ip>`, e `user_feat` dovrà essere un array di zeri (`[0.0, 0.0, ...]`). Questo corrisponde al livello minimo di privilegi (Clearance=0, Tier=0). Il modello permetterà le chiamate alle rotte pubbliche, ma bloccherà come anomalo qualsiasi tentativo verso endpoint protetti. Appena l'utente farà login, l'Orchestrator comincerà a passare le sue feature reali, "promuovendone" di fatto i privilegi.
+- **Authenticated users (new nodes)**: the Orchestrator must compute role and clearance
+  (e.g. extracted from the JWT) as float values and pass them in `user_feat`. The model
+  will write them into the just-allocated slot, and from that moment it will know how to
+  apply the correct policies for that user.
+- **Guest users (unauthenticated)**: when the request (e.g. to `/login` or public
+  endpoints) comes from an IP without a session, `key_user` will be `anonymous`, the source
+  key `src:<ip>`, and `user_feat` must be an array of zeros (`[0.0, 0.0, ...]`). This
+  corresponds to the minimum privilege level (Clearance=0, Tier=0). The model will allow
+  calls to the public routes, but will block as anomalous any attempt towards protected
+  endpoints. As soon as the user logs in, the Orchestrator starts passing their real
+  features, effectively "promoting" their privileges.
 
-### Vincoli operativi
+### Operational constraints
 
-- **Un solo processo/replica.** Il modello è uno stato mutabile in RAM (memoria,
-  vicinato, registry); più worker/replica divergerebbero e si sovrascriverebbero in
-  `/persist`. Avviare con un singolo worker uvicorn (già impostato) e **non** scalare
-  orizzontalmente questo servizio.
-- **Continuità delle chiavi e Risorse.** Il registry serializzato dal training pre-registra le stringhe esatte degli URI per gli endpoint (es. `/api/v1/personnel`, `/api/v1/reactor-parameters` — la lista canonica è `RESOURCE_URIS` in `src/data/stream_synthetic.py`). L'Orchestrator DEVE usare queste esatte stringhe come `key_dst`: le sottorotte con path-parameter (es. `/api/v1/personnel/123`) vanno normalizzate alla rotta base prima della chiamata (vedi `normalizeAIPath` in services/security-orchestrator). Se viene usata una stringa diversa, il modello la interpreterà come un backend mai visto prima (falsando i rilevamenti).
-- **Grace Period (Rodaggio Cold-Start per Utenti).** Poiché in produzione l'Orchestrator incontrerà chiavi utente/dispositivo completamente nuove (`key_user`/`key_device`), il modello assegnerà a queste identità un alto anomaly score iniziale, per la mancanza di storico (cold-start). L'Orchestrator **deve** applicare un "Grace Period" su queste nuove entità: per i primissimi eventi (es. i primi 5-10), deve fidarsi solo della validazione statica di OPA e forzare la chiamata a `/update`, ignorando il punteggio AI. Questo permette al modello di costruire rapidamente una baseline "sicura" per il nuovo utente.
+- **Single process/replica.** The model is a mutable in-RAM state (memory,
+  neighbourhood, registry); multiple workers/replicas would diverge and overwrite each
+  other in `/persist`. Start with a single uvicorn worker (already configured) and do
+  **not** scale this service horizontally.
+- **Key and Resource continuity.** The registry serialized by the training preregisters
+  the exact strings of the endpoint URIs (e.g. `/api/v1/personnel`,
+  `/api/v1/reactor-parameters` — the canonical list is `RESOURCE_URIS` in
+  `src/data/stream_synthetic.py`). The Orchestrator MUST use these exact strings as
+  `key_dst`: sub-routes with path-parameters (e.g. `/api/v1/personnel/123`) must be
+  normalized to the base route before the call (see `normalizeAIPath` in
+  services/security-orchestrator). If a different string is used, the model will interpret
+  it as a never-seen backend (falsifying the detections).
+- **Grace Period (Cold-Start break-in for users).** Because in production the
+  Orchestrator will meet completely new user/device keys (`key_user`/`key_device`), the
+  model will assign these identities a high initial anomaly score, for the lack of history
+  (cold-start). The Orchestrator **must** apply a "Grace Period" on these new entities:
+  for the very first events (e.g. the first 5-10), it must trust only OPA's static
+  validation and force the call to `/update`, ignoring the AI score. This lets the model
+  quickly build a "safe" baseline for the new user.
 
-### Esempio: chiamata diretta (curl)
+### Example: direct call (curl)
 
 ```bash
-# Score read-only di un evento
-curl -s -X POST http://localhost:8088/infer \
+# Read-only score of an event
+curl -s -X POST http://localhost:8888/infer \
   -H 'Content-Type: application/json' \
   -d '{"key_user":"alice","key_device":"tpm:a1b2c3","key_source":"src:10.0.0.7","key_config":"conf:guest","key_dst":"/api/v1/documents","timestamp":1717000000,"features":[1.0,0.0,0.0,0.0,0.0,0.67,0.5,0.12,0.08,0.31]}'
 # -> {"anomaly_score":0.83,"is_anomaly":true,"threshold":0.6264}
 ```
 
-### Esempio: integrazione dall'orchestrator (Go)
+### Example: integration from the orchestrator (Go)
 
-Il flusso anti-poisoning in tre passi (`/infer` → OPA → `/update`) si scrive con la sola
-standard library:
+The three-step anti-poisoning flow (`/infer` → OPA → `/update`) is written with the
+standard library only:
 
 ```go
 type Event struct {
     KeyUser   string    `json:"key_user"`
     KeyDevice string    `json:"key_device"`           // "tpm:<id>" | "ck:<cookie>" | "ipdev:<ip>"
-    KeySource string    `json:"key_source,omitempty"` // "src:<ip>" del client (opzionale)
+    KeySource string    `json:"key_source,omitempty"` // the client "src:<ip>" (optional)
     KeyConfig string    `json:"key_config,omitempty"` // "conf:<ja3>" (default "conf:guest")
     KeyDst    string    `json:"key_dst"`
     Timestamp int64     `json:"timestamp"`
@@ -214,7 +270,7 @@ type Event struct {
     UserFeat  []float64 `json:"user_feat,omitempty"`  // len == node_feat_dim (16)
     DeviceFeat []float64 `json:"device_feat,omitempty"`
     DstFeat   []float64 `json:"dst_feat,omitempty"`
-    Flagged   bool      `json:"flagged,omitempty"`    // solo /update: is_anomaly del /infer
+    Flagged   bool      `json:"flagged,omitempty"`    // only /update: is_anomaly of /infer
 }
 type ScoreResp struct {
     AnomalyScore float64 `json:"anomaly_score"`
@@ -238,7 +294,7 @@ func post(base, path string, in, out any) error {
     return nil
 }
 
-// Per ogni evento di accesso:
+// For every access event:
 ev := Event{KeyUser: userID, KeyDevice: deviceID, KeySource: clientIP, KeyConfig: ja3,
     KeyDst: resURI, Timestamp: time.Now().Unix(),
     Features: edgeSignals, UserFeat: userAttrs, DeviceFeat: devAttrs, DstFeat: dstAttrs}
@@ -246,12 +302,12 @@ ev := Event{KeyUser: userID, KeyDevice: deviceID, KeySource: clientIP, KeyConfig
 var s ScoreResp
 if err := post(base, "/infer", ev, &s); err != nil { /* fail-closed */ }
 
-allow := opa.Decide(req, s.AnomalyScore)   // OPA è il decisore finale
+allow := opa.Decide(req, s.AnomalyScore)   // OPA is the final decider
 if allow {
-    ev.Flagged = s.IsAnomaly               // riporta il verdetto: arma precursore + trust
-    _ = post(base, "/update", ev, nil)     // committa SOLO se approvato
+    ev.Flagged = s.IsAnomaly               // reports the verdict: arms precursor + trust
+    _ = post(base, "/update", ev, nil)     // commits ONLY if approved
 }
 ```
 
-> **Fail-closed**: se `/infer` non risponde (timeout, servizio non pronto), trattare
-> l'evento come sospetto a livello di policy invece di lasciarlo passare.
+> **Fail-closed**: if `/infer` does not answer (timeout, service not ready), treat
+> the event as suspicious at the policy level instead of letting it pass.
