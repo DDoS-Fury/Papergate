@@ -352,7 +352,7 @@ def score_event(
     dst_feat=None,
     update: bool = True,
     guest_device_fallback: bool = False,
-) -> tuple[float, bool]:
+) -> tuple[float, bool, float]:
     """Score one streaming access event (v4 schema: up to 5 edges per request).
 
     Maps the (possibly unseen) entity keys through ``registry`` and scores the causal
