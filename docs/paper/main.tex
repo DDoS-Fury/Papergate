@@ -74,7 +74,6 @@ for lateral movement and credential reuse in Zero Trust access streams}
   placeholder carried from runs that predate the generator de-leakage of
   2026-08-03 and is \emph{not} reproducible from the current code. The structure,
   the protocol and the qualitative claims are final; the numbers are not.
-  Provenance and the regeneration procedure are in \texttt{paper/PROVENANCE.md}.
   \end{minipage}}
 \end{center}
 \vspace{2mm}
@@ -91,11 +90,11 @@ requested asset. The substrate is modelled as a 5-node causal chain per request,
 a Temporal Graph Network is evaluated over it under a protocol that keeps the
 deployment honest: one-class training on benign traffic only, event-by-event
 chronological scoring, and a memory-commit gate driven by an \emph{external} policy
-engine rather than by the model's own verdict. 2 properties follow from the extra
+engine rather than by the model's own verdict. Two properties follow from the extra
 nodes. Credential reuse
 from an unfamiliar client tool becomes expressible as an anomalous
 configuration-to-principal binding, a class not representable on a host-to-host
-graph. Furthermore, the anti-poisoning commit gate provides verifiable resilience against
+graph. In addition, the anti-poisoning commit gate provides verifiable resilience against
 adversarial baseline drift, as entity memory advances strictly on events admitted by
 external policy. An automated label-leakage audit for the synthetic generator is reported alongside
 an empirical case study on PicoDomain, where all 5 nodes are grounded in real

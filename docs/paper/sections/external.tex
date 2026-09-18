@@ -4,7 +4,7 @@
 \subsection{Evaluation of public corpora}
 
 Candidate public cybersecurity datasets were surveyed to evaluate the feasibility of
-instantiating the 5-node ZTA graph on real-world enterprise telemetry, yielding 2
+instantiating the 5-node ZTA graph on real-world enterprise telemetry, yielding two
 key findings:
 
 \textit{Lack of Zero Trust benchmarks.} Existing Zero Trust literature on continuous
@@ -23,7 +23,7 @@ A single public dataset provides the required intersection of telemetry fields.
 \subsection{PicoDomain}
 
 PicoDomain~\cite{picodomain} is a \PicoSpan-day capture of an enterprise Windows domain
-intrusion across 5 workstations and 1 domain controller, published as Zeek JSON logs
+intrusion across five workstations and one domain controller, published as Zeek JSON logs
 with an annotated red-team activity log. It provides real telemetry covering all 5 node
 types in the graph schema (Table~\ref{tab:picomap}): its \texttt{ssl.log} contains \PicoSSLrecords{} records with
 \texttt{ja3} fingerprints over \PicoJAthree{} distinct client configurations, while
@@ -51,7 +51,7 @@ resource & \texttt{smb\_mapping:path}, \texttt{smb\_files:name}, \\
 
 The red-team exercise covers multi-stage lateral progression: initial compromise via a
 trojanized archive, privilege escalation, credential dumping via \emph{Mimikatz}, domain
-reconnaissance, remote execution across 3 additional hosts using DCOM and WMI, and
+reconnaissance, remote execution across three additional hosts using DCOM and WMI, and
 interactive command execution under an alternate domain account. Both lateral movement
 and credential reuse are present in the activity trace.
 
@@ -60,7 +60,7 @@ and credential reuse are present in the activity trace.
 In network monitoring telemetry, TLS handshakes and authentication transactions typically
 occur over separate transport connections. In PicoDomain's Zeek logs, connection identifiers
 (\texttt{uid}) between \texttt{ssl} and authentication protocols (\texttt{kerberos}/\texttt{ntlm})
-exhibit 0 overlap (\PicoUidOverlap). Consequently, the \textit{config}\,$\rightarrow$\,\textit{user}
+exhibit zero overlap (\PicoUidOverlap). Consequently, the \textit{config}\,$\rightarrow$\,\textit{user}
 binding is reconstructed temporally: for each client source address, the most recently observed
 authenticated principal and TLS fingerprint within an active session window are associated.
 
@@ -79,7 +79,7 @@ are assigned by matching access events against red-team activity logs within a $
 on host or principal identity. The red-team activity log timestamps carry an estimated uncertainty
 of $\pm1$ minute, reflecting manual operator logging.
 
-With 8 distinct source addresses over \PicoSpan{} days, PicoDomain serves as an empirical
+With eight distinct source addresses over \PicoSpan{} days, PicoDomain serves as an empirical
 case study rather than an enterprise-scale benchmark. Variance across the \PicoNlateral{} lateral
 events is inherently non-trivial, and policy violations cannot be evaluated due to the absence
 of authorization policy definitions. Nonetheless, it provides valuable empirical confirmation
@@ -90,7 +90,7 @@ that the 5-node graph schema maps directly to enterprise monitoring telemetry.
 
 The one-class temporal learning pipeline (\texttt{tests/eval\_picodomain.py}) is
 evaluated on the mapped PicoDomain stream (\PicoModelSettings) without per-corpus hyperparameter tuning.
-Ranking performance demonstrates discrimination across all 3 evaluable attack classes:
+Ranking performance demonstrates discrimination across all three evaluable attack classes:
 aggregate AUC \PicoModelAggAuc{} (AP \PicoModelAggAp), lateral movement AUC \PicoModelLatAuc{}
 (AP \PicoModelLatAp, $n=\PicoNlateral$), credential reuse AUC \PicoModelTheftAuc{} (AP
 \PicoModelTheftAp, $n=\PicoNtheft$), and contextual anomaly AUC \PicoModelCtxAuc{} (AP
@@ -101,7 +101,7 @@ maintains inductive ranking ability on real network traces.
 Ranking metrics (AUC and AP) are reported rather than operating recall for this dataset,
 due to the temporal distribution of attacks. In PicoDomain, red-team activities occur exclusively in the
 final segment of the capture (commencing after 84\% of the event stream). Under a strict
-chronological 70/10/20 split, the validation slice contains 0 lateral movement or credential
+chronological 70/10/20 split, the validation slice contains zero lateral movement or credential
 theft instances. Threshold calibration for specific recall operating points requires positive
 validation instances; calculating recall without validation instances would introduce threshold
 bias unrepresentative of actual detector capability.

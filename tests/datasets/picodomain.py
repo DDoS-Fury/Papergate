@@ -17,7 +17,7 @@ It is the only public corpus we found in which **all five nodes of the v4 chain 
 by a real field** — including the ``config`` node: ``ssl.log`` carries the ``ja3`` column
 (verified: 3433/3433 records, 12 distinct fingerprints). Public authentication-graph
 datasets (LANL, OpTC) have no client fingerprint at all, so on them the config node
-degenerates and the credential-theft class is unevaluable. See ``docs/paper/PROVENANCE.md`` (Block 2).
+degenerates and the credential-theft class is unevaluable.
 
 Schema mapping → :class:`graphagate.train_tgn.StreamData`
 --------------------------------------------------------

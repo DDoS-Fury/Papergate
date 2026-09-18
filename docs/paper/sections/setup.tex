@@ -77,23 +77,23 @@ leakage exemptions.
 Unless stated otherwise, experiments follow the standard configuration (\PanelAsettings).
 Training is conducted on benign events only. The test stream is replayed chronologically,
 event by event, under the external commit gate described in Section~\ref{sec:problem}.
-Dispersion is reported as the sample standard deviation over the 3 seeds, 1 run
+Dispersion is reported as the sample standard deviation over the three seeds, one run
 per seed, with $\text{ddof}=1$; paired comparisons use per-seed differences evaluated with a
-Wilcoxon signed-rank test and bootstrap confidence intervals. With 3 seeds the signed-rank
+Wilcoxon signed-rank test and bootstrap confidence intervals. With three seeds, the signed-rank
 test has a minimum attainable $p$ of $0.25$, so the sign pattern of the
 per-seed differences is additionally reported, and significance is not claimed from the test alone.
 
 \subsection{Baselines}
 
-5 baselines are evaluated alongside the model: Isolation Forest, One-Class SVM,
+Five baselines are evaluated alongside the model: Isolation Forest, One-Class SVM,
 XGBoost, a static graph neural network (identical graph structure without temporal memory),
-and a standard 2-node bipartite TGN (\textit{user} $\rightarrow$ \textit{resource}).
+and a standard two-node bipartite TGN (\textit{user} $\rightarrow$ \textit{resource}).
 All baselines receive the same per-event tabular signals as the TGN: the edge message
 features, the static attributes of both endpoints, causal benign-gated interaction
 counters, and the identical precursor prior. The baselines consume these as a flat
 per-event vector for the device actor, so the comparison isolates the specific
 contribution of temporal graph modeling.
-The static GNN isolates the role of recurrent temporal state, while the 2-node TGN isolates
+The static GNN isolates the role of recurrent temporal state, while the two-node TGN isolates
 the effect of the 5-node decomposition against conventional bipartite link prediction.
 XGBoost is fully supervised (trained on ground-truth labels) and is included solely as an
 empirical upper-bound reference. For the one-class Isolation Forest, hyperparameters are

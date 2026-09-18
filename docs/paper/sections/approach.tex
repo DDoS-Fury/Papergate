@@ -92,7 +92,7 @@ reuse: a familiar principal under an unfamiliar client fingerprint.}
 \caption{Model architecture. The 5 edges of a single request are scored independently and
 the event takes the maximum. Each entity carries a GRU memory that is concatenated with a
 deterministic hashed identity and a static attribute vector, encoded over the last $K$
-temporal neighbours, and scored by 2 additive heads. The dashed path maintains the
+temporal neighbours, and scored by two additive heads. The dashed path maintains the
 one-class anti-poisoning protocol: the verdict leaves the model, and the memory
 advances only on events admitted by the external policy engine, rather than relying on
 internal model classifications. Entity slots are allocated on first sight, allowing unseen
@@ -102,7 +102,7 @@ principals, devices, or fingerprints to be scored inductively without retraining
 
 A request involves multiple relational dimensions. Representing it solely as
 $u \rightarrow r$ (the standard authentication-graph formulation) omits the contextual
-path of the principal. 5 edges are emitted per request (Fig.~\ref{fig:chain}): the 4 bindings
+path of the principal. Five edges are emitted per request (Fig.~\ref{fig:chain}): the four bindings
 \textit{source}\,$\rightarrow$\,\textit{config},
 \textit{config}\,$\rightarrow$\,\textit{device},
 \textit{config}\,$\rightarrow$\,\textit{user} and
@@ -125,7 +125,7 @@ on the access edge, this appears as an unseen edge on the
 
 Fig.~\ref{fig:arch} illustrates the embedding and scoring pipeline. Each entity holds a
 recurrent memory vector, updated by a GRU from the messages of the events it participates in
-(memory dimension 256). At scoring time, the memory is concatenated with 2 additional signals.
+(memory dimension 256). At scoring time, the memory is concatenated with two additional signals.
 The first is a \textit{hashed identity}: a deterministic BLAKE2b hash of the external entity
 key into a learned embedding table. Determinism is essential to ensure reproducibility across
 process restarts (unlike salted runtime hashing), and hashing preserves inductive capability:
@@ -141,7 +141,7 @@ external database queries during streaming inference.
 
 \subsection{Scoring}
 
-The logit is the sum of the 2 heads. A \textit{feature head}, parameterized as an MLP over both
+The logit is the sum of the two heads. A \textit{feature head}, parameterized as an MLP over both
 endpoint embeddings, the current message, static attributes, recency encodings, and history
 counters, captures tabular signals and temporal novelty for lateral movement. A \textit{structural head},
 implemented as a scaled cosine similarity between non-linear projections of endpoint embeddings,
@@ -181,7 +181,7 @@ cost-sensitive threshold, which calibrates operating recall against labeled late
 the validation window. A label-free variant, a quantile of the signal-clean benign score
 distribution at a target FPR, is recorded in the calibration metadata for deployments without
 red-team labels. Both are computed on a validation replay using the identical commit gate
-protocol as testing, via a 2-pass fixed point with runtime snapshot and restoration between
+protocol as testing, via a two-pass fixed point with runtime snapshot and restoration between
 passes, preventing memory state contamination during threshold estimation.
 
 \subsection{Serving}

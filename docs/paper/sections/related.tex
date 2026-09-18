@@ -12,8 +12,8 @@ treated as a standard baseline in subsequent literature. \textit{LMDetect}~\cite
 classifies time-aware subgraphs extracted around each authentication event over a
 heterogeneous multigraph. A recent \textit{graph foundation model}~\cite{gfm} pretrains
 on host-to-host structure and reports results on both LANL and DARPA OpTC with fixed
-split conventions (first 41 hours for training on LANL, 6 days for training and
-3 for evaluation on OpTC) that have become a standard benchmark protocol.
+split conventions (first 41 hours for training on LANL, six days for training and
+three for evaluation on OpTC) that have become a standard benchmark protocol.
 
 These systems take an authentication log as their substrate: nodes are
 hosts (or hosts and users), and edges represent logon events. That formulation fixes what is
@@ -46,7 +46,7 @@ a requirement enforced via the external commit gate (Section~\ref{sec:problem}).
 Surveys of the ZTA literature observe that trust-scoring and PDP proposals
 are evaluated predominantly on synthetic simulations, a gap discussed in Section~\ref{sec:external}.
 
-2 recent systems combine Zero Trust with graph neural networks directly.
+Two recent systems combine Zero Trust with graph neural networks directly.
 \textit{TrustGraph}~\cite{trustgraph} builds a heterogeneous graph from windowed
 microservice telemetry (logs, metrics, traces, authentication records), scores it
 by reconstruction error, and feeds the result through a temporal-decay trust equation
@@ -54,7 +54,7 @@ into closed-loop policy enforcement across microservice benchmarks. \textit{ZT-G
 applies GraphSAGE under Zero Trust principles to a graph of financial transactions
 (accounts, projects, suppliers) for fraud detection. Neither operates on an access-request
 stream, includes a node for the client TLS configuration, or evaluates lateral movement
-and credential reuse. Furthermore, neither implements a commit gate on detector memory updates.
+and credential reuse. Additionally, neither implements a commit gate on detector memory updates.
 The similarity lies in the high-level framing (Zero Trust combined with graph neural networks),
 rather than the underlying substrate, threat model, or streaming protocol.
 

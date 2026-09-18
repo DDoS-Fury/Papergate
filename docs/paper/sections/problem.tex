@@ -11,10 +11,10 @@ method, sensor state, TLS-trust bit, request volume, inter-arrival gap). The det
 must emit an anomaly score $a_i \in [0,1]$ using strictly $e_1, \dots, e_i$, without access
 to future events or batch-level lookahead, matching operational streaming conditions.
 
-2 direct consequences follow. Response-side fields are excluded from
+Two direct consequences follow. First, response-side fields are excluded from
 $m_i$, because HTTP response status codes and byte sizes are unavailable when authorization
 decisions occur; empirical validation confirmed that including response features introduces
-deterministic label leakage. Furthermore, the evaluation replays the test stream event by
+deterministic label leakage. Second, the evaluation replays the test stream event by
 event, strictly scoring each event before its memory state is updated.
 
 \subsection{Attacker}
@@ -26,7 +26,7 @@ prior to moving laterally. The adversary is assumed not to have simultaneously r
 the victim's TLS configuration, device attestation, and behavioral history, as discussed
 in Section~\ref{sec:limits}.
 
-Access requests are categorized into 4 classes:
+Access requests are categorized into four classes:
 
 \begin{itemize}
   \item \textit{Policy violation}: Role, clearance, or sensitivity constraints are unsatisfied.
@@ -40,13 +40,13 @@ Access requests are categorized into 4 classes:
   \textit{config}\,$\rightarrow$\,\textit{user} binding.
 \end{itemize}
 
-The 5-node graph architecture is designed to capture these latter 2 classes, for which
+The 5-node graph architecture is designed to capture these latter two classes, for which
 the leakage audit described in Section~\ref{sec:setup} strictly applies.
 
 \subsection{Learning regime}
 
 Training follows a \textit{one-class} semi-supervised regime. Labels are used exclusively
-in 2 stages: to filter the training set (benign access events only) and to calibrate the
+in two stages: to filter the training set (benign access events only) and to calibrate the
 decision threshold on a validation slice. No ground-truth label enters test-time inference.
 The primary operational threshold (persisted and served) is the \textit{cost-sensitive}
 threshold, calibrated with labeled lateral movement events in the validation window. A
@@ -99,7 +99,7 @@ admitted to memory, maintaining realistic stream poisoning challenges during eva
 Direct integration with an interactive external policy service (\texttt{policy\_allows},
 evaluated in \texttt{tests/test\_policy\_blp.py}) serves as the reference architecture.
 
-2 operational considerations follow from this design: authorized adversary activity that
+Two operational considerations follow from this design: authorized adversary activity that
 passes policy checks will still update entity memory, and benign entities persistently flagged
 as anomalous risk starvation if denied updates. In practice, authorization frameworks address
 these trade-offs through strict organizational boundary policies and warm-up grace periods

@@ -5,15 +5,15 @@ Several technical and operational limitations inherent to the approach and evalu
 
 \subsection{Run-to-run variance and multi-seed dispersion}
 
-All reported dispersions are the sample standard deviation over 3 independent
-seeds (1 run per seed, \texttt{ddof}=1): \PublishedSdAuc{} on AUC and \PublishedSdRecall{} on
-recall across the tables. 2 caveats follow. First, this conflates between-seed variance with
+All reported dispersions are the sample standard deviation over three independent
+seeds (one run per seed, \texttt{ddof}=1): \PublishedSdAuc{} on AUC and \PublishedSdRecall{} on
+recall across the tables. Two caveats follow. First, this conflates between-seed variance with
 run-to-run variance; the run-to-run spread on the \emph{same} stream was not re-measured after
-the generator de-leakage, so no run-to-run figure is reported. Second, with 3 seeds the
+the generator de-leakage, so no run-to-run figure is reported. Second, with three seeds, the
 paired Wilcoxon signed-rank test has a minimum attainable $p$ of $0.25$, so the configuration
 node's lateral-improvement deltas (\BlatAucD{} AUC, \BlatRecD{} routed recall) cannot be called
 statistically significant as such; the sign pattern is reported instead (positive on
-all 3 seeds), and the effect is treated as consistent but unproven. Extending evaluations to $\geq$5
+all three seeds), and the effect is treated as consistent but unproven. Extending evaluations to $\geq$5
 seeds with $\geq$3 same-stream replicates remains future work.
 
 \subsection{Synthetic benchmark fidelity}
@@ -45,7 +45,7 @@ deployments serving millions of concurrent entities require distributed cache ev
 
 \subsection{Commit gate boundary conditions}
 
-Decoupling memory updates via an external policy gate introduces 2 boundary conditions.
+Decoupling memory updates via an external policy gate introduces two boundary conditions.
 First, if an adversary executes an unauthorized action that satisfies external policy constraints,
 the event will be committed to graph memory. Second, if a benign entity undergoes a legitimate
 operational change that triggers persistent anomaly flags, its memory updates risk starvation.

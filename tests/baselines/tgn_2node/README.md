@@ -33,8 +33,8 @@ graph link prediction literature (Rossi et al., Euler, Argus).
   credentials of a known user from a client/configuration never associated
   with the principal, the User → Resource request is feature-identical to the
   legitimate traffic; only the Config → User binding (and the binding chain)
-  exposes the structural anomaly. It is the class for which the 5-node
-  decomposition is indispensable, not a bonus.
+  exposes the structural anomaly. It is the class that strictly requires the
+  5-node decomposition.
 
 ## Execution
 

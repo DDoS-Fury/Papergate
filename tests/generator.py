@@ -6,7 +6,7 @@ traffic follows the trained baseline by construction (no duplicated behaviour
 model, as the previous copy of the generator logic was).
 
 ``warmup_steps`` replays the exact training-time event sequence (same seed) before
-yielding, so the live stream continues seamlessly from where training stopped:
+yielding, so the live stream continues directly from where training stopped:
 same clock, same kill-chain state, same device admission.
 """
 
@@ -29,7 +29,7 @@ async def event_generator(seed=None, warmup_steps=None, cfg: TGNConfig = TGNConf
     for _ in range(warmup_steps):
         sim.step()
     if warmup_steps:
-        print(f"[Generator] Starting seamlessly at t={sim.t} (after {warmup_steps} warmup steps)")
+        print(f"[Generator] Resuming at t={sim.t} (after {warmup_steps} warmup steps)")
 
     nf = sim.node_features
     while True:

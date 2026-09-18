@@ -9,7 +9,7 @@ Unlike LANL (host→host authentication only), PicoDomain populates **all five n
 chain from real fields, including the ``config`` node: its ``ssl.log`` carries ``ja3``. It
 is therefore the one public dataset on which the config-node contribution — and with it the
 credential-theft class — is measurable at all. It is small (2.67 days, 8 source IPs), so it
-is a case study, not a headline benchmark. See ``docs/paper/PROVENANCE.md`` (Blocks 2-3).
+is a case study, not a headline benchmark.
 
 Reusing ``train_tgn(dataset=...)`` means the "global-FPR threshold vs cost-sensitive
 routing" lateral-recall comparison, the per-type breakdown and the cold-start split are all
@@ -88,10 +88,10 @@ def main() -> int:
     # chronological validation window (70-80%) contains zero lateral/theft positives:
     # a threshold fit there is calibrated on no positives and the recall@routed above
     # is an artifact of the split, not a measurement. AUC/AP (computed on the test-set
-    # ranking) are the valid PicoDomain figures. See docs/paper/PROVENANCE.md Block 3.
+    # ranking) are the valid PicoDomain figures.
     print("  NOTE: recall@routed is uninformative here — the validation window holds zero")
     print("        lateral/theft positives (attacks fall in the stream's last ~16%).")
-    print("        Rely on the AUC/AP above (test-set ranking); see PROVENANCE.md Block 3.")
+    print("        Rely on the AUC/AP above (test-set ranking).")
     return 0
 
 

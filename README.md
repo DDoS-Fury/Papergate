@@ -339,8 +339,7 @@ counters.
 Reproduction: Compose profiles `training-tgn`, `baseline-iforest`, `baseline-ocsvm`,
 `baseline-gnn`, `baseline-xgboost`, `ablations`, `config-eval`, `guest-device-eval`,
 `arch-sweep`, `eval-lanl`, `verify-tgn`. The panel tables are regenerated (multi-seed)
-with the `regen-report` profile; the provenance of every number in the paper is in
-`docs/paper/PROVENANCE.md`.
+with the `regen-report` profile.
 
 ## Limitations and Threat Model
 
@@ -353,7 +352,7 @@ To be read before treating the metrics as production guarantees:
   `tests/eval_picodomain.py` + `tests/datasets/picodomain.py`, profile `eval-picodomain`,
   contract verified by `tests/test_picodomain_mapping.py`; measured in a single run
   (agg AUC 0.6658, `tasks/runs/picodomain_eval_docker.log` — the @threshold recall is
-  not reported by construction of the split, see `docs/paper/PROVENANCE.md`). There is also a
+  not reported by construction of the split). There is also a
   **LANL auth** harness (`tests/eval_lanl.py`, profile `eval-lanl`), but there the config node
   degenerates and the credential-theft class **is not evaluable**: it is de facto the ablation
   "without the config node", not a benchmark on equal footing.

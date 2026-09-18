@@ -5,8 +5,7 @@
 \noindent\fcolorbox{red!60!black}{red!5}{%
 \begin{minipage}{0.955\columnwidth}\footnotesize
 \textbf{Status of this section.} Tables~\ref{tab:baselines} and~\ref{tab:panelb} were
-both regenerated from HEAD (Panel A: 2026-08-31, Panel B: 2026-08-30; see
-\texttt{paper/PROVENANCE.md} for commit hashes and per-artifact provenance) and the TGN
+both regenerated from HEAD and the TGN
 row of Table~\ref{tab:baselines} now runs under the same deployable protocol as every
 baseline row.
 This box only renders while \texttt{main.tex} carries \texttt{\textbackslash
@@ -53,7 +52,7 @@ Furthermore, benchmark corpora like LANL omit client fingerprints entirely; eval
 architecture on such data requires ablating the configuration node, as examined in
 Section~\ref{sec:external}.
 
-2 additional operational distinctions are worth noting. Snapshot-based models discretize
+Two additional operational distinctions are noteworthy. Snapshot-based models discretize
 streams into fixed time windows, whereas an authorization PDP must evaluate requests
 synchronously upon arrival. Additionally, previous evaluations assume offline static
 graphs without addressing commit gating, leaving models vulnerable to self-poisoning
@@ -94,11 +93,11 @@ lateral AUC, remaining bounded by the single-feature floor. Tabular one-class mo
 confirming that non-relational detectors cannot reliably isolate lateral movement when
 features match legitimate traffic.
 
-The 2-node bipartite TGN (\textit{user} $\rightarrow$ \textit{resource}) focuses all memory
+The two-node bipartite TGN (\textit{user} $\rightarrow$ \textit{resource}) focuses all memory
 capacity onto direct principal-resource habituality, achieving strong aggregate metrics
 (\AggAucTGNii{} AUC, \AggApTGNii{} AP) and competitive recall (\AggRecTGNii{} aggregate,
 \LatRecTGNii{} lateral). However, on lateral movement ranking, the 5-node decomposition
-outperforms the 2-node baseline (\LatAucTGN{} vs \LatAucTGNii{} lateral AUC, a \LatAucDeltaTGNii{} margin).
+outperforms the two-node baseline (\LatAucTGN{} vs \LatAucTGNii{} lateral AUC, a \LatAucDeltaTGNii{} margin).
 Beyond the ranking comparison, as shown in Section~\ref{sec:approach} and Table~\ref{tab:panelb},
 the bipartite formulation cannot detect credential reuse, where user-resource interactions
 appear entirely benign and only client-configuration bindings reveal the anomaly.
@@ -163,7 +162,7 @@ Lateral recall (routed) & \BlatRecIII & \textit{\BlatRecIV} & \textit{\BlatRecD}
 Benign FPR (routed)  & \BfprIII    & \BfprIV    & \BfprD \\
 \bottomrule
 \end{tabular}
-\caption{4-node chain versus 5-node chain with the configuration node, same
+\caption{Four-node chain versus 5-node chain with the configuration node, same
 stream (\PanelBsettings).}
 \label{tab:panelb}
 \end{table}
@@ -179,7 +178,7 @@ theft scenarios, the configuration node enables credential-reuse detection reach
 performance to AUC \TheftAucOff{} and recall \TheftRecOff{} (\TheftSettings).
 
 Beyond empirical metrics, the primary contribution of the configuration node is structural
-expressiveness: on a 4-node chain, credential reuse presents no anomalous edge. Adding
+expressiveness: on a four-node chain, credential reuse presents no anomalous edge. Adding
 the configuration node allows the temporal graph attention layers to recognize novel client
 fingerprints associated with familiar principals.
 
