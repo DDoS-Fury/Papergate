@@ -161,6 +161,21 @@ services:
               "--epochs", "15",
               "--eval-batch-size", "1024"]
 
+  # Non-relational baseline (Isolation Forest) on PicoDomain Zeek logs.
+  baseline-picodomain-iforest:
+    <<: *base
+    profiles: ["baseline-picodomain-iforest"]
+    container_name: graphagate-baseline-picodomain-iforest
+    volumes:
+      - ./public:/app/public
+      - ./src:/app/src
+      - ./tests:/app/tests
+      - ./data:/data
+    entrypoint: ["python"]
+    command: ["/app/tests/eval_picodomain_iforest.py",
+              "--log-dir", "/data/logs",
+              "--red-log", "/data/Red Log.xlsx"]
+
   # External validity on UWF-ZeekData24 (cyber-range enterprise telemetry).
   eval-uwf:
     <<: *base

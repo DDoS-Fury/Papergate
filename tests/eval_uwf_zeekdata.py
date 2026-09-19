@@ -30,7 +30,11 @@ from graphagate.train_tgn import train_tgn  # noqa: E402
 
 
 def main() -> int:
-    default_data_dir = os.path.join(PARENT_DIR, "data", "uwf_zeekdata24")
+    default_data_dir = (
+        "/data/uwf_zeekdata24"
+        if os.path.exists("/data/uwf_zeekdata24")
+        else os.path.join(PARENT_DIR, "data", "uwf_zeekdata24")
+    )
     parser = argparse.ArgumentParser(description="Evaluate the ZTA detector on UWF-ZeekData24.")
     parser.add_argument(
         "--data-dir",

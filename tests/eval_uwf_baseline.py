@@ -221,7 +221,11 @@ def _report_results(
 
 
 def main() -> int:
-    default_data_dir = os.path.join(PARENT_DIR, "data", "uwf_zeekdata24")
+    default_data_dir = (
+        "/data/uwf_zeekdata24"
+        if os.path.exists("/data/uwf_zeekdata24")
+        else os.path.join(PARENT_DIR, "data", "uwf_zeekdata24")
+    )
     parser = argparse.ArgumentParser(description="Run Isolation Forest / XGBoost on UWF-ZeekData24.")
     parser.add_argument(
         "--model",
