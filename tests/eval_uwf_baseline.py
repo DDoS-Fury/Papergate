@@ -9,7 +9,8 @@ Protocol (mirrors ``graphagate.train_tgn`` & ``tests/eval_uwf_zeekdata.py``):
      - 10-dim edge message (service method, volumes, timing recency)
      - 16-dim source node features
      - 16-dim destination node features
-     - 3-dim causal interaction history counters (per-pair / per-src counts)
+     - 3-dim causal interaction history counters (per-pair / per-src counts), benign-gated on the
+       train/val labels and commit-everything on the test slice: no test label enters a feature
   3. Models:
      - Isolation Forest: One-class unsupervised fit on benign training traffic only (``y_train == 0``).
        Decision threshold calibrated on benign validation at target FPR (default: 99th percentile).
@@ -58,13 +59,19 @@ def _binary_metrics(scores: np.ndarray, labels: np.ndarray, threshold: float) ->
     return precision, recall
 
 
-def _build_features(msg, src, dst, node_features, y) -> np.ndarray:
-    """Build the 45-dim tabular feature matrix for each event."""
+def _build_features(msg, src, dst, node_features, y, label_horizon: int) -> np.ndarray:
+    """Build the 45-dim tabular feature matrix for each event.
+
+    ``label_horizon`` (= ``val_end``) is where ground-truth labels stop being available to the
+    system: the history counters are benign-gated before it and commit-everything after, the
+    same gate the TGN applies on this stream (``signal_dirty`` never fires on UWF). Without
+    it the counters would be built from test labels, and attack pairs would stay "never seen".
+    """
     msg_np = msg.numpy()
     nf_np = node_features.numpy()
     src_feat = nf_np[src.numpy()]
     dst_feat = nf_np[dst.numpy()]
-    hist = causal_hist_features(src.numpy(), dst.numpy(), y.numpy())
+    hist = causal_hist_features(src.numpy(), dst.numpy(), y.numpy(), label_horizon=label_horizon)
     return np.concatenate([msg_np, src_feat, dst_feat, hist], axis=1)
 
 
@@ -262,7 +269,6 @@ def main() -> int:
     )
 
     print("\n--- EXTRACTING 45-DIMENSIONAL PER-EVENT FEATURES ---")
-    X = _build_features(data.msg, data.user, data.dst, data.node_features, data.y)
     y = data.y.numpy()
     types = data.types.numpy()
 
@@ -271,6 +277,8 @@ def main() -> int:
     n_val = int(n * actual_val_frac)
     train_end = n_train
     val_end = n_train + n_val
+
+    X = _build_features(data.msg, data.user, data.dst, data.node_features, data.y, val_end)
 
     X_train, y_train = X[:train_end], y[:train_end]
     X_val, y_val = X[train_end:val_end], y[train_end:val_end]

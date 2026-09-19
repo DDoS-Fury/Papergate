@@ -58,6 +58,76 @@ def _build_features(msg, src, dst, node_features, y) -> np.ndarray:
     return np.concatenate([msg_np, src_feat, dst_feat, hist], axis=1)
 
 
+def _download(urls: list[str], dest: str, desc: str) -> None:
+    import urllib.request
+    print(f"Downloading {desc}...")
+    for url in urls:
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(req) as resp, open(dest, "wb") as out:
+                while True:
+                    chunk = resp.read(65536)
+                    if not chunk:
+                        break
+                    out.write(chunk)
+            print(f"  Downloaded from {url}")
+            return
+        except Exception as e:
+            continue
+    raise RuntimeError(f"Failed to download {desc} from: {urls}")
+
+
+def _ensure_dataset(log_dir: str, red_log: str) -> None:
+    """Download and extract PicoDomain dataset automatically if missing."""
+    import glob
+    import subprocess
+
+    has_logs = os.path.isdir(log_dir) and any(glob.glob(os.path.join(log_dir, "*", "*.log")))
+    has_red = os.path.isfile(red_log)
+
+    if has_logs and has_red:
+        return
+
+    print("--- PicoDomain dataset not detected. Downloading automatically... ---")
+    data_dir = os.path.dirname(os.path.abspath(log_dir))
+    os.makedirs(data_dir, exist_ok=True)
+    os.makedirs(log_dir, exist_ok=True)
+    red_dir = os.path.dirname(os.path.abspath(red_log))
+    os.makedirs(red_dir, exist_ok=True)
+
+    if not has_red:
+        red_urls = [
+            "https://raw.githubusercontent.com/iHeartGraph/PicoDomain/master/Red%20Log.xlsx",
+            "https://github.com/iHeartGraph/PicoDomain/raw/master/Red%20Log.xlsx",
+            "https://raw.githubusercontent.com/iHeartGraph/PicoDomain/main/Red%20Log.xlsx",
+            "https://github.com/iHeartGraph/PicoDomain/raw/main/Red%20Log.xlsx",
+        ]
+        _download(red_urls, red_log, "Red Log.xlsx")
+
+    if not has_logs:
+        archive_path = os.path.join(data_dir, "Zeek_Logs.7z")
+        if not os.path.isfile(archive_path):
+            archive_urls = [
+                "https://raw.githubusercontent.com/iHeartGraph/PicoDomain/master/Zeek_Logs.7z",
+                "https://github.com/iHeartGraph/PicoDomain/raw/master/Zeek_Logs.7z",
+                "https://raw.githubusercontent.com/iHeartGraph/PicoDomain/main/Zeek_Logs.7z",
+                "https://github.com/iHeartGraph/PicoDomain/raw/main/Zeek_Logs.7z",
+            ]
+            _download(archive_urls, archive_path, "Zeek_Logs.7z (~16 MB)")
+
+        print(f"Extracting {archive_path} into {log_dir}...")
+        try:
+            import py7zr
+        except ImportError:
+            print("Installing py7zr for extraction...")
+            subprocess.check_call([sys.executable, "-m", "pip", "install", "--quiet", "py7zr"])
+            import py7zr
+
+        with py7zr.SevenZipFile(archive_path, mode="r") as z:
+            z.extractall(path=log_dir)
+        print("Dataset extracted successfully!\n")
+
+
 def main() -> int:
     default_log_dir = "/data/logs" if os.path.exists("/data/logs") else os.path.join(PARENT_DIR, "data", "logs")
     default_red_log = "/data/Red Log.xlsx" if os.path.exists("/data/Red Log.xlsx") else os.path.join(PARENT_DIR, "data", "Red Log.xlsx")
@@ -81,6 +151,8 @@ def main() -> int:
     print(f"Red log:        {args.red_log}")
     print(f"Train/Val split: {args.train_frac:.1%} / {args.val_frac:.1%}")
     print(f"Random seed:    {args.seed}\n")
+
+    _ensure_dataset(args.log_dir, args.red_log)
 
     print("--- STEP 1: LOADING PICODOMAIN STREAM ---")
     data = load_picodomain_stream(

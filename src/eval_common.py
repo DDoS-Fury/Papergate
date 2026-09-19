@@ -19,14 +19,23 @@ from __future__ import annotations
 import numpy as np
 
 
-def causal_hist_features(src, dst, y) -> np.ndarray:
+def causal_hist_features(src, dst, y, *, label_horizon: int | None = None) -> np.ndarray:
     """Per-event ``[log1p(pair_count), log1p(src_count), pair/(src+1)]`` (N, 3).
 
     Counts only ground-truth-benign events strictly *before* each event — the batch,
     causal analogue of :meth:`ZTATemporalGraphNetwork.compute_hist_feats`.
+
+    ``label_horizon`` is the index past which ground-truth labels are no longer available
+    to the system — in practice ``val_end``. Beyond it every event is committed, attacks
+    included (the commit-everything gate: what the TGN does on a stream where
+    ``signal_dirty`` never fires). Without a horizon the whole array is walked against
+    ``y``, so the counters of a *test* event depend on the ground-truth labels of the test
+    events before it — an oracle the deployed system does not have: attack pairs stay
+    "never seen" forever, however often they repeat.
     """
     src = np.asarray(src); dst = np.asarray(dst); y = np.asarray(y)
     n = len(src)
+    horizon = n if label_horizon is None else int(label_horizon)
     feats = np.zeros((n, 3), dtype=np.float64)
     pair: dict = {}
     srcc: dict = {}
@@ -36,7 +45,7 @@ def causal_hist_features(src, dst, y) -> np.ndarray:
         feats[i, 0] = np.log1p(pc)
         feats[i, 1] = np.log1p(sc)
         feats[i, 2] = pc / (sc + 1.0)
-        if y[i] == 0:  # benign-gated, like the TGN's predict-then-update commit
+        if i >= horizon or y[i] == 0:  # benign-gated up to the label horizon, then commit-all
             pair[(s, d)] = pc + 1
             srcc[s] = sc + 1
     return feats

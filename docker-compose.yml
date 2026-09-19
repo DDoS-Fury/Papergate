@@ -166,6 +166,9 @@ services:
     <<: *base
     profiles: ["baseline-picodomain-iforest"]
     container_name: graphagate-baseline-picodomain-iforest
+    deploy:
+      resources:
+        reservations: {}
     volumes:
       - ./public:/app/public
       - ./src:/app/src
