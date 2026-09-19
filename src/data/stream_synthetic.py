@@ -289,7 +289,7 @@ _WIPE_COLD_EVENTS = 25
 # shared NAT IP — must not by itself look anomalous.
 _P_GUEST_CONFIG = 0.05
 # Per-(lateral)-event chance the compromised machine presents a config it has never used
-# (a globally-known fingerprint, but a new *tool* on this device) — the lateral-movement
+# (a globally-known fingerprint, but a new *tool* on this device) - the lateral-movement
 # config tell. Otherwise the lateral event keeps the machine's habitual config (stealth).
 _P_LATERAL_NEW_CONFIG = 0.5
 
@@ -364,7 +364,7 @@ class ZTAStreamSimulator:
         self.admission_horizon = admission_horizon
         self.use_resource_risk = use_resource_risk
 
-        # --- resource popularity, DECOUPLED from the resource index --------------------
+        # --- resource popularity, DECOUPLED from the resource index ---
         # Access frequency follows a Zipf law, but the rank a resource gets is a random
         # permutation of the index space rather than the index itself. Otherwise the
         # resource id would encode popularity, and since benign traffic concentrates on
@@ -373,7 +373,7 @@ class ZTAStreamSimulator:
         pop_rank = np.random.permutation(num_resources).astype(np.float64)
         self._res_pop_weight = 1.0 / ((pop_rank + 1.0) ** 1.2)
 
-        # --- node index layout: [users][device slots][source slots][config slots][resources] ----
+        # --- node index layout: [users][device slots][source slots][config slots][resources] ---
         self.user_lo = 0
         self.dev_lo = self.num_users
         self.dev_slots = num_devices + num_wipe_slots + num_theft_slots
@@ -386,7 +386,7 @@ class ZTAStreamSimulator:
         self.res_lo = self.cfg_lo + self.cfg_slots
         self.num_nodes = self.res_lo + num_resources
 
-        # --- users -----------------------------------------------------------------
+        # --- users ---
         # Clearance is NOT independent: like policy.rego it derives from the role
         # (ruoli_to_blp), so the role/clearance pair in every benign message is exactly
         # what the JWT would carry in production.
@@ -394,7 +394,7 @@ class ZTAStreamSimulator:
         self.user_roles.extend(["guest"] * self.num_guests)
         self.user_clearances = [ROLE_CLEARANCE[r] for r in self.user_roles]
 
-        # --- physical machines (stable across cookie wipes) -------------------------
+        # --- physical machines (stable across cookie wipes) ---
         # Tier: 0=no cert/tpm, 1=cert, 2=cert+tpm. tier-2 machines are TPM-keyed;
         # the rest are cookie-keyed (re-keyed on wipe).
         self.machine_tiers = [int(np.random.choice([0, 1, 2], p=[0.2, 0.5, 0.3]))
@@ -420,7 +420,7 @@ class ZTAStreamSimulator:
                 home.add(int(np.random.randint(num_office, num_sources)))
             self.machine_home_ips.append(home)
 
-        # --- habitual client configs (TLS/JA3) per machine --------------------------
+        # --- habitual client configs (TLS/JA3) per machine ---
         # Config 0 is the generic ``conf:guest``; the habitual pool is [1, num_configs).
         # Each machine runs 1-2 of those (browsers/tools share fingerprints across
         # machines, so the pool is small and overlapping). A config outside a machine's
@@ -432,7 +432,7 @@ class ZTAStreamSimulator:
             cfgs = np.random.choice(cfg_pool, size=k, replace=False)
             self.machine_configs.append([int(c) for c in cfgs])
 
-        # --- external keys per node slot ---------------------------------------------
+        # --- external keys per node slot ---
         self.keys: list[str | None] = [None] * self.num_nodes
         for u in range(self.num_registered_users):
             self.keys[self.user_lo + u] = f"user_{u:04d}"
@@ -465,7 +465,7 @@ class ZTAStreamSimulator:
         for r in range(num_resources):
             self.keys[self.res_lo + r] = self.resource_uris[r]
 
-        # --- static node features (16-dim) -------------------------------------------
+        # --- static node features (16-dim) ---
         # Index map: [2]=device tier, [3]=UNUSED, [4]=resource RISK,
         # [5]=source network internal(1)/external(0), [14]=trust score.
         #
@@ -489,7 +489,7 @@ class ZTAStreamSimulator:
                 nf[self.src_lo + s, 5] = 1.0 if ip_is_internal(self.keys[self.src_lo + s]) else 0.0
         self.node_features = nf
 
-        # --- behaviour model -----------------------------------------------------------
+        # --- behaviour model ---
         # Valid actions are OPA's allow set for the user's role (device tier is realism
         # only, never a policy gate — OPA does not see it). The habitual subset is per
         # USER (the access edge is user -> resource).
@@ -517,7 +517,7 @@ class ZTAStreamSimulator:
             (r, m) for r, uri in enumerate(self.resource_uris) for m in self.route_methods[uri]
         ]
 
-        # --- mutable state ---------------------------------------------------------------
+        # --- mutable state ---
         self.t = start_time
         self.step_count = 0
         self.machine_slot = {m: self.dev_lo + m for m in range(num_devices)}
@@ -547,7 +547,7 @@ class ZTAStreamSimulator:
         self.compromised_chain_remaining: dict[int, int] = {} # machine -> steps left in lateral chain
         self._active_thefts: list[dict] = []
 
-    # --- helpers ------------------------------------------------------------------------
+    # --- helpers ---
     def policy_allows(self, role: str, method: int, uri: str) -> bool:
         if method not in self.route_methods.get(uri, set()):
             return False
@@ -708,7 +708,7 @@ class ZTAStreamSimulator:
             "key_user": self.keys[user], "key_dst": self.keys[dst],
         }
 
-    # --- one event -------------------------------------------------------------------
+    # --- one event ---
     def _current_interarrival_scale(self) -> float:
         """Returns a time-dependent scale for the exponential inter-arrival distribution
         to simulate circadian rhythms (higher rate during work hours)."""
@@ -798,7 +798,7 @@ class ZTAStreamSimulator:
         # movement may swap in a new tool (see below).
         config = self._habitual_config(machine)
 
-        # --- APT kill chain on the physical machine (recon -> lateral -> exfil) ----
+        # --- APT kill chain on the physical machine (recon -> lateral -> exfil) ---
         if np.random.rand() < 0.005 and machine not in self.compromised_state:
             self.compromised_state[machine] = 1
         is_anomalous = (
