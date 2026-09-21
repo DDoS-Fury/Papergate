@@ -85,6 +85,7 @@ tenuta fuori dal sintetico.
 2.  **`principal` sui FLOW potrebbe essere quasi sempre SYSTEM / account macchina.** Le fonti
     dicono che il campo esiste su ogni record eCAR, ma non è verificato che sia informativo sui
     FLOW START. Se degenera, il nodo user collassa e l'istanza è a 3 nodi: va dichiarato.
+    **Campione su `ecar` (§10): vuoto nel 99,8% dei FLOW START e nell'82% dei flussi filtrati.**
 3.  **Numeri attesi modesti.** Secondo 2607.29390, sotto valutazione equa tutti i detector
     peggiorano molto (Tab. 5–6). Dal riassunto: Pikachu passa da ~99% a ~50.7% AUC sui soli
     lateral movement su OpTC — *cifra da verificare*. Va presentato con lo stesso framing onesto
@@ -98,7 +99,8 @@ tenuta fuori dal sintetico.
 5.  **Possibile via al JA3 vero (da esplorare).** 2103.03080 dice che i FLOW START rimandano ai
     record del sensore di rete Bro. Non è stato verificato se i log Bro/Zeek siano nella release
     né se contengano `ssl.log` con JA3.
-6.  **Costo:** ~1 TB di JSON. Serve l'estrazione dei soli FLOW START prima di qualsiasi training.
+6.  **Costo:** ~1 TB di JSON (1042 GB, 366 file). Serve l'estrazione dei soli FLOW START prima di
+    qualsiasi training, e `ecar-bro` non è un'alternativa (§10).
 
 ## 6. Candidati scartati
 
@@ -110,6 +112,10 @@ tenuta fuori dal sintetico.
 | **Multi-Source Cybersecurity Logs** (arXiv 2606.18190) | 870 sessioni da 20 minuti (2.3M eventi, 70 con attacco), CC BY 4.0; lateral movement solo nel 21% delle sessioni; nessuna baseline lunga: non adatto a un modello con memoria temporale. |
 
 ## 7. Piano operativo
+
+Il download dei file interi è coperto da `scripts/download_optc.py` (§10), ma per `ecar/` (1042 GB)
+non è realistico su una macchina non enterprise: serve l'estrazione in streaming, ancora da fare (§10).
+Il punto 1 deve leggere `ecar/`: `ecar-bro/` non ha né i flussi interni né le etichette.
 
 1.  Copiare `extract_optc.py` di LMDEval (BSD-2: mantenere licenza e attribuzione), aggiungere
     `principal` e `image_path` all'output, tenere `optc_known_addresses.json` (IP → hostname) e la
@@ -168,10 +174,118 @@ che su UWF è sempre vero.
     2607.29390 (citazione su PicoDomain, cifre delle Tab. 5–6, trappole di valutazione,
     etichettatura ibrida), i campi FLOW e le percentuali di 2103.03080, il README di OpTC-data, i
     dettagli di LMDG, ATLASv2 e 2606.18190.
-*   **Non verificato:** popolamento di `principal` sui FLOW; presenza di log Bro/Zeek con JA3 nella
-    release OpTC; disponibilità del codice di Euler; lo split raccomandato per OpTC.
+*   **Verificato sul dataset reale (2026-09-21):** struttura, numero di file e dimensioni della
+    release (cartella Drive letta senza credenziali), tutto `ecar-bro/evaluation` e un campione dei
+    primi 300 MB di un file `ecar`: §10.
+*   **Non verificato:** `principal` su `ecar` oltre quel campione (un solo file, 09:06–10:55, §10);
+    presenza di JA3 nei log Bro (la cartella `bro/` esiste ma non è elencabile senza credenziali, §10);
+    disponibilità del codice di Euler; lo split raccomandato per OpTC.
 *   Le slide INRIA "A New Hope for DARPA OpTC" (Majorczyk, Pilastre, Dijoud, ACSAC CSET 2025) sono
     state viste solo nelle prime pagine: da leggere per l'etichettatura di OpTC.
+
+## 10. Download (`scripts/download_optc.py`, verificato il 2026-09-21)
+
+```
+python scripts/download_optc.py --dry-run     # elenco e dimensioni, nessun download
+python scripts/download_optc.py               # ecar-bro (~7 GB) + metadati, in data/optc/
+python scripts/download_optc.py --subset ecar-bro ecar --path evaluation/23Sep19-red/AIA-201-225
+```
+
+Solo libreria standard. Sotto `data/optc/` (gitignored): `ecar-bro/`, `ecar/` (è la directory `ecar/`
+che si aspetta `extract_optc.py`) e `meta/` (PDF della ground truth, `ecar.md`, `errata.md` e, da
+LMDEval, `optc_redteam.csv`, `optc_known_addresses.json`, `LICENSE` BSD-2; tutti pinnati per commit).
+Il default è `ecar-bro`; oltre 50 GB serve `--yes`; i download interrotti riprendono.
+
+**Release misurata dall'elenco Drive** (pagina pubblica, senza credenziali):
+
+| Sotto-albero | File | Dimensione |
+|---|---|---|
+| `ecar-bro` | 156 | 6,99 GB (benign 5,85 · evaluation 0,66 · short 0,49) |
+| `ecar` | 366 | 1042 GB (benign 725 · evaluation 268 · short 49) |
+| `bro` | non elencabile | cartelle per data (2019-09-05 … 09-25, più `2019-09-25-day.tgz`) |
+
+Stesso bucket-giorno (`23Sep19-red/AIA-1-25`): 13,2 MB in `ecar-bro`, 1993 MB in `ecar`.
+
+**Trappole reali, già gestite dallo script** (osservate sulla release):
+*   Drive elenca al massimo 50 figli per cartella e senza credenziali non c'è paginazione. Le cartelle
+    di `bro/` arrivano a 50: lo script **si ferma** invece di scaricare un dataset parziale. Per `bro/`
+    servono rclone o l'API Drive con chiave (non provati qui).
+*   `evaluation/23Sep-night` e `23Sep-Night` hanno contenuti diversi e su APFS/Windows si fonderebbero:
+    vengono salvate con suffisso `__<id>` (innocuo per `extract_optc.py`, che scorre con `os.walk` e non
+    legge i nomi delle cartelle). Nei file `ecar-bro` sono dati complementari, non duplicati: 1.924
+    righe / 10 host contro 25.727 righe / 8 host, **0 `id` e 0 host in comune**, finestre sovrapposte il
+    23 settembre (~15:47–16:19). Vanno tenute entrambe.
+*   Sopra ~100 MB Drive passa da una pagina di conferma antivirus. La quota giornaliera risponde con
+    HTML: viene segnalata, mai salvata come dato e non viene aggirata (mai provata dal vivo: coperta
+    solo dai test con un server locale).
+*   Un file compare col nome finale solo se ha la dimensione dell'elenco e il gzip è integro.
+*   Sotto carico (tre job insieme) Drive ha servito una volta una pagina senza elenco: non si è più
+    riprodotta in sequenza (170 cartelle di `ecar`, 0 anomalie). Lo script la ritenta come un 5xx e, se
+    persiste, esce con un errore chiaro. Meglio non lanciare più camminate in parallelo.
+
+**`ecar-bro` NON serve al lateral movement.** Misurato su tutti gli 80 file di `ecar-bro/evaluation`
+(8.680.519 righe: giorni 1–3 e notti) e su due file benigni (1,5 M e 0,18 M righe):
+*   tutte le righe sono FLOW con `action` = `INFO` (non `START`; prima chiave `timestamp`), tutte **in
+    uscita da `142.20.x.x` verso indirizzi esterni**, su porta 443 (~93%) o 80 (~7%): sembra il traffico
+    web visto dal sensore Bro (inferenza);
+*   **0 flussi con entrambi gli estremi interni** (filtro di LMDEval) e **0 dei 1359 `id` di
+    `optc_redteam.csv`** (249 Lateral movement + 1110 Other): né il traffico di lateral movement né le
+    etichette stanno in `ecar-bro`. Per il protocollo LMDEval serve `ecar/`. Il filtro veloce di
+    `extract_optc.py` (`line[1:17] == '"action":"START"'`) su `ecar-bro` non trova nulla;
+*   resta utile solo come ponte verso i log Bro (`bro_uid` sul 100% delle righe). Nei due file campionati
+    porta anche `principal` (utenti di dominio nel 98–99% delle righe) e `image_path` (99–100%). Se `bro/`
+    contenga `ssl.log` con JA3 (§5 punto 5) resta non verificato.
+
+**Cosa c'è in `ecar`** (campione: primi 301 MB gz di `evaluation/23Sep19-red/AIA-1-25`, 1993 MB in
+tutto, il 15% del file, 09:06–10:55 del 23/09; non rappresentativo del resto della giornata):
+*   4,79 M righe, FLOW START 58%. Il filtro esatto di LMDEval (`include_ip`: solo 10.\*/142.\*/fe80:,
+    senza broadcast `.255`) tiene **8.832 flussi = 0,32% dei START = 0,18% delle righe** (~540× in
+    meno), su porte 53, 443, 445 (SMB), 8530, 389, 80, 135, 139, 88. Senza escludere i broadcast i START
+    "interni" erano il 15,7%, ma il 98% era NetBIOS 137/138.
+*   **`principal` è vuoto nel 99,8% dei FLOW START e nell'82% dei flussi tenuti dal filtro** (7.261 su
+    8.832). Il rischio §5.2 **non è escluso**: il dato positivo visto su `ecar-bro` non si trasferisce a
+    `ecar`, l'albero che serve davvero. Il nodo user potrebbe collassare.
+*   Scala, estrapolazione grezza da quel campione: ~15.800 righe per MB gz → ~16,4 miliardi di righe per
+    1042 GB (la fonte dichiara ~17,4 miliardi: torna); ~30 flussi tenuti per MB gz → dell'ordine di
+    10^7 flussi per tutto `ecar`. Dopo il filtro il dataset è piccolo: il costo è leggere il grezzo.
+*   **Le etichette funzionano su `ecar`**: nel solo bucket `evaluation/23Sep19-red/AIA-201-225` (2,33 GB
+    gz, 35,9 M righe, letto in streaming senza scriverlo) compaiono 304 dei 1359 `id` di
+    `optc_redteam.csv` (283 Other + 21 Lateral movement), tutti FLOW START come si aspetta LMDEval.
+    I positivi Lateral movement sono 249 in tutto: il potere statistico sarà basso.
+*   Utente sui flussi filtrati (campione dei primi 300 MB): un join causale `actorID` → PROCESS/CREATE
+    (o `principal` di un evento precedente dello stesso attore) porta i flussi con utente dal 17,8% al
+    **41,5%**, limite inferiore perché il campione parte senza storia. Utenti distinti per host: mediana
+    1. `image_path` è nel 40,6% dei FLOW START filtrati (contro 98–100% in `ecar-bro`).
+*   Velocità di Drive misurata: 12–14 MB/s su una connessione (letture da ~150 MB, ~300 MB e 2,33 GB).
+
+**Conseguenza per l'hardware.** Non serve né conviene tenere 1042 GB di grezzo. Serve l'estrazione in
+streaming (scarica un `.ecar*.json.gz` → tieni solo i FLOW START filtrati, con `principal` e
+`image_path` → cancella il grezzo, con ripresa) su un sottoinsieme esplicito di giorni e bucket.
+`download_optc.py` oggi scarica i file interi: **la modalità di estrazione non esiste ancora**.
+
+**Giorni di `ecar`** (dall'elenco Drive; tempi a ~13 MB/s):
+
+| Cartella | File | Dimensione | Tempo |
+|---|---|---|---|
+| `evaluation/23Sep19-red` (giorno 1) | 27 | 39,9 GB | 0,9 h |
+| `evaluation/24Sep19` (giorno 2) | 47 | 114,0 GB | 2,4 h |
+| `evaluation/25Sept` (giorno 3) | 29 | 31,6 GB | 0,7 h |
+| `evaluation/23Sep-night` + `23Sep-Night` | 20 + 16 | 42,1 + 40,3 GB | 1,8 h |
+| `benign/19Sep19` | 21 | 32,6 GB | 0,7 h |
+| `benign/18-19Sep19` | 40 | 106,8 GB | 2,3 h |
+| `benign/17-18Sep19` | 40 | 156,0 GB | 3,3 h |
+| `benign/20-23Sep19` | 113 | 430,0 GB | 9,2 h |
+| `short/17-18Sep19` | 13 | 48,7 GB | 1,0 h |
+
+Sottoinsieme minimo per una macchina non enterprise (**stime, non misure**; un solo campione del 15% di
+un file): giorno 1 come test + `benign/19Sep19` come train = 72,5 GB grezzi, ~1,6 h di download, entrano
+in un disco da 178 GB. A ~30 flussi per MB gz sono ~2 M flussi; a ~6.000 eventi/s (log di training) sono
+~6 min per epoch. I gradini successivi sono `benign/18-19Sep19` e `24Sep19`. Restringere ai soli bucket
+degli host compromessi riduce ancora, ma cambia il grafo e va dichiarato.
+
+```
+python scripts/download_optc.py --subset ecar --path evaluation/23Sep19-red --path benign/19Sep19 --yes
+```
 
 ## Fonti
 
@@ -186,3 +300,5 @@ che su UWF è sempre vero.
 *   LMDG, arXiv 2508.02942 — https://arxiv.org/abs/2508.02942
 *   ATLASv2, arXiv 2401.01341 — https://arxiv.org/pdf/2401.01341
 *   Multi-Source Cybersecurity Logs, arXiv 2606.18190 — https://arxiv.org/html/2606.18190v1
+*   Tool Go di terzi (MIT) che scarica una fetta di OpTC gestendo l'interstitial di Drive, usato come
+    riferimento per il meccanismo (`datalog/examples/optc/fetch`) — https://github.com/swdunlop/pkg
