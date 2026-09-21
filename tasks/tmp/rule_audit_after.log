@@ -1,4 +1,3 @@
-# v5.1 (TGNConfig defaults: new users mid-stream, ramped guests, one-off benign JA3) — 2026-09-21
 
 === LATERAL — v5 default config (200k events) ===
   gate=label      cfg|dev_new   AUC=0.638±0.020 recall=0.282 benignFPR=0.0068 n=[171, 234, 255]

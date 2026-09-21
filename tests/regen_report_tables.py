@@ -185,7 +185,12 @@ def _cached(kind: str, seed: int, ov: dict, fn, *, fresh: bool = False) -> dict:
     Multi-hour GPU jobs must survive a crash: every finished run is persisted, and the
     value returned is always the JSON round-trip so fresh and cached runs are identical.
     """
-    key = hashlib.sha1(json.dumps([kind, seed, ov], sort_keys=True).encode()).hexdigest()[:10]
+    # The full resolved config is part of the key: a changed TGNConfig default (e.g. a new
+    # generator knob) must not silently reuse a result computed on the old stream.
+    full = dataclasses.asdict(_cfg(seed, ov))
+    key = hashlib.sha1(
+        json.dumps([kind, seed, ov, full], sort_keys=True, default=str).encode()
+    ).hexdigest()[:10]
     path = RUNS_DIR / "cache" / f"{kind}_s{seed}_{key}.json"
     if path.exists() and not fresh:
         print(f"[cache] {path.name}", flush=True)

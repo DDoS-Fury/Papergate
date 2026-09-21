@@ -1,0 +1,302 @@
+{
+ "name": "picodomain",
+ "N": 55436,
+ "span_days": 2.67,
+ "class_counts": {
+  "benign": 54566,
+  "contextual": 412,
+  "lateral": 356,
+  "theft": 102
+ },
+ "attack_prevalence_etype1_5": 0.01569,
+ "label1_prevalence_incl_denied": 0.01569,
+ "distinct": {
+  "source": 8,
+  "config": 14,
+  "device": 12,
+  "user": 15,
+  "dst": 569
+ },
+ "res_global": {
+  "n_resources_hit": 546,
+  "zipf_ols_all": 1.767,
+  "zipf_ols_top100": 1.3,
+  "zipf_ols_top20": 1.578,
+  "zipf_mle": 1.45,
+  "top1_share": 0.2698,
+  "top10_share": 0.7785,
+  "top10pct_res_share": 0.8982
+ },
+ "res_per_user": {
+  "n_users_ge200ev": 10,
+  "zipf_ols": {
+   "0.1": 1.007,
+   "0.5": 1.441,
+   "0.9": 1.898
+  },
+  "zipf_mle": {
+   "0.1": 0.764,
+   "0.5": 0.98,
+   "0.9": 1.675
+  }
+ },
+ "iat_global": {
+  "mean_s": 4.16,
+  "median_s": 1.0,
+  "cv": 5.199,
+  "B": 0.677,
+  "q": {
+   "0.5": 1.0,
+   "0.9": 2.0,
+   "0.99": 93.0,
+   "0.999": 311.83,
+   "1.0": 475.0
+  },
+  "frac_zero": 0.2813
+ },
+ "hour_profile_pct": [
+  5.52,
+  5.13,
+  5.49,
+  5.33,
+  5.27,
+  5.48,
+  5.11,
+  5.6,
+  5.18,
+  5.49,
+  5.34,
+  5.29,
+  5.72,
+  6.87,
+  7.19,
+  3.95,
+  1.77,
+  2.45,
+  2.51,
+  2.58,
+  1.26,
+  0.59,
+  0.61,
+  0.28
+ ],
+ "peak_to_trough_hour": 25.9,
+ "iat_workhours_cv_B": [
+  5.009,
+  0.667
+ ],
+ "iat_per_user": {
+  "n": 11,
+  "cv": {
+   "0.1": 8.704,
+   "0.5": 11.0,
+   "0.9": 27.112
+  },
+  "B": {
+   "0.1": 0.794,
+   "0.5": 0.833,
+   "0.9": 0.929
+  }
+ },
+ "events_per_user": {
+  "n_users": 15,
+  "q": {
+   "0.0": 1.0,
+   "0.1": 2.0,
+   "0.25": 123.5,
+   "0.5": 1073.0,
+   "0.75": 2624.5,
+   "0.9": 3986.2,
+   "0.99": 32180.0,
+   "1.0": 36709.0
+  },
+  "gini": 0.775,
+  "cv": 2.416,
+  "max_over_median": 34.21,
+  "top10pct_share": 0.662
+ },
+ "fanout": {
+  "dst_per_user": {
+   "0.1": 1.0,
+   "0.5": 30.0,
+   "0.9": 192.8,
+   "1.0": 252.0
+  },
+  "dev_per_user": {
+   "0.1": 1.0,
+   "0.5": 1.0,
+   "0.9": 2.0,
+   "1.0": 4.0
+  },
+  "src_per_user": {
+   "0.1": 1.0,
+   "0.5": 1.0,
+   "0.9": 1.0,
+   "1.0": 4.0
+  },
+  "cfg_per_user": {
+   "0.1": 1.0,
+   "0.5": 2.0,
+   "0.9": 2.6,
+   "1.0": 6.0
+  },
+  "users_per_dev": {
+   "0.1": 1.0,
+   "0.5": 1.0,
+   "0.9": 3.0,
+   "1.0": 4.0
+  },
+  "frac_dev_multiuser": 0.417,
+  "cfg_per_dev": {
+   "0.1": 1.0,
+   "0.5": 2.0,
+   "0.9": 2.9,
+   "1.0": 5.0
+  },
+  "src_per_dev": {
+   "0.1": 1.0,
+   "0.5": 1.0,
+   "0.9": 1.0,
+   "1.0": 1.0
+  },
+  "devs_per_src": {
+   "0.1": 1.0,
+   "0.5": 1.5,
+   "0.9": 2.0,
+   "1.0": 2.0
+  }
+ },
+ "ja3_fleet": {
+  "distinct_benign": 14,
+  "top1_share": 0.7577,
+  "top5_share": 0.9813,
+  "entropy_bits": 1.27,
+  "configs_covering_90pct": 3
+ },
+ "novelty": {
+  "train": {
+   "all": {
+    "source": 0.0001,
+    "config": 0.0002,
+    "device": 0.0002,
+    "user": 0.0003,
+    "dst": 0.0026,
+    "any4": 0.0004
+   },
+   "benign": {
+    "source": 0.0001,
+    "config": 0.0002,
+    "device": 0.0002,
+    "user": 0.0003,
+    "dst": 0.0026,
+    "any4": 0.0004,
+    "n": 38805
+   }
+  },
+  "val": {
+   "all": {
+    "source": 0.0004,
+    "config": 0.0007,
+    "device": 0.0004,
+    "user": 0.0004,
+    "dst": 0.0384,
+    "any4": 0.0007
+   },
+   "benign": {
+    "source": 0.0004,
+    "config": 0.0007,
+    "device": 0.0004,
+    "user": 0.0004,
+    "dst": 0.038,
+    "any4": 0.0007,
+    "n": 5528
+   },
+   "contextual": {
+    "source": 0.0,
+    "config": 0.0,
+    "device": 0.0,
+    "user": 0.0,
+    "dst": 0.2,
+    "any4": 0.0,
+    "n": 15
+   }
+  },
+  "test": {
+   "all": {
+    "source": 0.0001,
+    "config": 0.0004,
+    "device": 0.0001,
+    "user": 0.0003,
+    "dst": 0.0231,
+    "any4": 0.0005
+   },
+   "benign": {
+    "source": 0.0001,
+    "config": 0.0004,
+    "device": 0.0001,
+    "user": 0.0002,
+    "dst": 0.0218,
+    "any4": 0.0005,
+    "n": 10233
+   },
+   "contextual": {
+    "source": 0.0,
+    "config": 0.0,
+    "device": 0.0,
+    "user": 0.0,
+    "dst": 0.0554,
+    "any4": 0.0,
+    "n": 397
+   },
+   "lateral": {
+    "source": 0.0,
+    "config": 0.0,
+    "device": 0.0,
+    "user": 0.0028,
+    "dst": 0.0253,
+    "any4": 0.0028,
+    "n": 356
+   },
+   "theft": {
+    "source": 0.0,
+    "config": 0.0,
+    "device": 0.0,
+    "user": 0.0,
+    "dst": 0.0196,
+    "any4": 0.0,
+    "n": 102
+   }
+  }
+ },
+ "new_per_day_2nd_half": {
+  "source": 2.667,
+  "config": 4.667,
+  "device": 4.0,
+  "user": 4.667
+ },
+ "new_frac_benign_2nd_half": {
+  "source": 0.00015,
+  "config": 0.00026,
+  "device": 0.00022,
+  "user": 0.00026,
+  "dst": 0.00977
+ },
+ "user_keys": [
+  "usr:administrator",
+  "usr:bduck",
+  "usr:jdoe",
+  "usr:jsnake",
+  "usr:local.admin",
+  "usr:rmole",
+  "usr:squirrel",
+  "usr:usr:none:10.99.99.152",
+  "usr:usr:none:10.99.99.160",
+  "usr:usr:none:10.99.99.27",
+  "usr:usr:none:10.99.99.29",
+  "usr:usr:none:10.99.99.30",
+  "usr:usr:none:10.99.99.5",
+  "usr:usr:none:fe80::41:8543:8750:873",
+  "usr:usr:none:fe80::ec0f:1243:57c5:20fd"
+ ],
+ "cfg_keys_n_none": 0
+}

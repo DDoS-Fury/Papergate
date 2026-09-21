@@ -105,7 +105,7 @@ class TGNConfig:
     # p_lateral_foreign_cred; p_lateral_role_spoof is the v4 role-claim tell, kept at 0.
     # Fresh slot pools (shared by benign churn and attackers, recycled when exhausted):
     num_new_sources: int = 6000
-    num_new_configs: int = 192
+    num_new_configs: int = 1024
     p_new_source: float = 0.3
     p_config_release: float = 0.00025
     p_config_adopt: float = 0.05
@@ -128,6 +128,17 @@ class TGNConfig:
     # Per-step chance an active theft incident emits its next request. Faster incidents
     # shrink the victim's inter-request gap (msg[9]) until it alone identifies the class.
     p_theft_interleave: float = 0.06
+    # Never-seen users at every point of the stream (training and inference), not only
+    # in the first few percent: num_new_users registered users are hired mid-stream, one
+    # per equal stratum of the stream, and with ramp_guests anonymous visitors keep
+    # arriving over the whole stream like the device fleet.
+    num_new_users: int = 12
+    ramp_guests: bool = True
+    # Share of events issued by a one-off client whose JA3 nobody presented before (new
+    # app, CLI tool, updater). Without it a globally never-seen JA3 is half theft in the
+    # test window (11 benign vs 11 theft, seed 2000). The fresh config pool is sized so
+    # these draws do not recycle slots within one stream.
+    p_benign_new_config: float = 0.003
 
     # De-degeneration knob: probability that a *benign* event performs an
     # authorised-but-non-habitual access (legitimate exploration). With this > 0 the

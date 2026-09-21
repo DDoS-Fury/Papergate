@@ -1,0 +1,156 @@
+ Container papergate-regen-report-run-0e2f4ba630b8 Creating 
+ Container papergate-regen-report-run-0e2f4ba630b8 Created 
+
+================================================================================
+=== PANEL A baseline: iforest | seed=2000 | 200000 ev ===
+================================================================================
+--- UNSUPERVISED TRAINING AND TUNING START (Isolation Forest) ---
+Train benign: 135773 / 140000 events
+Avvio ricerca randomizzata su 10 combinazioni con n_jobs=-1...
+Iter  1/10 - Val AUC: 0.6397 - Params: {'n_estimators': 200, 'max_samples': 'auto', 'max_features': 0.5, 'contamination': 0.05}
+Iter  2/10 - Val AUC: 0.6487 - Params: {'n_estimators': 400, 'max_samples': 'auto', 'max_features': 1.0, 'contamination': 'auto'}
+Iter  3/10 - Val AUC: 0.6440 - Params: {'n_estimators': 300, 'max_samples': 'auto', 'max_features': 0.8, 'contamination': 0.01}
+Iter  4/10 - Val AUC: 0.6380 - Params: {'n_estimators': 400, 'max_samples': 'auto', 'max_features': 0.8, 'contamination': 0.1}
+Iter  5/10 - Val AUC: 0.6468 - Params: {'n_estimators': 100, 'max_samples': 512, 'max_features': 0.8, 'contamination': 0.1}
+Iter  6/10 - Val AUC: 0.6651 - Params: {'n_estimators': 200, 'max_samples': 1024, 'max_features': 1.0, 'contamination': 0.01}
+Iter  7/10 - Val AUC: 0.6440 - Params: {'n_estimators': 300, 'max_samples': 'auto', 'max_features': 0.8, 'contamination': 0.1}
+Iter  8/10 - Val AUC: 0.6451 - Params: {'n_estimators': 400, 'max_samples': 1024, 'max_features': 0.8, 'contamination': 0.1}
+Iter  9/10 - Val AUC: 0.6440 - Params: {'n_estimators': 300, 'max_samples': 256, 'max_features': 0.8, 'contamination': 0.01}
+Iter 10/10 - Val AUC: 0.6445 - Params: {'n_estimators': 200, 'max_samples': 1024, 'max_features': 0.8, 'contamination': 0.01}
+
+Migliori parametri trovati (Val AUC=0.6651): {'n_estimators': 200, 'max_samples': 1024, 'max_features': 1.0, 'contamination': 0.01}
+
+--- THRESHOLD CALIBRATION (on the benign validation stream) ---
+Benign val score: mean=0.4548 p95=0.5372 | threshold@FPR=0.01: 0.5898
+
+--- INFERENCE / ANOMALY DETECTION PHASE START ---
+Test Stream | AUC: 0.6629 | AP: 0.0623
+At threshold 0.5898 | Precision: 0.1660 | Recall: 0.0638
+
+--- PER-ANOMALY-TYPE METRICS ---
+  policy     | n=  23 | AUC: 0.6361 | AP: 0.0009 | Recall@thr: 0.0000
+  contextual | n=  82 | AUC: 0.9675 | AP: 0.0997 | Recall@thr: 0.7073
+  lateral    | n= 221 | AUC: 0.5135 | AP: 0.0067 | Recall@thr: 0.0271
+  cred-theft | n= 245 | AUC: 0.6128 | AP: 0.0087 | Recall@thr: 0.0082
+  exfil      | n=  54 | AUC: 0.9564 | AP: 0.0177 | Recall@thr: 0.1667
+  benign-denied | n= 661 | AUC: 0.6706 | AP: 0.0249 | Recall@thr: 0.0106
+
+================================================================================
+=== PANEL A baseline: lookup_rules | seed=2000 | 200000 ev ===
+================================================================================
+
+--- LOOKUP RULES (gate=proto-self, labels through train) | threshold k=4 | benign test FPR=0.0607 ---
+  lateral    | n= 221 | AUC: 0.6328 | AP: 0.0084 | Recall@k: 0.1312
+  cred-theft | n= 245 | AUC: 0.7615 | AP: 0.0178 | Recall@k: 0.2816
+
+================================================================================
+=== PANEL A baseline: lookup_rules_val | seed=2000 | 200000 ev ===
+================================================================================
+
+--- LOOKUP RULES (gate=proto-self, labels through val) | threshold k=3 | benign test FPR=0.1356 ---
+  lateral    | n= 221 | AUC: 0.6863 | AP: 0.0106 | Recall@k: 0.3213
+  cred-theft | n= 245 | AUC: 0.8069 | AP: 0.0275 | Recall@k: 0.6041
+
+================================================================================
+=== PANEL A baseline: lookup_rules_all | seed=2000 | 200000 ev ===
+================================================================================
+
+--- LOOKUP RULES (gate=all, labels through train) | threshold k=3 | benign test FPR=0.0075 ---
+  lateral    | n= 221 | AUC: 0.6654 | AP: 0.0157 | Recall@k: 0.0724
+  cred-theft | n= 245 | AUC: 0.5100 | AP: 0.0384 | Recall@k: 0.0898
+
+================================================================================
+=== PANEL A: TGN | seed=2000 | default config, 200000 ev / 15 ep ===
+================================================================================
+Generating streaming data...
+Using device: cuda
+--- ONE-CLASS TRAINING START (benign traffic only) ---
+Epoch 01/15 [train]:   0%|          | 0/700 [00:00<?, ?it/s]Epoch 01/15 [train]:  21%|##1       | 149/700 [00:10<00:37, 14.80it/s, loss=2.6536]Epoch 01/15 [train]:  42%|####2     | 297/700 [00:24<00:34, 11.78it/s, loss=2.6046]Epoch 01/15 [train]:  57%|#####7    | 400/700 [00:36<00:29, 10.15it/s, loss=2.3615]Epoch 01/15 [train]:  69%|######9   | 483/700 [00:48<00:23,  9.07it/s, loss=1.5678]Epoch 01/15 [train]:  79%|#######9  | 556/700 [00:59<00:17,  8.18it/s, loss=1.3996]Epoch 01/15 [train]:  79%|#######9  | 556/700 [01:10<00:17,  8.18it/s, loss=1.4163]Epoch 01/15 [train]:  89%|########8 | 620/700 [01:10<00:10,  7.55it/s, loss=1.4119]Epoch 01/15 [train]:  97%|#########7| 682/700 [01:21<00:02,  6.94it/s, loss=1.4045]Epoch 01 | Train Loss: 2.2759
+Epoch 01/15 [train]: 100%|##########| 700/700 [01:24<00:00,  8.30it/s, loss=1.5643]
+Epoch 02/15 [train]:   0%|          | 0/700 [00:00<?, ?it/s]Epoch 02/15 [train]:  23%|##2       | 160/700 [00:10<00:34, 15.88it/s, loss=1.0442]Epoch 02/15 [train]:  23%|##2       | 160/700 [00:25<00:34, 15.88it/s, loss=1.0643]Epoch 02/15 [train]:  45%|####5     | 315/700 [00:25<00:32, 11.85it/s, loss=1.1871]Epoch 02/15 [train]:  59%|#####9    | 416/700 [00:38<00:27, 10.15it/s, loss=1.2136]Epoch 02/15 [train]:  71%|#######1  | 497/700 [00:49<00:22,  9.00it/s, loss=1.2390]Epoch 02/15 [train]:  81%|########1 | 568/700 [01:00<00:16,  8.11it/s, loss=1.4390]Epoch 02/15 [train]:  90%|######### | 632/700 [01:11<00:09,  7.40it/s, loss=1.2776]Epoch 02/15 [train]:  99%|#########8| 691/700 [01:22<00:01,  6.85it/s, loss=1.3287]Epoch 02 | Train Loss: 1.2721
+Epoch 02/15 [train]: 100%|##########| 700/700 [01:23<00:00,  8.34it/s, loss=1.2970]
+Epoch 03/15 [train]:   0%|          | 0/700 [00:00<?, ?it/s]Epoch 03/15 [train]:  22%|##2       | 156/700 [00:10<00:34, 15.58it/s, loss=0.8715]Epoch 03/15 [train]:  22%|##2       | 156/700 [00:21<00:34, 15.58it/s, loss=0.9788]Epoch 03/15 [train]:  39%|###8      | 272/700 [00:21<00:34, 12.27it/s, loss=0.9788]Epoch 03/15 [train]:  54%|#####3    | 375/700 [00:33<00:31, 10.33it/s, loss=0.8945]Epoch 03/15 [train]:  66%|######5   | 459/700 [00:45<00:26,  9.16it/s, loss=1.0184]Epoch 03/15 [train]:  76%|#######6  | 533/700 [00:56<00:20,  8.23it/s, loss=1.0291]Epoch 03/15 [train]:  86%|########5 | 599/700 [01:07<00:13,  7.52it/s, loss=1.3249]Epoch 03/15 [train]:  94%|#########4| 660/700 [01:17<00:05,  6.98it/s, loss=1.1430]Epoch 03/15 [train]: 100%|##########| 700/700 [01:25<00:00,  8.23it/s, loss=1.2693]
+Epoch 03 | Train Loss: 1.0418
+Epoch 04/15 [train]:   0%|          | 0/700 [00:00<?, ?it/s]Epoch 04/15 [train]:  23%|##2       | 158/700 [00:10<00:34, 15.73it/s, loss=0.7584]Epoch 04/15 [train]:  23%|##2       | 158/700 [00:26<00:34, 15.73it/s, loss=0.7470]Epoch 04/15 [train]:  45%|####4     | 312/700 [00:26<00:33, 11.45it/s, loss=0.9511]Epoch 04/15 [train]:  58%|#####8    | 408/700 [00:38<00:29,  9.89it/s, loss=1.1828]Epoch 04/15 [train]:  70%|######9   | 487/700 [00:49<00:24,  8.76it/s, loss=0.9654]Epoch 04/15 [train]:  79%|#######9  | 556/700 [01:00<00:18,  7.94it/s, loss=1.0864]Epoch 04/15 [train]:  88%|########8 | 619/700 [01:11<00:11,  7.34it/s, loss=1.1119]Epoch 04/15 [train]:  97%|#########7| 680/700 [01:22<00:02,  6.82it/s, loss=1.2791]Epoch 04/15 [train]: 100%|##########| 700/700 [01:25<00:00,  8.15it/s, loss=1.2315]
+Epoch 04 | Train Loss: 0.9986
+Epoch 05/15 [train]:   0%|          | 0/700 [00:00<?, ?it/s]Epoch 05/15 [train]:  22%|##2       | 157/700 [00:10<00:34, 15.59it/s, loss=0.6530]Epoch 05/15 [train]:  22%|##2       | 157/700 [00:20<00:34, 15.59it/s, loss=0.7753]Epoch 05/15 [train]:  37%|###7      | 262/700 [00:20<00:34, 12.52it/s, loss=0.8078]Epoch 05/15 [train]:  52%|#####2    | 366/700 [00:32<00:32, 10.39it/s, loss=0.7796]Epoch 05/15 [train]:  64%|######4   | 450/700 [00:44<00:27,  9.09it/s, loss=1.1513]Epoch 05/15 [train]:  75%|#######4  | 522/700 [00:54<00:21,  8.32it/s, loss=1.0241]Epoch 05/15 [train]:  84%|########4 | 591/700 [01:05<00:14,  7.65it/s, loss=1.2028]Epoch 05/15 [train]:  94%|#########3| 655/700 [01:16<00:06,  7.05it/s, loss=1.1233]Epoch 05/15 [train]: 100%|##########| 700/700 [01:24<00:00,  8.25it/s, loss=1.1532]
+Epoch 05 | Train Loss: 0.9378
+Epoch 06/15 [train]:   0%|          | 0/700 [00:00<?, ?it/s]Epoch 06/15 [train]:  23%|##2       | 159/700 [00:10<00:34, 15.85it/s, loss=0.6168]Epoch 06/15 [train]:  23%|##2       | 159/700 [00:25<00:34, 15.85it/s, loss=0.7227]Epoch 06/15 [train]:  44%|####4     | 311/700 [00:25<00:32, 11.94it/s, loss=0.6793]Epoch 06/15 [train]:  59%|#####8    | 413/700 [00:37<00:27, 10.26it/s, loss=0.9597]Epoch 06/15 [train]:  71%|#######   | 495/700 [00:49<00:22,  9.10it/s, loss=0.8989]Epoch 06/15 [train]:  81%|########1 | 567/700 [01:00<00:16,  8.19it/s, loss=1.0290]Epoch 06/15 [train]:  90%|######### | 632/700 [01:11<00:09,  7.45it/s, loss=1.1359]Epoch 06/15 [train]:  99%|#########8| 691/700 [01:21<00:01,  6.90it/s, loss=1.2197]Epoch 06 | Train Loss: 0.9074
+Epoch 06/15 [train]: 100%|##########| 700/700 [01:23<00:00,  8.40it/s, loss=1.1727]
+Epoch 07/15 [train]:   0%|          | 0/700 [00:00<?, ?it/s]Epoch 07/15 [train]:  23%|##2       | 158/700 [00:10<00:34, 15.78it/s, loss=0.5991]Epoch 07/15 [train]:  23%|##2       | 158/700 [00:21<00:34, 15.78it/s, loss=1.0105]Epoch 07/15 [train]:  40%|###9      | 277/700 [00:21<00:34, 12.38it/s, loss=0.9907]Epoch 07/15 [train]:  54%|#####4    | 381/700 [00:34<00:31, 10.20it/s, loss=0.9254]Epoch 07/15 [train]:  66%|######6   | 462/700 [00:45<00:26,  9.10it/s, loss=1.0299]Epoch 07/15 [train]:  77%|#######6  | 536/700 [00:57<00:20,  8.15it/s, loss=1.0675]Epoch 07/15 [train]:  86%|########5 | 601/700 [01:07<00:13,  7.50it/s, loss=1.2343]Epoch 07/15 [train]:  95%|#########4| 663/700 [01:18<00:05,  6.92it/s, loss=1.0027]Epoch 07/15 [train]: 100%|##########| 700/700 [01:25<00:00,  8.21it/s, loss=1.2108]
+Epoch 07 | Train Loss: 0.8885
+Epoch 08/15 [train]:   0%|          | 0/700 [00:00<?, ?it/s]Epoch 08/15 [train]:  22%|##2       | 157/700 [00:10<00:34, 15.63it/s, loss=0.6040]Epoch 08/15 [train]:  22%|##2       | 157/700 [00:25<00:34, 15.63it/s, loss=0.7800]Epoch 08/15 [train]:  45%|####4     | 314/700 [00:26<00:33, 11.59it/s, loss=0.8167]Epoch 08/15 [train]:  59%|#####8    | 413/700 [00:38<00:28, 10.09it/s, loss=0.9636]Epoch 08/15 [train]:  71%|#######   | 495/700 [00:49<00:22,  8.98it/s, loss=0.9577]Epoch 08/15 [train]:  81%|########  | 566/700 [01:00<00:16,  8.19it/s, loss=0.8001]Epoch 08/15 [train]:  90%|######### | 632/700 [01:11<00:09,  7.48it/s, loss=1.0782]Epoch 08/15 [train]:  99%|#########9| 693/700 [01:22<00:01,  6.93it/s, loss=0.9871]Epoch 08/15 [train]: 100%|##########| 700/700 [01:23<00:00,  8.37it/s, loss=1.1535]
+Epoch 08 | Train Loss: 0.8644
+Epoch 09/15 [train]:   0%|          | 0/700 [00:00<?, ?it/s]Epoch 09/15 [train]:  23%|##2       | 160/700 [00:10<00:33, 15.98it/s, loss=0.7012]Epoch 09/15 [train]:  23%|##2       | 160/700 [00:22<00:33, 15.98it/s, loss=0.8678]Epoch 09/15 [train]:  41%|####1     | 288/700 [00:22<00:33, 12.39it/s, loss=0.8006]Epoch 09/15 [train]:  56%|#####6    | 392/700 [00:34<00:29, 10.45it/s, loss=0.8933]Epoch 09/15 [train]:  68%|######8   | 476/700 [00:46<00:24,  9.14it/s, loss=0.9614]Epoch 09/15 [train]:  78%|#######8  | 548/700 [00:57<00:18,  8.29it/s, loss=0.9322]Epoch 09/15 [train]:  88%|########7 | 615/700 [01:08<00:11,  7.61it/s, loss=1.0934]Epoch 09/15 [train]:  97%|#########6| 678/700 [01:19<00:03,  7.03it/s, loss=1.1789]Epoch 09 | Train Loss: 0.8533
+Epoch 09/15 [train]: 100%|##########| 700/700 [01:23<00:00,  8.41it/s, loss=1.0934]
+Epoch 10/15 [train]:   0%|          | 0/700 [00:00<?, ?it/s]Epoch 10/15 [train]:  23%|##2       | 160/700 [00:10<00:33, 15.96it/s, loss=0.5600]Epoch 10/15 [train]:  46%|####5     | 320/700 [00:25<00:32, 11.86it/s, loss=0.7771]Epoch 10/15 [train]:  60%|######    | 421/700 [00:38<00:27, 10.18it/s, loss=0.7789]Epoch 10/15 [train]:  60%|######    | 421/700 [00:49<00:27, 10.18it/s, loss=0.8621]Epoch 10/15 [train]:  71%|#######   | 496/700 [00:49<00:22,  9.10it/s, loss=0.9520]Epoch 10/15 [train]:  81%|########1 | 567/700 [01:00<00:16,  8.19it/s, loss=0.9469]Epoch 10/15 [train]:  90%|######### | 632/700 [01:10<00:09,  7.53it/s, loss=1.1878]Epoch 10/15 [train]:  99%|#########9| 694/700 [01:21<00:00,  6.95it/s, loss=1.0289]Epoch 10/15 [train]: 100%|##########| 700/700 [01:22<00:00,  8.46it/s, loss=1.1926]
+Epoch 10 | Train Loss: 0.8452
+Epoch 11/15 [train]:   0%|          | 0/700 [00:00<?, ?it/s]Epoch 11/15 [train]:  23%|##3       | 162/700 [00:10<00:33, 16.09it/s, loss=0.7209]Epoch 11/15 [train]:  46%|####6     | 323/700 [00:25<00:31, 11.97it/s, loss=0.9834]Epoch 11/15 [train]:  46%|####6     | 323/700 [00:36<00:31, 11.97it/s, loss=0.9797]Epoch 11/15 [train]:  58%|#####8    | 407/700 [00:36<00:27, 10.49it/s, loss=0.9693]Epoch 11/15 [train]:  70%|######9   | 489/700 [00:47<00:22,  9.29it/s, loss=0.8784]Epoch 11/15 [train]:  80%|########  | 563/700 [00:58<00:16,  8.35it/s, loss=0.8015]Epoch 11/15 [train]:  90%|######### | 630/700 [01:09<00:09,  7.66it/s, loss=1.1102]Epoch 11/15 [train]:  99%|#########9| 693/700 [01:20<00:00,  7.04it/s, loss=1.0279]Epoch 11/15 [train]: 100%|##########| 700/700 [01:21<00:00,  8.58it/s, loss=1.1102]
+Epoch 11 | Train Loss: 0.8448
+Epoch 12/15 [train]:   0%|          | 0/700 [00:00<?, ?it/s]Epoch 12/15 [train]:  23%|##3       | 162/700 [00:10<00:33, 16.09it/s, loss=0.7666]Epoch 12/15 [train]:  23%|##3       | 162/700 [00:24<00:33, 16.09it/s, loss=0.8448]Epoch 12/15 [train]:  44%|####4     | 309/700 [00:24<00:32, 12.20it/s, loss=0.8178]Epoch 12/15 [train]:  59%|#####8    | 412/700 [00:36<00:27, 10.40it/s, loss=0.7688]Epoch 12/15 [train]:  71%|#######   | 495/700 [00:48<00:22,  9.19it/s, loss=0.9705]Epoch 12/15 [train]:  81%|########1 | 567/700 [00:59<00:15,  8.34it/s, loss=0.9387]Epoch 12/15 [train]:  91%|######### | 634/700 [01:10<00:08,  7.61it/s, loss=1.1024]Epoch 12/15 [train]:  99%|#########9| 696/700 [01:20<00:00,  7.04it/s, loss=1.1668]Epoch 12 | Train Loss: 0.8302
+Epoch 12/15 [train]: 100%|##########| 700/700 [01:21<00:00,  8.57it/s, loss=1.1057]
+Epoch 13/15 [train]:   0%|          | 0/700 [00:00<?, ?it/s]Epoch 13/15 [train]:  23%|##3       | 161/700 [00:10<00:33, 16.05it/s, loss=0.6862]Epoch 13/15 [train]:  23%|##3       | 161/700 [00:22<00:33, 16.05it/s, loss=0.7862]Epoch 13/15 [train]:  42%|####1     | 292/700 [00:22<00:32, 12.47it/s, loss=0.7649]Epoch 13/15 [train]:  57%|#####6    | 397/700 [00:34<00:28, 10.56it/s, loss=0.7462]Epoch 13/15 [train]:  69%|######8   | 482/700 [00:46<00:23,  9.30it/s, loss=0.7181]Epoch 13/15 [train]:  79%|#######9  | 556/700 [00:57<00:17,  8.43it/s, loss=0.8593]Epoch 13/15 [train]:  89%|########9 | 624/700 [01:08<00:09,  7.69it/s, loss=0.9323]Epoch 13/15 [train]:  98%|#########8| 686/700 [01:19<00:01,  7.11it/s, loss=1.0702]Epoch 13 | Train Loss: 0.8408
+Epoch 13/15 [train]: 100%|##########| 700/700 [01:21<00:00,  8.56it/s, loss=1.1557]
+Epoch 14/15 [train]:   0%|          | 0/700 [00:00<?, ?it/s]Epoch 14/15 [train]:  23%|##3       | 161/700 [00:10<00:33, 16.07it/s, loss=0.7053]Epoch 14/15 [train]:  23%|##3       | 161/700 [00:20<00:33, 16.07it/s, loss=0.7873]Epoch 14/15 [train]:  39%|###9      | 275/700 [00:20<00:33, 12.80it/s, loss=0.6441]Epoch 14/15 [train]:  55%|#####4    | 382/700 [00:33<00:29, 10.75it/s, loss=0.9399]Epoch 14/15 [train]:  67%|######7   | 469/700 [00:44<00:24,  9.42it/s, loss=0.8801]Epoch 14/15 [train]:  78%|#######7  | 544/700 [00:55<00:18,  8.51it/s, loss=0.9459]Epoch 14/15 [train]:  88%|########7 | 613/700 [01:06<00:11,  7.75it/s, loss=1.0139]Epoch 14/15 [train]:  97%|#########6| 676/700 [01:17<00:03,  7.14it/s, loss=1.3263]Epoch 14 | Train Loss: 0.8148
+Epoch 14/15 [train]: 100%|##########| 700/700 [01:21<00:00,  8.56it/s, loss=1.0883]
+Epoch 15/15 [train]:   0%|          | 0/700 [00:00<?, ?it/s]Epoch 15/15 [train]:  23%|##3       | 162/700 [00:10<00:33, 16.12it/s, loss=0.8058]Epoch 15/15 [train]:  46%|####6     | 324/700 [00:25<00:31, 12.00it/s, loss=0.9445]Epoch 15/15 [train]:  61%|######    | 426/700 [00:38<00:26, 10.27it/s, loss=0.8833]Epoch 15/15 [train]:  61%|######    | 426/700 [00:48<00:26, 10.27it/s, loss=0.8897]Epoch 15/15 [train]:  71%|#######1  | 499/700 [00:48<00:21,  9.24it/s, loss=0.7296]Epoch 15/15 [train]:  82%|########1 | 571/700 [00:59<00:15,  8.32it/s, loss=0.7989]Epoch 15/15 [train]:  91%|#########1| 637/700 [01:10<00:08,  7.62it/s, loss=1.0679]Epoch 15/15 [train]: 100%|#########9| 699/700 [01:21<00:00,  7.01it/s, loss=1.0507]Epoch 15 | Train Loss: 0.8125
+
+--- THRESHOLD CALIBRATION (on the benign validation stream) ---
+Epoch 15/15 [train]: 100%|##########| 700/700 [01:21<00:00,  8.59it/s, loss=1.2066]
+Calibration pass A (val replay, no threshold):   0%|          | 0/20000 [00:00<?, ?it/s]Calibration pass A (val replay, no threshold):   4%|3         | 788/20000 [00:10<04:04, 78.72it/s]Calibration pass A (val replay, no threshold):   8%|7         | 1580/20000 [00:20<03:53, 78.95it/s]Calibration pass A (val replay, no threshold):  12%|#1        | 2383/20000 [00:30<03:41, 79.54it/s]Calibration pass A (val replay, no threshold):  16%|#5        | 3186/20000 [00:40<03:31, 79.67it/s]Calibration pass A (val replay, no threshold):  20%|#9        | 3985/20000 [00:50<03:21, 79.57it/s]Calibration pass A (val replay, no threshold):  24%|##3       | 4779/20000 [01:00<03:12, 79.23it/s]Calibration pass A (val replay, no threshold):  28%|##7       | 5565/20000 [01:10<03:02, 78.97it/s]Calibration pass A (val replay, no threshold):  32%|###1      | 6351/20000 [01:20<02:53, 78.85it/s]Calibration pass A (val replay, no threshold):  36%|###5      | 7137/20000 [01:30<02:43, 78.56it/s]Calibration pass A (val replay, no threshold):  40%|###9      | 7917/20000 [01:40<02:34, 78.19it/s]Calibration pass A (val replay, no threshold):  44%|####3     | 8704/20000 [01:50<02:24, 78.31it/s]Calibration pass A (val replay, no threshold):  47%|####7     | 9490/20000 [02:00<02:14, 78.35it/s]Calibration pass A (val replay, no threshold):  51%|#####1    | 10278/20000 [02:10<02:03, 78.48it/s]Calibration pass A (val replay, no threshold):  55%|#####5    | 11066/20000 [02:20<01:53, 78.40it/s]Calibration pass A (val replay, no threshold):  59%|#####9    | 11856/20000 [02:30<01:43, 78.58it/s]Calibration pass A (val replay, no threshold):  63%|######3   | 12646/20000 [02:40<01:33, 78.64it/s]Calibration pass A (val replay, no threshold):  67%|######7   | 13435/20000 [02:50<01:23, 78.67it/s]Calibration pass A (val replay, no threshold):  71%|#######1  | 14224/20000 [03:00<01:13, 78.71it/s]Calibration pass A (val replay, no threshold):  75%|#######5  | 15015/20000 [03:10<01:03, 78.81it/s]Calibration pass A (val replay, no threshold):  79%|#######9  | 15806/20000 [03:20<00:53, 78.63it/s]Calibration pass A (val replay, no threshold):  83%|########2 | 16596/20000 [03:30<00:43, 78.73it/s]Calibration pass A (val replay, no threshold):  87%|########6 | 17386/20000 [03:40<00:33, 78.64it/s]Calibration pass A (val replay, no threshold):  91%|######### | 18171/20000 [03:50<00:23, 78.54it/s]Calibration pass A (val replay, no threshold):  95%|#########4| 18958/20000 [04:00<00:13, 78.58it/s]Calibration pass A (val replay, no threshold):  99%|#########8| 19745/20000 [04:10<00:03, 78.48it/s]Calibration pass A (val replay, no threshold): 100%|##########| 20000/20000 [04:14<00:00, 78.72it/s]
+Calibration pass B (val replay, test gate):   0%|          | 0/20000 [00:00<?, ?it/s]Calibration pass B (val replay, test gate):   4%|3         | 782/20000 [00:10<04:05, 78.13it/s]Calibration pass B (val replay, test gate):   8%|7         | 1569/20000 [00:20<03:54, 78.45it/s]Calibration pass B (val replay, test gate):  12%|#1        | 2365/20000 [00:30<03:43, 78.97it/s]Calibration pass B (val replay, test gate):  16%|#5        | 3161/20000 [00:40<03:33, 79.05it/s]Calibration pass B (val replay, test gate):  20%|#9        | 3953/20000 [00:50<03:23, 78.84it/s]Calibration pass B (val replay, test gate):  24%|##3       | 4738/20000 [01:00<03:14, 78.55it/s]Calibration pass B (val replay, test gate):  28%|##7       | 5518/20000 [01:10<03:05, 78.26it/s]Calibration pass B (val replay, test gate):  32%|###1      | 6302/20000 [01:20<02:54, 78.29it/s]Calibration pass B (val replay, test gate):  35%|###5      | 7086/20000 [01:30<02:44, 78.28it/s]Calibration pass B (val replay, test gate):  39%|###9      | 7869/20000 [01:40<02:35, 78.09it/s]Calibration pass B (val replay, test gate):  43%|####3     | 8653/20000 [01:50<02:25, 78.18it/s]Calibration pass B (val replay, test gate):  47%|####7     | 9437/20000 [02:00<02:15, 78.21it/s]Calibration pass B (val replay, test gate):  51%|#####1    | 10222/20000 [02:10<02:04, 78.27it/s]Calibration pass B (val replay, test gate):  55%|#####5    | 11007/20000 [02:20<01:55, 78.14it/s]Calibration pass B (val replay, test gate):  59%|#####8    | 11797/20000 [02:30<01:44, 78.38it/s]Calibration pass B (val replay, test gate):  63%|######2   | 12587/20000 [02:40<01:34, 78.49it/s]Calibration pass B (val replay, test gate):  67%|######6   | 13375/20000 [02:50<01:24, 78.52it/s]Calibration pass B (val replay, test gate):  71%|#######   | 14161/20000 [03:00<01:14, 78.52it/s]Calibration pass B (val replay, test gate):  75%|#######4  | 14947/20000 [03:10<01:04, 78.48it/s]Calibration pass B (val replay, test gate):  79%|#######8  | 15731/20000 [03:20<00:54, 78.39it/s]Calibration pass B (val replay, test gate):  83%|########2 | 16523/20000 [03:30<00:44, 78.62it/s]Calibration pass B (val replay, test gate):  87%|########6 | 17315/20000 [03:40<00:34, 78.71it/s]Calibration pass B (val replay, test gate):  91%|######### | 18104/20000 [03:50<00:24, 78.65it/s]Calibration pass B (val replay, test gate):  94%|#########4| 18888/20000 [04:00<00:14, 78.65it/s]Calibration pass B (val replay, test gate):  94%|#########4| 18889/20000 [04:00<00:14, 78.52it/s]Calibration pass B (val replay, test gate):  98%|#########8| 19671/20000 [04:10<00:04, 78.41it/s]Calibration pass B (val replay, test gate): 100%|##########| 20000/20000 [04:14<00:00, 78.46it/s]
+Benign val score: mean=0.0113 p95=0.0163
+threshold@cost_ratio=20.0: 0.0364 [PRIMARY — persisted and used by serving for signal-clean events; requires labelled lateral movement in the validation window; clean cal: n_benign=18533 n_lateral=116] | threshold_dirty@FPR=0.01: 0.1924 [signal-dirty events] | threshold_clean_unsup@FPR=0.01: 0.0681 [label-free alternative, calibration metadata only]
+  clean-stream lateral recall vs benign FPR (reference curve):
+    thr=0.0000 | lateral_recall=1.000 | benign_fpr=1.0000
+    thr=0.0000 | lateral_recall=0.991 | benign_fpr=0.7993
+    thr=0.0001 | lateral_recall=0.888 | benign_fpr=0.5982
+    thr=0.0004 | lateral_recall=0.681 | benign_fpr=0.3983
+    thr=0.0019 | lateral_recall=0.491 | benign_fpr=0.1982
+    thr=1.0000 | lateral_recall=0.000 | benign_fpr=0.0009
+
+--- INFERENCE / ANOMALY DETECTION PHASE START (per-event) ---
+Inferenza (replay test):   0%|          | 0/40000 [00:00<?, ?it/s]Inferenza (replay test):   2%|1         | 784/40000 [00:10<08:20, 78.38it/s]Inferenza (replay test):   4%|3         | 1568/40000 [00:20<08:11, 78.27it/s]Inferenza (replay test):   6%|5         | 2350/40000 [00:30<08:02, 78.09it/s]Inferenza (replay test):   8%|7         | 3136/40000 [00:40<07:50, 78.28it/s]Inferenza (replay test):  10%|9         | 3922/40000 [00:50<07:41, 78.11it/s]Inferenza (replay test):  12%|#1        | 4713/40000 [01:00<07:29, 78.42it/s]Inferenza (replay test):  14%|#3        | 5504/40000 [01:10<07:20, 78.22it/s]Inferenza (replay test):  16%|#5        | 6295/40000 [01:20<07:09, 78.47it/s]Inferenza (replay test):  18%|#7        | 7085/40000 [01:30<06:59, 78.49it/s]Inferenza (replay test):  20%|#9        | 7871/40000 [01:40<06:50, 78.26it/s]Inferenza (replay test):  22%|##1       | 8649/40000 [01:50<06:41, 78.10it/s]Inferenza (replay test):  24%|##3       | 9444/40000 [02:00<06:29, 78.52it/s]Inferenza (replay test):  26%|##5       | 10239/40000 [02:10<06:18, 78.61it/s]Inferenza (replay test):  28%|##7       | 11034/40000 [02:20<06:07, 78.86it/s]Inferenza (replay test):  30%|##9       | 11829/40000 [02:30<05:56, 78.98it/s]Inferenza (replay test):  32%|###1      | 12622/40000 [02:40<05:46, 78.93it/s]Inferenza (replay test):  34%|###3      | 13411/40000 [02:50<05:37, 78.84it/s]Inferenza (replay test):  35%|###5      | 14198/40000 [03:00<05:27, 78.76it/s]Inferenza (replay test):  37%|###7      | 14984/40000 [03:10<05:18, 78.59it/s]Inferenza (replay test):  39%|###9      | 15768/40000 [03:20<05:08, 78.51it/s]Inferenza (replay test):  41%|####1     | 16554/40000 [03:30<04:58, 78.51it/s]Inferenza (replay test):  43%|####3     | 17340/40000 [03:40<04:48, 78.50it/s]Inferenza (replay test):  45%|####5     | 18132/40000 [03:50<04:37, 78.68it/s]Inferenza (replay test):  47%|####7     | 18924/40000 [04:00<04:28, 78.56it/s]Inferenza (replay test):  49%|####9     | 19707/40000 [04:10<04:18, 78.47it/s]Inferenza (replay test):  51%|#####1    | 20493/40000 [04:21<04:08, 78.49it/s]Inferenza (replay test):  53%|#####3    | 21279/40000 [04:31<03:58, 78.39it/s]Inferenza (replay test):  55%|#####5    | 22062/40000 [04:41<03:48, 78.35it/s]Inferenza (replay test):  57%|#####7    | 22850/40000 [04:51<03:38, 78.46it/s]Inferenza (replay test):  59%|#####9    | 23647/40000 [05:01<03:27, 78.81it/s]Inferenza (replay test):  61%|######1   | 24444/40000 [05:11<03:16, 79.06it/s]Inferenza (replay test):  63%|######3   | 25241/40000 [05:21<03:06, 78.96it/s]Inferenza (replay test):  65%|######5   | 26029/40000 [05:31<02:57, 78.52it/s]Inferenza (replay test):  67%|######7   | 26811/40000 [05:41<02:48, 78.40it/s]Inferenza (replay test):  69%|######8   | 27597/40000 [05:51<02:38, 78.45it/s]Inferenza (replay test):  71%|#######   | 28383/40000 [06:01<02:28, 78.40it/s]Inferenza (replay test):  73%|#######2  | 29175/40000 [06:11<02:17, 78.61it/s]Inferenza (replay test):  75%|#######4  | 29967/40000 [06:21<02:07, 78.78it/s]Inferenza (replay test):  77%|#######6  | 30759/40000 [06:31<01:57, 78.53it/s]Inferenza (replay test):  79%|#######8  | 31541/40000 [06:41<01:47, 78.41it/s]Inferenza (replay test):  81%|########  | 32331/40000 [06:51<01:37, 78.57it/s]Inferenza (replay test):  83%|########2 | 33121/40000 [07:01<01:27, 78.59it/s]Inferenza (replay test):  85%|########4 | 33908/40000 [07:11<01:17, 78.29it/s]Inferenza (replay test):  87%|########6 | 34698/40000 [07:21<01:07, 78.47it/s]Inferenza (replay test):  89%|########8 | 35488/40000 [07:31<00:57, 78.36it/s]Inferenza (replay test):  91%|######### | 36270/40000 [07:42<00:47, 78.07it/s]Inferenza (replay test):  93%|#########2| 37053/40000 [07:52<00:37, 78.11it/s]Inferenza (replay test):  95%|#########4| 37836/40000 [08:02<00:27, 77.81it/s]Inferenza (replay test):  97%|#########6| 38611/40000 [08:12<00:17, 77.69it/s]Inferenza (replay test):  99%|#########8| 39406/40000 [08:22<00:07, 78.21it/s]Inferenza (replay test): 100%|##########| 40000/40000 [08:29<00:00, 78.45it/s]
+Test Stream | AUC: 0.8007 | AP: 0.1491
+Routed decision | Precision: 0.2672 | Recall: 0.5218
+
+--- LATERAL RECALL: GLOBAL-FPR THRESHOLD  vs  COST-SENSITIVE ROUTING ---
+  before (global @FPR=0.01): lateral_recall=0.0633 | benign_fpr=0.0386
+  after  (routed cost-sensitive)       : lateral_recall=0.1855 | benign_fpr=0.0475
+  aggregate recall (global @FPR=0.01): 0.4386
+
+--- PER-ANOMALY-TYPE METRICS ---
+  policy     | OPA-owned   | n=  23 | AUC: 0.8561 | AP: 0.0057 | Recall@thr: 0.7826
+  contextual | rule-trivial | n=  82 | AUC: 0.8986 | AP: 0.0167 | Recall@thr: 0.5122
+  lateral    | rule-blind  | n= 221 | AUC: 0.7203 | AP: 0.0138 | Recall@thr: 0.1855
+  cred-theft | rule-blind  | n= 245 | AUC: 0.5664 | AP: 0.0085 | Recall@thr: 0.1306
+  exfil      | volume-tell | n=  54 | AUC: 0.9881 | AP: 0.0554 | Recall@thr: 1.0000
+  benign-denied | OPA-owned   | n= 661 | AUC: 0.8851 | AP: 0.1236 | Recall@thr: 0.7322
+
+--- LATERAL: COLD-START CONDITIONING ---
+  warmed src (has benign history): n= 221 | recall@thr=0.1855 | AUC=0.7203
+  cold   src (no history yet)     : n=   0 | recall@thr=nan  (detection not yet possible)
+
+--- SCENARI v2 (goal a/b/c) ---
+  benign FPR  plain=0.0344 | roaming=0.0499 (n=3686) | wiped-cookie=0.1273 (n=746) | new-user=0.5227 (n=44)
+  credential theft: recall@thr=0.1306 | AUC=0.5664 (n=245)
+  lateral su device condivisi: recall@thr=0.1429 (n=42)
+
+--- BASELINE A REGOLE (signal-only) ---
+  Precision: 0.0498 | Recall: 0.1089 | Recall policy: 0.0000 | Recall contextual: 0.9634 | Recall lateral: 0.1222
+  NOTE: the rule baseline catches contextual anomalies almost entirely (edge signals only) but is blind to policy/lateral — that gap is the TGN's value-add.
+
+################################################################################
+# PANEL A (E1)
+################################################################################
+  TGN                    agg_auc=0.801±nan | agg_ap=0.149±nan | agg_recall_global=0.439±nan | lat_auc=0.720±nan | lat_ap=0.014±nan | lat_recall_global=0.063±nan | theft_auc=0.566±nan | theft_ap=0.008±nan | theft_recall_global=0.102±nan
+  iforest                agg_auc=0.663±nan | agg_ap=0.062±nan | agg_recall_global=0.064±nan | lat_auc=0.514±nan | lat_ap=0.007±nan | lat_recall_global=0.027±nan | theft_auc=0.613±nan | theft_ap=0.009±nan | theft_recall_global=0.008±nan
+  lookup_rules           agg_auc=nan±nan | agg_ap=nan±nan | agg_recall_global=nan±nan | lat_auc=0.633±nan | lat_ap=0.008±nan | lat_recall_global=0.131±nan | theft_auc=0.762±nan | theft_ap=0.018±nan | theft_recall_global=0.282±nan
+  lookup_rules_val       agg_auc=nan±nan | agg_ap=nan±nan | agg_recall_global=nan±nan | lat_auc=0.686±nan | lat_ap=0.011±nan | lat_recall_global=0.321±nan | theft_auc=0.807±nan | theft_ap=0.028±nan | theft_recall_global=0.604±nan
+  lookup_rules_all       agg_auc=nan±nan | agg_ap=nan±nan | agg_recall_global=nan±nan | lat_auc=0.665±nan | lat_ap=0.016±nan | lat_recall_global=0.072±nan | theft_auc=0.510±nan | theft_ap=0.038±nan | theft_recall_global=0.090±nan
+
+E1 verdict (TGN beats comparator on lateral AND theft AUC): {'iforest': False, 'lookup_rules': False, 'lookup_rules_val': False, 'lookup_rules_all': False}
+
+JSON -> /app/tasks/runs/dev_seed2000_v51
+LaTeX fragments -> /app/tasks/runs/dev_seed2000_v51/generated
+DONE_REGEN_REPORT_TABLES

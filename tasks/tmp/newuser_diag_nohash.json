@@ -1,0 +1,34 @@
+{
+ "mode": "nohash",
+ "threshold": 1.0,
+ "lateral_auc": 0.7134709531342153,
+ "theft_auc": 0.5239525225805567,
+ "groups": {
+  "hire_first25": {
+   "n": 44,
+   "fpr_at_thr": 0.0,
+   "mean_pct_rank_among_test_benign": 0.6971145040318982
+  },
+  "guest_new_first25 (first seen in test)": {
+   "n": 785,
+   "fpr_at_thr": 0.0,
+   "mean_pct_rank_among_test_benign": 0.6716896305390272
+  },
+  "guest_established": {
+   "n": 2417,
+   "fpr_at_thr": 0.0,
+   "mean_pct_rank_among_test_benign": 0.6537818823029664
+  },
+  "registered_established": {
+   "n": 33024,
+   "fpr_at_thr": 0.00024224806201550387,
+   "mean_pct_rank_among_test_benign": 0.4749580657241256
+  }
+ },
+ "train_exposure": {
+  "benign_train": 135773,
+  "hire_first25": 219,
+  "guest_first25": 11547,
+  "distinct_new_guests_train": 677
+ }
+}

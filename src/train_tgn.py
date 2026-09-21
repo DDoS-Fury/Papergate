@@ -43,6 +43,7 @@ from graphagate.calibration import (
 )
 from graphagate.config import TGNConfig, TGN_CHECKPOINT_PATH, TGN_STATS_PATH
 from graphagate.data.stream_synthetic import (
+    SCEN_NEW_USER,
     SCEN_ROAMING,
     SCEN_SHARED,
     SCEN_WIPED,
@@ -1082,6 +1083,9 @@ def train_tgn(cfg: TGNConfig = TGNConfig(), *, dataset: "StreamData | None" = No
         scenario_metrics["fpr_wiped"] = _fpr(wiped)
         scenario_metrics["n_roaming"] = int(roam.sum())
         scenario_metrics["n_wiped"] = int(wiped.sum())
+        new_user = benign_t & ((scen_test & SCEN_NEW_USER) != 0)
+        scenario_metrics["fpr_new_user"] = _fpr(new_user)
+        scenario_metrics["n_new_user"] = int(new_user.sum())
 
         theft = test_types == 4
         if theft.any():
@@ -1100,7 +1104,8 @@ def train_tgn(cfg: TGNConfig = TGNConfig(), *, dataset: "StreamData | None" = No
         print("\n--- SCENARI v2 (goal a/b/c) ---")
         print(f"  benign FPR  plain={scenario_metrics['fpr_plain']:.4f} | "
               f"roaming={scenario_metrics['fpr_roaming']:.4f} (n={scenario_metrics['n_roaming']}) | "
-              f"wiped-cookie={scenario_metrics['fpr_wiped']:.4f} (n={scenario_metrics['n_wiped']})")
+              f"wiped-cookie={scenario_metrics['fpr_wiped']:.4f} (n={scenario_metrics['n_wiped']}) | "
+              f"new-user={scenario_metrics['fpr_new_user']:.4f} (n={scenario_metrics['n_new_user']})")
         if "theft_recall" in scenario_metrics:
             print(f"  credential theft: recall@thr={scenario_metrics['theft_recall']:.4f} | "
                   f"AUC={scenario_metrics['theft_auc']:.4f} (n={scenario_metrics['n_theft']})")

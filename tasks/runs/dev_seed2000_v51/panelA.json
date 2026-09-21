@@ -1,0 +1,781 @@
+{
+  "meta": {
+    "seeds": [
+      2000
+    ],
+    "num_events": 200000,
+    "epochs": 15,
+    "overrides": {},
+    "protocol": "Panel A (E1): TGN vs baselines, default config, global 1% FPR threshold",
+    "save": false,
+    "generated": "2026-09-21T19:08:41+00:00"
+  },
+  "tgn_row": {
+    "raw": [
+      {
+        "threshold": 0.03642884435144182,
+        "threshold_dirty": 0.19238806486129698,
+        "threshold_clean_unsup": 0.0680848675686112,
+        "agg_auc": 0.8006994769072975,
+        "agg_ap": 0.1490667251345847,
+        "agg_precision": 0.2672242134607726,
+        "agg_recall": 0.5217729393468118,
+        "agg_recall_global": 0.4385692068429238,
+        "lateral_recall_before": 0.06334841628959276,
+        "lateral_recall_after": 0.18552036199095023,
+        "fpr_before": 0.038590690706204474,
+        "fpr_after": 0.047528026037092524,
+        "per_type": {
+          "policy": {
+            "auc": 0.8561165380010827,
+            "ap": 0.005739501403563391,
+            "recall": 0.782608695652174,
+            "recall_global": 0.6521739130434783,
+            "n": 23
+          },
+          "contextual": {
+            "auc": 0.8985583144435051,
+            "ap": 0.016697283820978733,
+            "recall": 0.5121951219512195,
+            "recall_global": 0.5121951219512195,
+            "n": 82
+          },
+          "lateral": {
+            "auc": 0.7202862761772899,
+            "ap": 0.013778549259056925,
+            "recall": 0.18552036199095023,
+            "recall_global": 0.06334841628959276,
+            "n": 221
+          },
+          "cred-theft": {
+            "auc": 0.5663868368032237,
+            "ap": 0.008477732489514174,
+            "recall": 0.1306122448979592,
+            "recall_global": 0.10204081632653061,
+            "n": 245
+          },
+          "exfil": {
+            "auc": 0.9881050782662604,
+            "ap": 0.055384615384615386,
+            "recall": 1.0,
+            "recall_global": 1.0,
+            "n": 54
+          },
+          "benign-denied": {
+            "auc": 0.8850549907201866,
+            "ap": 0.12362511549007384,
+            "recall": 0.7322239031770046,
+            "recall_global": 0.6263237518910741,
+            "n": 661
+          }
+        },
+        "cold_start": {
+          "n_warmed": 221,
+          "n_cold": 0,
+          "recall_warmed": 0.18552036199095023,
+          "recall_cold": NaN,
+          "auc_warmed": 0.7202862761772899
+        },
+        "scenario": {
+          "fpr_plain": 0.03444361814552429,
+          "fpr_roaming": 0.049918610960390665,
+          "fpr_wiped": 0.12734584450402145,
+          "n_roaming": 3686,
+          "n_wiped": 746,
+          "fpr_new_user": 0.5227272727272727,
+          "n_new_user": 44,
+          "theft_recall": 0.1306122448979592,
+          "theft_auc": 0.5663868368032237,
+          "n_theft": 245,
+          "shared_lateral_recall": 0.14285714285714285,
+          "n_shared_lateral": 42
+        },
+        "train_seconds": 1253.070532013,
+        "use_struct_head": true,
+        "use_hash_identity": true,
+        "use_hist_feats": true,
+        "use_precursor": true,
+        "use_config_node": true
+      }
+    ],
+    "summary": {
+      "agg_auc": {
+        "mean": 0.8006994769072975,
+        "std": NaN,
+        "vals": [
+          0.8006994769072975
+        ]
+      },
+      "agg_ap": {
+        "mean": 0.1490667251345847,
+        "std": NaN,
+        "vals": [
+          0.1490667251345847
+        ]
+      },
+      "agg_recall_global": {
+        "mean": 0.4385692068429238,
+        "std": NaN,
+        "vals": [
+          0.4385692068429238
+        ]
+      },
+      "lat_auc": {
+        "mean": 0.7202862761772899,
+        "std": NaN,
+        "vals": [
+          0.7202862761772899
+        ]
+      },
+      "lat_ap": {
+        "mean": 0.013778549259056925,
+        "std": NaN,
+        "vals": [
+          0.013778549259056925
+        ]
+      },
+      "lat_recall_global": {
+        "mean": 0.06334841628959276,
+        "std": NaN,
+        "vals": [
+          0.06334841628959276
+        ]
+      },
+      "theft_auc": {
+        "mean": 0.5663868368032237,
+        "std": NaN,
+        "vals": [
+          0.5663868368032237
+        ]
+      },
+      "theft_ap": {
+        "mean": 0.008477732489514174,
+        "std": NaN,
+        "vals": [
+          0.008477732489514174
+        ]
+      },
+      "theft_recall_global": {
+        "mean": 0.10204081632653061,
+        "std": NaN,
+        "vals": [
+          0.10204081632653061
+        ]
+      }
+    }
+  },
+  "baselines": {
+    "raw": {
+      "iforest": [
+        {
+          "agg_auc": 0.6628968940873661,
+          "agg_ap": 0.06229487790961272,
+          "agg_precision": 0.1659919028340081,
+          "agg_recall": 0.06376360808709176,
+          "per_type": {
+            "policy": {
+              "auc": 0.6360905278620699,
+              "ap": 0.000882926454930222,
+              "recall": 0.0,
+              "n": 23
+            },
+            "contextual": {
+              "auc": 0.967548765997553,
+              "ap": 0.0997121593433352,
+              "recall": 0.7073170731707317,
+              "n": 82
+            },
+            "lateral": {
+              "auc": 0.5135224153363206,
+              "ap": 0.006711827186375356,
+              "recall": 0.027149321266968326,
+              "n": 221
+            },
+            "cred-theft": {
+              "auc": 0.6127739477254972,
+              "ap": 0.008702835267504523,
+              "recall": 0.00816326530612245,
+              "n": 245
+            },
+            "exfil": {
+              "auc": 0.9564436446572109,
+              "ap": 0.017692101903258973,
+              "recall": 0.16666666666666666,
+              "n": 54
+            },
+            "benign-denied": {
+              "auc": 0.6705753359306547,
+              "ap": 0.024884858344302846,
+              "recall": 0.01059001512859304,
+              "n": 661
+            }
+          },
+          "wall_seconds": 21.63059466699997
+        }
+      ],
+      "lookup_rules": [
+        {
+          "per_type": {
+            "lateral": {
+              "auc": 0.6328440703457796,
+              "ap": 0.008365044563128856,
+              "recall": 0.13122171945701358,
+              "fpr": 0.06070155499302578,
+              "threshold": 4,
+              "n": 221
+            },
+            "cred-theft": {
+              "auc": 0.7615447346474882,
+              "ap": 0.01776481694733114,
+              "recall": 0.2816326530612245,
+              "fpr": 0.06070155499302578,
+              "threshold": 4,
+              "n": 245
+            }
+          },
+          "wall_seconds": 0.4830552759995044
+        }
+      ],
+      "lookup_rules_val": [
+        {
+          "per_type": {
+            "lateral": {
+              "auc": 0.6862594517820322,
+              "ap": 0.010565680151480461,
+              "recall": 0.3212669683257919,
+              "fpr": 0.1355840264503797,
+              "threshold": 3,
+              "n": 221
+            },
+            "cred-theft": {
+              "auc": 0.8068673147825025,
+              "ap": 0.02752644668869219,
+              "recall": 0.6040816326530613,
+              "fpr": 0.1355840264503797,
+              "threshold": 3,
+              "n": 245
+            }
+          },
+          "wall_seconds": 0.4900499029990897
+        }
+      ],
+      "lookup_rules_all": [
+        {
+          "per_type": {
+            "lateral": {
+              "auc": 0.6654412203005355,
+              "ap": 0.015712653448644424,
+              "recall": 0.07239819004524888,
+              "fpr": 0.007490830190628713,
+              "threshold": 3,
+              "n": 221
+            },
+            "cred-theft": {
+              "auc": 0.50995405343002,
+              "ap": 0.038374804085348053,
+              "recall": 0.08979591836734693,
+              "fpr": 0.007490830190628713,
+              "threshold": 3,
+              "n": 245
+            }
+          },
+          "wall_seconds": 0.4800715849996777
+        }
+      ]
+    },
+    "summary": {
+      "iforest": {
+        "agg_auc": {
+          "mean": 0.6628968940873661,
+          "std": NaN,
+          "vals": [
+            0.6628968940873661
+          ]
+        },
+        "agg_ap": {
+          "mean": 0.06229487790961272,
+          "std": NaN,
+          "vals": [
+            0.06229487790961272
+          ]
+        },
+        "agg_recall_global": {
+          "mean": 0.06376360808709176,
+          "std": NaN,
+          "vals": [
+            0.06376360808709176
+          ]
+        },
+        "lat_auc": {
+          "mean": 0.5135224153363206,
+          "std": NaN,
+          "vals": [
+            0.5135224153363206
+          ]
+        },
+        "lat_ap": {
+          "mean": 0.006711827186375356,
+          "std": NaN,
+          "vals": [
+            0.006711827186375356
+          ]
+        },
+        "lat_recall_global": {
+          "mean": 0.027149321266968326,
+          "std": NaN,
+          "vals": [
+            0.027149321266968326
+          ]
+        },
+        "theft_auc": {
+          "mean": 0.6127739477254972,
+          "std": NaN,
+          "vals": [
+            0.6127739477254972
+          ]
+        },
+        "theft_ap": {
+          "mean": 0.008702835267504523,
+          "std": NaN,
+          "vals": [
+            0.008702835267504523
+          ]
+        },
+        "theft_recall_global": {
+          "mean": 0.00816326530612245,
+          "std": NaN,
+          "vals": [
+            0.00816326530612245
+          ]
+        }
+      },
+      "lookup_rules": {
+        "agg_auc": {
+          "mean": NaN,
+          "std": NaN,
+          "vals": [
+            NaN
+          ]
+        },
+        "agg_ap": {
+          "mean": NaN,
+          "std": NaN,
+          "vals": [
+            NaN
+          ]
+        },
+        "agg_recall_global": {
+          "mean": NaN,
+          "std": NaN,
+          "vals": [
+            NaN
+          ]
+        },
+        "lat_auc": {
+          "mean": 0.6328440703457796,
+          "std": NaN,
+          "vals": [
+            0.6328440703457796
+          ]
+        },
+        "lat_ap": {
+          "mean": 0.008365044563128856,
+          "std": NaN,
+          "vals": [
+            0.008365044563128856
+          ]
+        },
+        "lat_recall_global": {
+          "mean": 0.13122171945701358,
+          "std": NaN,
+          "vals": [
+            0.13122171945701358
+          ]
+        },
+        "theft_auc": {
+          "mean": 0.7615447346474882,
+          "std": NaN,
+          "vals": [
+            0.7615447346474882
+          ]
+        },
+        "theft_ap": {
+          "mean": 0.01776481694733114,
+          "std": NaN,
+          "vals": [
+            0.01776481694733114
+          ]
+        },
+        "theft_recall_global": {
+          "mean": 0.2816326530612245,
+          "std": NaN,
+          "vals": [
+            0.2816326530612245
+          ]
+        }
+      },
+      "lookup_rules_val": {
+        "agg_auc": {
+          "mean": NaN,
+          "std": NaN,
+          "vals": [
+            NaN
+          ]
+        },
+        "agg_ap": {
+          "mean": NaN,
+          "std": NaN,
+          "vals": [
+            NaN
+          ]
+        },
+        "agg_recall_global": {
+          "mean": NaN,
+          "std": NaN,
+          "vals": [
+            NaN
+          ]
+        },
+        "lat_auc": {
+          "mean": 0.6862594517820322,
+          "std": NaN,
+          "vals": [
+            0.6862594517820322
+          ]
+        },
+        "lat_ap": {
+          "mean": 0.010565680151480461,
+          "std": NaN,
+          "vals": [
+            0.010565680151480461
+          ]
+        },
+        "lat_recall_global": {
+          "mean": 0.3212669683257919,
+          "std": NaN,
+          "vals": [
+            0.3212669683257919
+          ]
+        },
+        "theft_auc": {
+          "mean": 0.8068673147825025,
+          "std": NaN,
+          "vals": [
+            0.8068673147825025
+          ]
+        },
+        "theft_ap": {
+          "mean": 0.02752644668869219,
+          "std": NaN,
+          "vals": [
+            0.02752644668869219
+          ]
+        },
+        "theft_recall_global": {
+          "mean": 0.6040816326530613,
+          "std": NaN,
+          "vals": [
+            0.6040816326530613
+          ]
+        }
+      },
+      "lookup_rules_all": {
+        "agg_auc": {
+          "mean": NaN,
+          "std": NaN,
+          "vals": [
+            NaN
+          ]
+        },
+        "agg_ap": {
+          "mean": NaN,
+          "std": NaN,
+          "vals": [
+            NaN
+          ]
+        },
+        "agg_recall_global": {
+          "mean": NaN,
+          "std": NaN,
+          "vals": [
+            NaN
+          ]
+        },
+        "lat_auc": {
+          "mean": 0.6654412203005355,
+          "std": NaN,
+          "vals": [
+            0.6654412203005355
+          ]
+        },
+        "lat_ap": {
+          "mean": 0.015712653448644424,
+          "std": NaN,
+          "vals": [
+            0.015712653448644424
+          ]
+        },
+        "lat_recall_global": {
+          "mean": 0.07239819004524888,
+          "std": NaN,
+          "vals": [
+            0.07239819004524888
+          ]
+        },
+        "theft_auc": {
+          "mean": 0.50995405343002,
+          "std": NaN,
+          "vals": [
+            0.50995405343002
+          ]
+        },
+        "theft_ap": {
+          "mean": 0.038374804085348053,
+          "std": NaN,
+          "vals": [
+            0.038374804085348053
+          ]
+        },
+        "theft_recall_global": {
+          "mean": 0.08979591836734693,
+          "std": NaN,
+          "vals": [
+            0.08979591836734693
+          ]
+        }
+      }
+    }
+  },
+  "paired": {
+    "iforest": {
+      "lat_auc": {
+        "n_pairs": 1,
+        "mean_delta": 0.207,
+        "sd_delta": NaN,
+        "ci95": [
+          NaN,
+          NaN
+        ],
+        "p_value": NaN,
+        "significant": false,
+        "tgn_better": false
+      },
+      "lat_ap": {
+        "n_pairs": 1,
+        "mean_delta": 0.007,
+        "sd_delta": NaN,
+        "ci95": [
+          NaN,
+          NaN
+        ],
+        "p_value": NaN,
+        "significant": false,
+        "tgn_better": false
+      },
+      "theft_auc": {
+        "n_pairs": 1,
+        "mean_delta": -0.046,
+        "sd_delta": NaN,
+        "ci95": [
+          NaN,
+          NaN
+        ],
+        "p_value": NaN,
+        "significant": false,
+        "tgn_better": false
+      },
+      "theft_ap": {
+        "n_pairs": 1,
+        "mean_delta": -0.0,
+        "sd_delta": NaN,
+        "ci95": [
+          NaN,
+          NaN
+        ],
+        "p_value": NaN,
+        "significant": false,
+        "tgn_better": false
+      },
+      "agg_auc": {
+        "n_pairs": 1,
+        "mean_delta": 0.138,
+        "sd_delta": NaN,
+        "ci95": [
+          NaN,
+          NaN
+        ],
+        "p_value": NaN,
+        "significant": false,
+        "tgn_better": false
+      },
+      "agg_ap": {
+        "n_pairs": 1,
+        "mean_delta": 0.087,
+        "sd_delta": NaN,
+        "ci95": [
+          NaN,
+          NaN
+        ],
+        "p_value": NaN,
+        "significant": false,
+        "tgn_better": false
+      }
+    },
+    "lookup_rules": {
+      "lat_auc": {
+        "n_pairs": 1,
+        "mean_delta": 0.087,
+        "sd_delta": NaN,
+        "ci95": [
+          NaN,
+          NaN
+        ],
+        "p_value": NaN,
+        "significant": false,
+        "tgn_better": false
+      },
+      "lat_ap": {
+        "n_pairs": 1,
+        "mean_delta": 0.005,
+        "sd_delta": NaN,
+        "ci95": [
+          NaN,
+          NaN
+        ],
+        "p_value": NaN,
+        "significant": false,
+        "tgn_better": false
+      },
+      "theft_auc": {
+        "n_pairs": 1,
+        "mean_delta": -0.195,
+        "sd_delta": NaN,
+        "ci95": [
+          NaN,
+          NaN
+        ],
+        "p_value": NaN,
+        "significant": false,
+        "tgn_better": false
+      },
+      "theft_ap": {
+        "n_pairs": 1,
+        "mean_delta": -0.009,
+        "sd_delta": NaN,
+        "ci95": [
+          NaN,
+          NaN
+        ],
+        "p_value": NaN,
+        "significant": false,
+        "tgn_better": false
+      }
+    },
+    "lookup_rules_val": {
+      "lat_auc": {
+        "n_pairs": 1,
+        "mean_delta": 0.034,
+        "sd_delta": NaN,
+        "ci95": [
+          NaN,
+          NaN
+        ],
+        "p_value": NaN,
+        "significant": false,
+        "tgn_better": false
+      },
+      "lat_ap": {
+        "n_pairs": 1,
+        "mean_delta": 0.003,
+        "sd_delta": NaN,
+        "ci95": [
+          NaN,
+          NaN
+        ],
+        "p_value": NaN,
+        "significant": false,
+        "tgn_better": false
+      },
+      "theft_auc": {
+        "n_pairs": 1,
+        "mean_delta": -0.24,
+        "sd_delta": NaN,
+        "ci95": [
+          NaN,
+          NaN
+        ],
+        "p_value": NaN,
+        "significant": false,
+        "tgn_better": false
+      },
+      "theft_ap": {
+        "n_pairs": 1,
+        "mean_delta": -0.019,
+        "sd_delta": NaN,
+        "ci95": [
+          NaN,
+          NaN
+        ],
+        "p_value": NaN,
+        "significant": false,
+        "tgn_better": false
+      }
+    },
+    "lookup_rules_all": {
+      "lat_auc": {
+        "n_pairs": 1,
+        "mean_delta": 0.055,
+        "sd_delta": NaN,
+        "ci95": [
+          NaN,
+          NaN
+        ],
+        "p_value": NaN,
+        "significant": false,
+        "tgn_better": false
+      },
+      "lat_ap": {
+        "n_pairs": 1,
+        "mean_delta": -0.002,
+        "sd_delta": NaN,
+        "ci95": [
+          NaN,
+          NaN
+        ],
+        "p_value": NaN,
+        "significant": false,
+        "tgn_better": false
+      },
+      "theft_auc": {
+        "n_pairs": 1,
+        "mean_delta": 0.056,
+        "sd_delta": NaN,
+        "ci95": [
+          NaN,
+          NaN
+        ],
+        "p_value": NaN,
+        "significant": false,
+        "tgn_better": false
+      },
+      "theft_ap": {
+        "n_pairs": 1,
+        "mean_delta": -0.03,
+        "sd_delta": NaN,
+        "ci95": [
+          NaN,
+          NaN
+        ],
+        "p_value": NaN,
+        "significant": false,
+        "tgn_better": false
+      }
+    }
+  },
+  "verdict_tgn_beats": {
+    "iforest": false,
+    "lookup_rules": false,
+    "lookup_rules_val": false,
+    "lookup_rules_all": false
+  }
+}

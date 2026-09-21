@@ -69,6 +69,9 @@ con `scratch/knob_ablation.py`. Non sono derivati da uno standard.
     *   Hot-desking, cioè un utente su una macchina non sua (`p_hotdesk`).
     *   Cancellazione dei cookie (`p_cookie_wipe`).
     *   Falsi positivi IDS (`p_sensor_fp`) e client legacy senza JA3 (`p_legacy_client`).
+    *   Client occasionali con un JA3 mai visto (`p_benign_new_config`).
+    *   Utenti nuovi in ogni finestra: assunzioni a metà stream (`num_new_users`, una per
+        strato di pari ampiezza) e visitatori anonimi ammessi progressivamente (`ramp_guests`).
 
     Attaccanti e benigni prendono i nodi nuovi dallo *stesso* pool, con lo stesso formato di
     chiave.

@@ -42,7 +42,9 @@ stream while every attacker brought globally fresh IP / JA3 slots, so a set-memb
 lookup ("never seen this IP") scored AUC 1.000 on credential theft with no learning. Now
 novelty is a common BENIGN event too — never-seen roaming IPs, client releases that move
 the fleet to new JA3s, hot-desking (a user on a machine that is not theirs), cookie
-wipes, IDS false positives, unfingerprintable legacy clients — and benign churn and
+wipes, IDS false positives, unfingerprintable legacy clients, one-off clients with a
+never-seen JA3, employees hired mid-stream and anonymous visitors arriving over the whole
+stream (never-seen user nodes in training and at inference) — and benign churn and
 attackers draw fresh nodes from ONE pool per role, with one key format, so neither the
 slot index nor the key hash says who drew it. Lateral movement pivots with harvested
 credentials (a new device->user binding, the Euler / LANL sense) instead of spoofing a
@@ -54,7 +56,7 @@ Anomaly types (``types``): 0=benign, 1=policy violation (OPA-owned), 2=contextua
 3=lateral movement, 4=credential theft, 5=data exfiltration, 6=benign OPA denial (a
 human mistake: ``label=1`` because OPA denies it, but not an attack). ``scenario`` is a
 per-event bitmask of benign-context flags (an event can be several at once): 1=roaming,
-2=recently wiped cookie device, 4=shared device.
+2=recently wiped cookie device, 4=shared device, 8=recently hired user.
 
 Edge message layout (10-dim): ``[ja3, s1, s2, s3, method, role, clearance, bytes_in,
 bytes_out, log1p(user Δt)/10]`` — TLS-fingerprint trust, the three Snort/sensor probes,
@@ -136,6 +138,9 @@ def stream_kwargs_from_cfg(cfg) -> dict:
         num_service_machines=cfg.num_service_machines,
         tier_mix=cfg.tier_mix,
         p_theft_interleave=cfg.p_theft_interleave,
+        num_new_users=cfg.num_new_users,
+        ramp_guests=cfg.ramp_guests,
+        p_benign_new_config=cfg.p_benign_new_config,
     )
 
 # The v4 generator (the one behind the pre-v5 paper numbers), expressed as knob values:
@@ -149,7 +154,8 @@ V4_KNOBS = dict(
     p_theft_mimic_config=0.0, p_theft_known_source=0.0, p_theft_session_replay=0.0,
     p_compromise=None, p_lateral_foreign_cred=0.0, p_lateral_role_spoof=0.5,
     p_lateral_new_config=0.5, num_service_machines=None, tier_mix=(0.2, 0.5, 0.3),
-    p_theft_interleave=0.15,
+    p_theft_interleave=0.15, num_new_users=0, ramp_guests=False,
+    p_benign_new_config=0.0,
 )
 
 ROLES = ["guest", "operator", "manager", "admin"]
@@ -327,9 +333,12 @@ def policy_allows(role: str, method: int, uri: str) -> bool:
 SCEN_ROAMING = 1   # benign event issued from a non-home IP (smart working / 5G)
 SCEN_WIPED = 2     # device cookie recently wiped: the device node is still cold
 SCEN_SHARED = 4    # the device is shared by multiple users
+SCEN_NEW_USER = 8  # the user was hired recently: the user node is still cold
 
 # A wiped device node is considered "cold" for this many events on the new slot.
 _WIPE_COLD_EVENTS = 25
+# A newly hired user is considered "cold" for this many of their own events.
+_NEW_USER_COLD_EVENTS = 25
 
 # Per-event chance a benign request comes from an unfingerprinted client (``conf:guest``)
 # rather than one of the machine's habitual configs (e.g. a fresh browser profile / a
@@ -389,6 +398,9 @@ class ZTAStreamSimulator:
         num_service_machines: int | None = None,
         tier_mix: tuple[float, float, float] = (0.2, 0.5, 0.3),
         p_theft_interleave: float = 0.15,
+        num_new_users: int = 0,
+        ramp_guests: bool = False,
+        p_benign_new_config: float = 0.0,
     ):
         if seed is not None:
             np.random.seed(seed)
@@ -443,6 +455,8 @@ class ZTAStreamSimulator:
         self.p_lateral_role_spoof = p_lateral_role_spoof
         self.p_lateral_new_config = p_lateral_new_config
         self.p_sensor_fp = p_sensor_fp
+        self.ramp_guests = ramp_guests
+        self.p_benign_new_config = p_benign_new_config
 
         # --- resource popularity, DECOUPLED from the resource index ---
         # Access frequency follows a Zipf law, but the rank a resource gets is a random
@@ -491,6 +505,26 @@ class ZTAStreamSimulator:
             if num_service_machines is not None and self.num_registered_users > 1
             else list(range(self.num_registered_users))
         )
+        # Future hires: registered users who join mid-stream. Hire i happens at a random
+        # step inside the i-th of k equal strata of the admission horizon, so every window
+        # (training, validation, test) gets its share. Until then a hire owns no machine
+        # and is never a hot-desk user, a theft victim or a harvested credential: their
+        # first event is a never-seen user node. User 0 is never one. Without an admission
+        # horizon (live continuation) the whole staff is already hired.
+        self._pending_hires: list[tuple[int, int]] = []  # (hire step, user), by step
+        if num_new_users > 0 and admission_horizon:
+            cand = [u for u in self._humans if u != 0]
+            k = min(num_new_users, max(len(cand) - 1, 0))
+            hires = [int(u) for u in np.random.permutation(cand)[:k]]
+            self._pending_hires = [
+                (int((i + np.random.rand()) * admission_horizon / k), u)
+                for i, u in enumerate(hires)
+            ]
+            pending = set(hires)
+            self._humans = [u for u in self._humans if u not in pending]
+        pending = {u for _, u in self._pending_hires}
+        self._registered = [u for u in range(self.num_registered_users) if u not in pending]
+        self._user_age: dict[int, int] = {}  # events seen by a hired user
         self.machine_users: list[list[int]] = []
         for m in range(num_devices):
             users = [self._humans[m % len(self._humans)]]
@@ -843,11 +877,34 @@ class ZTAStreamSimulator:
             return self._habitual_config(machine)
         return self.cfg_lo + int(random.choice(others))
 
+    def _maybe_onboard(self) -> None:
+        """Hire the next pending user once their step is reached: they take a seat on an
+        admitted desk machine (co-owner) and from then on behave, and can be attacked, like
+        any employee."""
+        if not self._pending_hires or self.step_count < self._pending_hires[0][0]:
+            return
+        _, u = self._pending_hires.pop(0)
+        seats = [m for m in range(self._admitted)
+                 if self.service_machines is None or m not in self.service_machines]
+        m = int(random.choice(seats)) if seats else 0
+        self.machine_users[m].append(u)
+        self._humans.append(u)
+        self._registered.append(u)
+        self._user_age[u] = 0
+
+    def _admitted_guests(self) -> int:
+        """Anonymous visitors seen so far: with ``ramp_guests`` new visitors keep
+        arriving over the whole admission horizon, like the device fleet."""
+        if not (self.ramp_guests and self.admission_horizon):
+            return self.num_guests
+        return min(self.num_guests,
+                   int(self.step_count / self.admission_horizon * self.num_guests) + 1)
+
     def _compromise(self, machine: int) -> None:
         """Start a kill chain on ``machine``: the intruder dumps 1-3 credentials of users
         who do not own it (cached logons, a keylogger) for the lateral pivot."""
         self.compromised_state[machine] = 1
-        pool = [u for u in range(self.num_registered_users) if u not in self.machine_users[machine]]
+        pool = [u for u in self._registered if u not in self.machine_users[machine]]
         if pool:
             k = min(int(np.random.randint(1, 4)), len(pool))
             self.harvested_creds[machine] = [int(u) for u in np.random.choice(pool, size=k, replace=False)]
@@ -896,6 +953,10 @@ class ZTAStreamSimulator:
     def _event(self, *, source, config, device, user, res_idx, feat, label, etype, scenario):
         if device in self._slot_age:
             self._slot_age[device] += 1
+        if user in self._user_age:
+            if self._user_age[user] < _NEW_USER_COLD_EVENTS:
+                scenario |= SCEN_NEW_USER
+            self._user_age[user] += 1
             
         delta_t = self.t - self.last_user_t.get(user, self.t)
         self.last_user_t[user] = self.t
@@ -947,6 +1008,7 @@ class ZTAStreamSimulator:
             max_m = self.num_devices
         self._admitted = max_m
         self._maybe_release_config()
+        self._maybe_onboard()
 
         if self._active_thefts and random.random() < self.p_theft_interleave:
             return self._emit_theft_event(random.choice(self._active_thefts))
@@ -954,7 +1016,7 @@ class ZTAStreamSimulator:
             random.random() < self.p_cred_theft and self._src_pool and self._cfg_pool
             and (self._dev_pool or self._guest_dev_slot is not None)
         ):
-            victim = int(np.random.randint(0, self.num_registered_users))
+            victim = self._registered[int(np.random.randint(0, len(self._registered)))]
             victim_machines = [
                 m for m in range(self._admitted) if victim in self.machine_users[m]
                 and self.machine_tiers[m] < 2  # a TPM-bound identity cannot be replayed
@@ -1054,6 +1116,10 @@ class ZTAStreamSimulator:
         # software identity, so roaming (a network change) does NOT change it; lateral
         # movement may swap in a new tool (see below).
         config = self._habitual_config(machine)
+        if self.p_benign_new_config > 0 and self._cfg_pool and random.random() < self.p_benign_new_config:
+            # A one-off client nobody in the fleet presented before (a new app, CLI tool
+            # or updater), drawn from the same fresh pool as releases and attackers.
+            config = self.cfg_lo + self._alloc_cfg()
 
         # --- APT kill chain on the physical machine (recon -> lateral -> exfil) ---
         if (
@@ -1108,7 +1174,7 @@ class ZTAStreamSimulator:
                                        res_idx=res_idx, feat=feat, label=1, etype=6, scenario=scenario)
 
             if is_anonymous:
-                user = self.num_registered_users + int(np.random.randint(0, self.num_guests))
+                user = self.num_registered_users + int(np.random.randint(0, self._admitted_guests()))
                 u_role, u_clearance = "guest", 0
                 config = self.cfg_lo  # conf:guest
                 dev_slot = self._guest_dev_slot if self._guest_dev_slot is not None else dev_slot

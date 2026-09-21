@@ -1,0 +1,450 @@
+{
+ "name": "gen_seed2001",
+ "N": 200000,
+ "span_days": 305.68,
+ "class_counts": {
+  "benign": 194136,
+  "policy": 110,
+  "contextual": 319,
+  "lateral": 928,
+  "theft": 1132,
+  "exfil": 220,
+  "benign-denied": 3155
+ },
+ "attack_prevalence_etype1_5": 0.01354,
+ "label1_prevalence_incl_denied": 0.02932,
+ "distinct": {
+  "source": 5934,
+  "config": 165,
+  "device": 272,
+  "user": 1050,
+  "dst": 991
+ },
+ "res_global": {
+  "n_resources_hit": 981,
+  "zipf_ols_all": 1.599,
+  "zipf_ols_top100": 1.154,
+  "zipf_ols_top20": 1.12,
+  "zipf_mle": 1.15,
+  "top1_share": 0.1521,
+  "top10_share": 0.5442,
+  "top10pct_res_share": 0.8245
+ },
+ "res_per_user": {
+  "n_users_ge200ev": 49,
+  "zipf_ols": {
+   "0.1": 1.01,
+   "0.5": 1.153,
+   "0.9": 1.287
+  },
+  "zipf_mle": {
+   "0.1": 1.02,
+   "0.5": 1.21,
+   "0.9": 1.418
+  }
+ },
+ "iat_global": {
+  "mean_s": 132.05,
+  "median_s": 37.0,
+  "cv": 2.831,
+  "B": 0.478,
+  "q": {
+   "0.5": 37.0,
+   "0.9": 210.0,
+   "0.99": 1921.0,
+   "0.999": 4093.016,
+   "1.0": 10451.0
+  },
+  "frac_zero": 0.0
+ },
+ "hour_profile_pct": [
+  0.77,
+  0.8,
+  0.77,
+  0.77,
+  0.77,
+  0.79,
+  0.76,
+  0.79,
+  7.85,
+  9.05,
+  9.08,
+  8.97,
+  9.04,
+  9.01,
+  8.97,
+  9.12,
+  9.03,
+  8.83,
+  0.89,
+  0.79,
+  0.76,
+  0.77,
+  0.79,
+  0.82
+ ],
+ "peak_to_trough_hour": 12.0,
+ "iat_workhours_cv_B": [
+  2.664,
+  0.454
+ ],
+ "daily_volume": {
+  "weekday_mean": 880.4,
+  "weekend_mean": 73.3,
+  "weekday_cv": 0.041
+ },
+ "iat_per_user": {
+  "n": 49,
+  "cv": {
+   "0.1": 2.71,
+   "0.5": 4.12,
+   "0.9": 4.887
+  },
+  "B": {
+   "0.1": 0.461,
+   "0.5": 0.609,
+   "0.9": 0.66
+  }
+ },
+ "events_per_user": {
+  "n_users": 49,
+  "q": {
+   "0.0": 491.0,
+   "0.1": 1248.6,
+   "0.25": 1640.0,
+   "0.5": 2735.0,
+   "0.75": 4251.0,
+   "0.9": 6353.4,
+   "0.99": 8644.88,
+   "1.0": 8678.0
+  },
+  "gini": 0.334,
+  "cv": 0.617,
+  "max_over_median": 3.17,
+  "top10pct_share": 0.2
+ },
+ "fanout": {
+  "dst_per_user": {
+   "0.1": 139.0,
+   "0.5": 277.0,
+   "0.9": 462.0,
+   "1.0": 512.0
+  },
+  "dev_per_user": {
+   "0.1": 41.8,
+   "0.5": 52.0,
+   "0.9": 62.0,
+   "1.0": 75.0
+  },
+  "src_per_user": {
+   "0.1": 116.6,
+   "0.5": 192.0,
+   "0.9": 321.4,
+   "1.0": 429.0
+  },
+  "cfg_per_user": {
+   "0.1": 32.0,
+   "0.5": 38.0,
+   "0.9": 43.0,
+   "1.0": 53.0
+  },
+  "users_per_dev": {
+   "0.1": 2.2,
+   "0.5": 9.0,
+   "0.9": 27.8,
+   "1.0": 47.0
+  },
+  "frac_dev_multiuser": 0.953,
+  "cfg_per_dev": {
+   "0.1": 2.0,
+   "0.5": 3.0,
+   "0.9": 5.0,
+   "1.0": 8.0
+  },
+  "src_per_dev": {
+   "0.1": 9.0,
+   "0.5": 40.0,
+   "0.9": 127.8,
+   "1.0": 383.0
+  },
+  "devs_per_src": {
+   "0.1": 1.0,
+   "0.5": 1.0,
+   "0.9": 1.0,
+   "1.0": 79.0
+  }
+ },
+ "ja3_fleet": {
+  "distinct_benign": 90,
+  "top1_share": 0.1872,
+  "top5_share": 0.3642,
+  "entropy_bits": 5.26,
+  "configs_covering_90pct": 43
+ },
+ "novelty": {
+  "train": {
+   "all": {
+    "source": 0.0299,
+    "config": 0.0009,
+    "device": 0.0018,
+    "user": 0.0075,
+    "dst": 0.007,
+    "any4": 0.0387
+   },
+   "benign": {
+    "source": 0.0294,
+    "config": 0.0003,
+    "device": 0.0011,
+    "user": 0.0077,
+    "dst": 0.0066,
+    "any4": 0.0378,
+    "n": 135867
+   },
+   "policy": {
+    "source": 0.0357,
+    "config": 0.0,
+    "device": 0.0,
+    "user": 0.0,
+    "dst": 0.0476,
+    "any4": 0.0357,
+    "n": 84
+   },
+   "contextual": {
+    "source": 0.0535,
+    "config": 0.0,
+    "device": 0.0,
+    "user": 0.0,
+    "dst": 0.0082,
+    "any4": 0.0535,
+    "n": 243
+   },
+   "lateral": {
+    "source": 0.0259,
+    "config": 0.0445,
+    "device": 0.0,
+    "user": 0.0072,
+    "dst": 0.0115,
+    "any4": 0.0733,
+    "n": 696
+   },
+   "theft": {
+    "source": 0.1347,
+    "config": 0.0667,
+    "device": 0.128,
+    "user": 0.004,
+    "dst": 0.0053,
+    "any4": 0.1893,
+    "n": 750
+   },
+   "exfil": {
+    "source": 0.0245,
+    "config": 0.0,
+    "device": 0.0,
+    "user": 0.0061,
+    "dst": 0.0123,
+    "any4": 0.0307,
+    "n": 163
+   },
+   "benign-denied": {
+    "source": 0.0237,
+    "config": 0.0,
+    "device": 0.0023,
+    "user": 0.0,
+    "dst": 0.0323,
+    "any4": 0.0259,
+    "n": 2197
+   }
+  },
+  "val": {
+   "all": {
+    "source": 0.03,
+    "config": 0.0008,
+    "device": 0.0004,
+    "user": 0.0,
+    "dst": 0.0002,
+    "any4": 0.0307
+   },
+   "benign": {
+    "source": 0.0292,
+    "config": 0.0004,
+    "device": 0.0004,
+    "user": 0.0,
+    "dst": 0.0002,
+    "any4": 0.03,
+    "n": 19359
+   },
+   "policy": {
+    "source": 0.0769,
+    "config": 0.0,
+    "device": 0.0,
+    "user": 0.0,
+    "dst": 0.0,
+    "any4": 0.0769,
+    "n": 13
+   },
+   "contextual": {
+    "source": 0.0741,
+    "config": 0.0,
+    "device": 0.0,
+    "user": 0.0,
+    "dst": 0.0,
+    "any4": 0.0741,
+    "n": 27
+   },
+   "lateral": {
+    "source": 0.0104,
+    "config": 0.0,
+    "device": 0.0,
+    "user": 0.0,
+    "dst": 0.0,
+    "any4": 0.0104,
+    "n": 96
+   },
+   "theft": {
+    "source": 0.102,
+    "config": 0.0544,
+    "device": 0.0,
+    "user": 0.0,
+    "dst": 0.0,
+    "any4": 0.1156,
+    "n": 147
+   },
+   "exfil": {
+    "source": 0.0,
+    "config": 0.0,
+    "device": 0.0,
+    "user": 0.0,
+    "dst": 0.0,
+    "any4": 0.0,
+    "n": 24
+   },
+   "benign-denied": {
+    "source": 0.0419,
+    "config": 0.0,
+    "device": 0.0,
+    "user": 0.0,
+    "dst": 0.0,
+    "any4": 0.0419,
+    "n": 334
+   }
+  },
+  "test": {
+   "all": {
+    "source": 0.0287,
+    "config": 0.0007,
+    "device": 0.0004,
+    "user": 0.0,
+    "dst": 0.0001,
+    "any4": 0.0296
+   },
+   "benign": {
+    "source": 0.0284,
+    "config": 0.0003,
+    "device": 0.0004,
+    "user": 0.0,
+    "dst": 0.0001,
+    "any4": 0.029,
+    "n": 38910
+   },
+   "policy": {
+    "source": 0.0,
+    "config": 0.0,
+    "device": 0.0,
+    "user": 0.0,
+    "dst": 0.0,
+    "any4": 0.0,
+    "n": 13
+   },
+   "contextual": {
+    "source": 0.0,
+    "config": 0.0,
+    "device": 0.0,
+    "user": 0.0,
+    "dst": 0.0,
+    "any4": 0.0,
+    "n": 49
+   },
+   "lateral": {
+    "source": 0.0221,
+    "config": 0.0,
+    "device": 0.0,
+    "user": 0.0,
+    "dst": 0.0,
+    "any4": 0.0221,
+    "n": 136
+   },
+   "theft": {
+    "source": 0.1106,
+    "config": 0.0723,
+    "device": 0.0,
+    "user": 0.0,
+    "dst": 0.0,
+    "any4": 0.1489,
+    "n": 235
+   },
+   "exfil": {
+    "source": 0.0303,
+    "config": 0.0,
+    "device": 0.0,
+    "user": 0.0,
+    "dst": 0.0,
+    "any4": 0.0303,
+    "n": 33
+   },
+   "benign-denied": {
+    "source": 0.024,
+    "config": 0.0,
+    "device": 0.0,
+    "user": 0.0,
+    "dst": 0.0,
+    "any4": 0.024,
+    "n": 624
+   }
+  }
+ },
+ "new_per_day_2nd_half": {
+  "source": 17.77,
+  "config": 0.191,
+  "device": 0.408,
+  "user": 0.0
+ },
+ "new_frac_benign_2nd_half": {
+  "source": 0.02779,
+  "config": 0.0003,
+  "device": 0.00064,
+  "user": 0.0,
+  "dst": 0.00035
+ },
+ "guest_event_share": 0.1422,
+ "guest_distinct": 1000,
+ "service_user0_share": 0.05,
+ "intrusions": {
+  "n_compromise": 108,
+  "n_remediated": 107,
+  "chain_duration_hours": {
+   "0.1": 6.268,
+   "0.5": 66.993,
+   "0.9": 129.815,
+   "1.0": 186.525
+  },
+  "chain_duration_stream_events": {
+   "0.1": 291.6,
+   "0.5": 1908.0,
+   "0.9": 3324.6
+  }
+ },
+ "theft_incidents_approx": {
+  "n": 225,
+  "events_per_incident": {
+   "0.1": 3.0,
+   "0.5": 5.0,
+   "0.9": 6.0,
+   "1.0": 20.0
+  }
+ },
+ "attack_events_per_intrusion": 14.6,
+ "intrusions_per_day": 0.353,
+ "thefts_per_day": 0.736,
+ "users": 50,
+ "devices": 80
+}
