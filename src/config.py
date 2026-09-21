@@ -37,6 +37,8 @@ class TGNConfig:
     # machine, while a new device suddenly binding to a known user (credential theft)
     # stands out.
     num_users: int = 50
+    # Anonymous (unauthenticated) visitors, one user node each: part of the node space.
+    num_guests: int = 1000
     num_devices: int = 80
     num_sources: int = 150
     # MUST equal len(RESOURCE_URIS) in stream_synthetic.py: resource node keys are
@@ -54,7 +56,9 @@ class TGNConfig:
     # Spare device-node slots for the generator's dynamic scenarios: a cookie wipe
     # re-keys a machine (new cold device node), a credential-theft incident brings a
     # never-seen attacker device + attacker IP.
-    num_wipe_slots: int = 16
+    # Since v5 both come from one recycled pool (plus the theft share of the fresh
+    # source / config pools below).
+    num_wipe_slots: int = 128
     num_theft_slots: int = 64
 
     # Behavioural dynamics of the 4-node stream (all benign except p_cred_theft):
@@ -66,18 +70,64 @@ class TGNConfig:
     #                     new device issue requests as an existing victim user (etype 4).
     p_roam: float = 0.10
     p_shared_device: float = 0.20
-    p_cookie_wipe: float = 0.0003
+    p_cookie_wipe: float = 0.001
     p_cred_theft: float = 0.0012
 
     # Collapse every non-TPM device onto a single shared ``dev:guest`` node (mirror of
     # ``conf:guest``) instead of giving each TPM-less machine its own cookie (``ck:``)
-    # identity. The device layer no longer distinguishes individual cookie-keyed machines
-    # and the cookie-wipe scenario is neutralised (no per-machine cookie to reset). This is
-    # the DEPLOYABLE default: the multi-seed A/B (tests/ablations/
-    # run_guest_device_eval.py) shows it is a Pareto improvement on the synthetic stream
-    # (lower benign FPR, lower seed variance, no cookie-wipe false positives), at the cost
-    # of per-machine device attribution. Set False to restore per-cookie keying.
-    guest_device_fallback: bool = True
+    # identity. OFF since v5: with it on, ~70% of the fleet shares one device node that
+    # carries 72-78% of all events, so a new device->user binding (the lateral pivot) is
+    # invisible on most machines and the cookie-wipe scenario never fires. The earlier
+    # A/B (tests/ablations/run_guest_device_eval.py) compared a stream WITH wipes against
+    # one where wipes are impossible by construction, so it cannot justify the default.
+    # Serving still honours the flag stored in the checkpoint.
+    guest_device_fallback: bool = False
+
+    # --- v5 open world + difficulty knobs (stream_synthetic.ZTAStreamSimulator) -------
+    # Without these, every benign entity is seen within the first few percent of the
+    # stream while every attacker brings globally fresh IP/JA3 slots, and a set-membership
+    # lookup ("never seen this IP") beats the TGN (tasks/runs/generator_rule_audit.log).
+    #
+    # Benign churn — novelty must be a common BENIGN event:
+    #   p_new_source     — share of roaming events from a never-seen IP (mobile/CGNAT);
+    #   p_config_release — per-step chance a client release gives one habitual JA3 a new
+    #                      version; machines adopt it at p_config_adopt per use;
+    #   p_hotdesk        — share of events where a user signs in on a machine not theirs;
+    #   p_sensor_fp      — IDS probe false-positive rate on non-recon traffic;
+    #   p_legacy_client  — share of machines whose JA3 is never resolvable (ja3=0).
+    # Mimetic credential theft — the attacker runs a common client / a known egress /
+    # replays the victim's stolen session cookie (pass-the-cookie):
+    #   p_theft_mimic_config, p_theft_known_source, p_theft_session_replay.
+    # Kill chain — p_compromise is a global per-step intrusion rate with remediation
+    # after exfiltration (None = the v4 per-visit hazard with no remediation, which left
+    # ~95% of machines compromised and ~28% of events anomalous). A lateral event pivots
+    # with a harvested credential (new device->user binding, Euler/LANL sense) at
+    # p_lateral_foreign_cred; p_lateral_role_spoof is the v4 role-claim tell, kept at 0.
+    # Fresh slot pools (shared by benign churn and attackers, recycled when exhausted):
+    num_new_sources: int = 6000
+    num_new_configs: int = 192
+    p_new_source: float = 0.3
+    p_config_release: float = 0.00025
+    p_config_adopt: float = 0.05
+    p_hotdesk: float = 0.02
+    p_sensor_fp: float = 0.01
+    p_legacy_client: float = 0.05
+    p_theft_mimic_config: float = 0.7
+    p_theft_known_source: float = 0.5
+    p_theft_session_replay: float = 0.5
+    p_compromise: float | None = 0.0006
+    p_lateral_foreign_cred: float = 0.7
+    p_lateral_role_spoof: float = 0.0
+    p_lateral_new_config: float = 0.3
+    # The service account (user 0) runs on this many dedicated server machines.
+    num_service_machines: int | None = 3
+    # Device posture mix (no cert / cert / cert+TPM). Unmanaged BYOD machines are common;
+    # with too few of them a never-attested device is itself a theft tell (the attacker's
+    # fresh cookie is always tier 0), readable off one static node feature.
+    tier_mix: tuple[float, float, float] = (0.35, 0.4, 0.25)
+    # Per-step chance an active theft incident emits its next request. Faster incidents
+    # shrink the victim's inter-request gap (msg[9]) until it alone identifies the class.
+    p_theft_interleave: float = 0.06
 
     # De-degeneration knob: probability that a *benign* event performs an
     # authorised-but-non-habitual access (legitimate exploration). With this > 0 the
@@ -198,10 +248,10 @@ class TGNConfig:
     @property
     def total_nodes(self) -> int:
         return (
-            self.num_users
+            self.num_users + self.num_guests
             + self.num_devices + self.num_wipe_slots + self.num_theft_slots
-            + self.num_sources + self.num_theft_slots
-            + self.num_configs + self.num_theft_slots
+            + self.num_sources + self.num_theft_slots + self.num_new_sources
+            + self.num_configs + self.num_theft_slots + self.num_new_configs
             + self.num_resources
         )
 

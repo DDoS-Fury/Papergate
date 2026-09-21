@@ -20,11 +20,19 @@ The three classes of defects it guards against:
   * Mislabelled volume events: labelling exfiltration as lateral movement puts a
     sub-population separable by a single feature inside the class whose premise is that
     it has no feature tell.
+  * History shortcuts (v5): a single set-membership lookup — "this IP was never seen",
+    "this role claim differs from the user's usual one" — must not solve a critical
+    class either. The v4 generator passed every static check above while "IP never seen"
+    reached AUC 1.000 on credential theft and a role-claim lookup caught 36% of lateral
+    movement at zero false positives, because benign traffic lived in a closed world.
 
-Runs on the generator alone (no training), a few seconds per seed.
+Runs on the generator alone (no training), at the training stream size: a vacuous pass
+(too few events of a class to measure it) is itself a failure.
 """
 
 from __future__ import annotations
+
+from functools import lru_cache
 
 import numpy as np
 import pytest
@@ -32,10 +40,20 @@ from scipy import stats
 from sklearn.metrics import roc_auc_score
 
 from graphagate.config import TGNConfig
+from graphagate.data.lookup_rules import lookup_flags
 from graphagate.data.stream_synthetic import generate_streaming_data, stream_kwargs_from_cfg
 
 SEEDS = [42, 7, 123]
-N_EVENTS = 40_000
+# The audit must see the stream the model is trained on: at 40k events the rarer classes
+# fell below the per-class minimum and their checks were silently skipped.
+N_EVENTS = TGNConfig().num_events
+MIN_CLASS_EVENTS = 30          # whole stream, every class in TYPE_NAMES
+MIN_TEST_EVENTS = 100          # test window, critical classes
+# A single history lookup may not separate a critical class beyond this (per seed, paper
+# protocol gating). A regression guard, not a target: over 11 seeds the worst v5 lookup
+# is 0.71-0.80 (theft, src|usr_new / cfg|dev_new), while v4 reached 1.000. Their SUM is the
+# stateful baseline the learned models must beat (scratch/generator_rule_audit.py).
+MAX_SINGLE_LOOKUP_AUC = 0.85
 
 # Type id -> name. 0 is the benign reference class.
 TYPE_NAMES = {
@@ -82,20 +100,22 @@ ALLOWLIST: dict[tuple[int, str, int], str] = {
 CRITICAL_TYPES = (3, 4)  # lateral movement, credential theft
 
 
+@lru_cache(maxsize=len(SEEDS))
 def _stream(seed: int, n_events: int = N_EVENTS):
     cfg = TGNConfig(num_events=n_events, seed=seed)
     return generate_streaming_data(**stream_kwargs_from_cfg(cfg))
 
 
 def _columns(s):
-    """``{(source, column_index): value_per_event}`` for every scalar model input."""
+    """``{(source, column_index): value_per_event}`` for every scalar model input:
+    the message and the static features of all five endpoint nodes."""
     msg = s.msg.numpy()
     nf = s.node_features.numpy()
-    dst = s.dst.numpy()
-    user = s.user.numpy()
     cols = {("msg", j): msg[:, j] for j in range(msg.shape[1])}
-    cols.update({("nf_dst", j): nf[dst, j] for j in range(nf.shape[1])})
-    cols.update({("nf_user", j): nf[user, j] for j in range(nf.shape[1])})
+    for role, ids in (("dst", s.dst), ("user", s.user), ("dev", s.device),
+                      ("src", s.source), ("cfg", s.config)):
+        ids = ids.numpy()
+        cols.update({(f"nf_{role}", j): nf[ids, j] for j in range(nf.shape[1])})
     return cols
 
 
@@ -301,4 +321,79 @@ def test_exfil_is_not_labelled_lateral():
     assert float(msg[lateral, 8].max()) <= ceiling, (
         "a lateral event carries a bulk-transfer volume above anything seen in benign "
         "traffic — exfil is leaking into the lateral class"
+    )
+
+
+@pytest.mark.parametrize("seed", SEEDS)
+def test_every_class_is_measurable(seed):
+    """Every class must occur often enough for the checks above to measure it.
+
+    They skip classes below a minimum count, so a generator whose attack slots run out,
+    or whose base rate is lowered, would pass them vacuously. The critical classes must
+    also reach the test window — the v4 default config put zero credential-theft events
+    there, so its per-class theft metric was computed on a different, hand-tuned stream.
+    """
+    s = _stream(seed)
+    types = s.types.numpy()
+    counts = {name: int((types == k).sum()) for k, name in TYPE_NAMES.items()}
+    thin = {n: c for n, c in counts.items() if c < MIN_CLASS_EVENTS}
+    assert not thin, f"classes too rare to audit at seed {seed}: {thin}"
+
+    cfg = TGNConfig()
+    test = types[int(len(types) * (cfg.train_frac + cfg.val_frac)):]
+    thin = {TYPE_NAMES[k]: int((test == k).sum()) for k in CRITICAL_TYPES
+            if (test == k).sum() < MIN_TEST_EVENTS}
+    assert not thin, f"critical classes too rare in the test window at seed {seed}: {thin}"
+
+
+def test_role_claim_matches_identity():
+    """The role/clearance in the message is always the identity's real one.
+
+    User roles never change, so any disagreement between the role claim and the user's
+    history is a zero-false-positive rule. v4 spoofed it on half of lateral movement.
+    A stolen identity is modelled as a stolen *user* (theft / credential pivot) instead.
+    """
+    s = _stream(SEEDS[0])
+    user = s.user.numpy()
+    role = s.msg.numpy()[:, 5]
+    order = np.argsort(user, kind="stable")
+    u, r = user[order], role[order]
+    same_user = u[1:] == u[:-1]
+    changed = same_user & (r[1:] != r[:-1])
+    assert not changed.any(), (
+        f"{int(changed.sum())} events carry a role claim that differs from the same "
+        f"user's previous one — a zero-false-positive rule tell"
+    )
+
+
+@pytest.mark.parametrize("seed", SEEDS)
+def test_no_single_lookup_shortcut(seed):
+    """No single history lookup may separate a critical class on its own.
+
+    Scored like the paper (benign-vs-class AUC in the test window) with the paper's
+    memory protocol: rules remember labelled-benign history before the test window and
+    predicted-benign events inside it (graphagate.data.lookup_rules, gate="proto-self").
+    """
+    s = _stream(seed)
+    cfg = TGNConfig()
+    types = s.types.numpy()
+    test_start = int(len(types) * (cfg.train_frac + cfg.val_frac))
+    flags = lookup_flags(s, "proto-self", test_start)
+    te = np.arange(len(types)) >= test_start
+    benign = te & (types == 0)
+
+    violations = []
+    for type_id in CRITICAL_TYPES:
+        cls = te & (types == type_id)
+        sel = benign | cls
+        for rule in ("cfg_new", "src_new", "dev_new", "cfg|dev_new", "cfg|usr_new",
+                     "dev|usr_new", "src|usr_new", "role_changed"):
+            auc = _auc(cls[sel].astype(int), flags[rule][sel].astype(float))
+            if auc > MAX_SINGLE_LOOKUP_AUC:
+                violations.append(f"  {TYPE_NAMES[type_id]:10s} {rule:13s} AUC={auc:.4f} "
+                                  f"(n={int(cls.sum())})")
+    assert not violations, (
+        f"single history-lookup shortcut(s) at seed {seed} — a dict lookup solves the "
+        f"class, so it measures the generator's closed world, not the model:\n"
+        + "\n".join(violations)
     )

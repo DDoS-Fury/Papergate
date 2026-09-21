@@ -31,10 +31,24 @@ generator's dynamics exercise:
     on every user that touches it.
   * **cookie wipe** (``p_cookie_wipe``): a non-TPM machine loses its cookie and is
     re-keyed as a cold device node (benign; the cost of cookie-based identity).
-  * **credential theft** (``p_cred_theft``, etype 4): a never-seen attacker IP +
-    never-seen attacker device + never-seen attacker config suddenly issue requests as
-    an existing victim user. Policy-clean and signal-clean — only the broken
-    ``ip -> config -> device -> user`` binding pattern exposes it.
+  * **credential theft** (``p_cred_theft``, etype 4): an attacker issues requests as an
+    existing victim user. Policy-clean and signal-clean — only the broken
+    ``ip -> config -> device -> user`` binding pattern exposes it. Since v5 the attacker
+    is mimetic: a common fleet client, a fleet egress address, or the victim's replayed
+    session cookie (pass-the-cookie), each at its own rate.
+
+Open world (v5). In v4 every benign entity was seen within the first few percent of the
+stream while every attacker brought globally fresh IP / JA3 slots, so a set-membership
+lookup ("never seen this IP") scored AUC 1.000 on credential theft with no learning. Now
+novelty is a common BENIGN event too — never-seen roaming IPs, client releases that move
+the fleet to new JA3s, hot-desking (a user on a machine that is not theirs), cookie
+wipes, IDS false positives, unfingerprintable legacy clients — and benign churn and
+attackers draw fresh nodes from ONE pool per role, with one key format, so neither the
+slot index nor the key hash says who drew it. Lateral movement pivots with harvested
+credentials (a new device->user binding, the Euler / LANL sense) instead of spoofing a
+role claim; intrusions arrive at a global rate and are remediated after exfiltration, for
+a ~1-2% attack prevalence. ``V4_KNOBS`` rebuilds the v4 process for before/after audits;
+``graphagate.data.lookup_rules`` is the no-learning baseline the audit bounds.
 
 Anomaly types (``types``): 0=benign, 1=policy violation (OPA-owned), 2=contextual,
 3=lateral movement, 4=credential theft, 5=data exfiltration, 6=benign OPA denial (a
@@ -52,8 +66,9 @@ No **response** field may enter the message (e.g. the HTTP status): using it to 
 whether to allow the request is a causality violation, and a response field that takes a
 class-specific constant would be a near-deterministic label channel.
 
-Two invariants this generator must preserve, both regression-tested in
-``tests/test_leakage_audit.py``:
+Invariants this generator must preserve, regression-tested in
+``tests/test_leakage_audit.py`` (which also bounds single history lookups and checks
+that the role claim always matches the identity):
 
   * **No shortcut feature.** No single input column may separate an anomaly class on its
     own (bar the sensor probes on contextual and the resource RISK, which are legitimate
@@ -86,6 +101,7 @@ def stream_kwargs_from_cfg(cfg) -> dict:
     """
     return dict(
         num_users=cfg.num_users,
+        num_guests=cfg.num_guests,
         num_devices=cfg.num_devices,
         num_sources=cfg.num_sources,
         num_configs=cfg.num_configs,
@@ -102,7 +118,39 @@ def stream_kwargs_from_cfg(cfg) -> dict:
         use_resource_risk=cfg.use_resource_risk,
         use_source_internal=cfg.use_source_internal,
         guest_device_fallback=cfg.guest_device_fallback,
+        num_new_sources=cfg.num_new_sources,
+        num_new_configs=cfg.num_new_configs,
+        p_new_source=cfg.p_new_source,
+        p_config_release=cfg.p_config_release,
+        p_config_adopt=cfg.p_config_adopt,
+        p_hotdesk=cfg.p_hotdesk,
+        p_theft_mimic_config=cfg.p_theft_mimic_config,
+        p_theft_known_source=cfg.p_theft_known_source,
+        p_theft_session_replay=cfg.p_theft_session_replay,
+        p_compromise=cfg.p_compromise,
+        p_lateral_foreign_cred=cfg.p_lateral_foreign_cred,
+        p_lateral_role_spoof=cfg.p_lateral_role_spoof,
+        p_lateral_new_config=cfg.p_lateral_new_config,
+        p_sensor_fp=cfg.p_sensor_fp,
+        p_legacy_client=cfg.p_legacy_client,
+        num_service_machines=cfg.num_service_machines,
+        tier_mix=cfg.tier_mix,
+        p_theft_interleave=cfg.p_theft_interleave,
     )
+
+# The v4 generator (the one behind the pre-v5 paper numbers), expressed as knob values:
+# closed-world benign traffic, globally fresh attacker slots, role-spoof lateral, no
+# remediation. ``dataclasses.replace(TGNConfig(), **V4_KNOBS)`` rebuilds that process
+# (not bit-identical: slot keys and RNG consumption changed) for before/after audits.
+V4_KNOBS = dict(
+    guest_device_fallback=True, num_wipe_slots=16, p_cookie_wipe=0.0003,
+    num_new_sources=0, num_new_configs=0, p_new_source=0.0, p_config_release=0.0,
+    p_hotdesk=0.0, p_sensor_fp=0.0, p_legacy_client=0.0,
+    p_theft_mimic_config=0.0, p_theft_known_source=0.0, p_theft_session_replay=0.0,
+    p_compromise=None, p_lateral_foreign_cred=0.0, p_lateral_role_spoof=0.5,
+    p_lateral_new_config=0.5, num_service_machines=None, tier_mix=(0.2, 0.5, 0.3),
+    p_theft_interleave=0.15,
+)
 
 ROLES = ["guest", "operator", "manager", "admin"]
 CLEARANCES = ["PUBLIC", "INTERNAL", "CONFIDENTIAL", "SECRET", "TOP_SECRET"]
@@ -288,10 +336,6 @@ _WIPE_COLD_EVENTS = 25
 # client whose JA3 the collector could not resolve). A low-information default, like a
 # shared NAT IP — must not by itself look anomalous.
 _P_GUEST_CONFIG = 0.05
-# Per-(lateral)-event chance the compromised machine presents a config it has never used
-# (a globally-known fingerprint, but a new *tool* on this device) - the lateral-movement
-# config tell. Otherwise the lateral event keeps the machine's habitual config (stealth).
-_P_LATERAL_NEW_CONFIG = 0.5
 
 
 class ZTAStreamSimulator:
@@ -324,6 +368,27 @@ class ZTAStreamSimulator:
         use_resource_risk: bool = True,
         use_source_internal: bool = False,
         guest_device_fallback: bool = False,
+        # --- v5 realism / difficulty knobs (see the "Open world" section of the module
+        # docstring). Every default below reproduces the v4 *process*; TGNConfig sets the
+        # published values.
+        num_new_sources: int = 0,
+        num_new_configs: int = 0,
+        p_new_source: float = 0.0,
+        p_config_release: float = 0.0,
+        p_config_adopt: float = 0.05,
+        p_hotdesk: float = 0.0,
+        p_theft_mimic_config: float = 0.0,
+        p_theft_known_source: float = 0.0,
+        p_theft_session_replay: float = 0.0,
+        p_compromise: float | None = None,
+        p_lateral_foreign_cred: float = 0.0,
+        p_lateral_role_spoof: float = 0.5,
+        p_lateral_new_config: float = 0.5,
+        p_sensor_fp: float = 0.0,
+        p_legacy_client: float = 0.0,
+        num_service_machines: int | None = None,
+        tier_mix: tuple[float, float, float] = (0.2, 0.5, 0.3),
+        p_theft_interleave: float = 0.15,
     ):
         if seed is not None:
             np.random.seed(seed)
@@ -363,6 +428,21 @@ class ZTAStreamSimulator:
         self.p_cred_theft = p_cred_theft
         self.admission_horizon = admission_horizon
         self.use_resource_risk = use_resource_risk
+        self.num_new_sources = num_new_sources
+        self.num_new_configs = num_new_configs
+        self.p_new_source = p_new_source
+        self.p_config_release = p_config_release
+        self.p_config_adopt = p_config_adopt
+        self.p_hotdesk = p_hotdesk
+        self.p_theft_mimic_config = p_theft_mimic_config
+        self.p_theft_known_source = p_theft_known_source
+        self.p_theft_session_replay = p_theft_session_replay
+        self.p_theft_interleave = p_theft_interleave
+        self.p_compromise = p_compromise
+        self.p_lateral_foreign_cred = p_lateral_foreign_cred
+        self.p_lateral_role_spoof = p_lateral_role_spoof
+        self.p_lateral_new_config = p_lateral_new_config
+        self.p_sensor_fp = p_sensor_fp
 
         # --- resource popularity, DECOUPLED from the resource index ---
         # Access frequency follows a Zipf law, but the rank a resource gets is a random
@@ -378,11 +458,15 @@ class ZTAStreamSimulator:
         self.dev_lo = self.num_users
         self.dev_slots = num_devices + num_wipe_slots + num_theft_slots
         self.src_lo = self.dev_lo + self.dev_slots
-        self.src_slots = num_sources + num_theft_slots
+        # Trailing source / config slots form ONE fresh pool per role, shared by benign
+        # churn (never-seen roaming IPs, JA3 releases) and attackers. A single allocator
+        # hands them out in arrival order with the same key format, so neither the slot
+        # index nor the key string (hashed into the model input) reveals who drew it.
+        self.src_slots = num_sources + num_theft_slots + num_new_sources
         self.cfg_lo = self.src_lo + self.src_slots
         # Config slot 0 is the generic ``conf:guest``; [1, num_configs) are habitual
-        # fingerprints; the trailing num_theft_slots hold never-seen attacker configs.
-        self.cfg_slots = num_configs + num_theft_slots
+        # fingerprints; the trailing fresh pool holds never-seen fingerprints.
+        self.cfg_slots = num_configs + num_theft_slots + num_new_configs
         self.res_lo = self.cfg_lo + self.cfg_slots
         self.num_nodes = self.res_lo + num_resources
 
@@ -397,15 +481,22 @@ class ZTAStreamSimulator:
         # --- physical machines (stable across cookie wipes) ---
         # Tier: 0=no cert/tpm, 1=cert, 2=cert+tpm. tier-2 machines are TPM-keyed;
         # the rest are cookie-keyed (re-keyed on wipe).
-        self.machine_tiers = [int(np.random.choice([0, 1, 2], p=[0.2, 0.5, 0.3]))
+        self.machine_tiers = [int(np.random.choice([0, 1, 2], p=tier_mix))
                               for _ in range(num_devices)]
         # Owner(s): base round-robin owner + extra users on shared machines.
+        # With dedicated service machines, user 0 is a pure service identity: it owns no
+        # desk and never hot-desks (v4 made it a human desk owner AND the fleet cronjob).
+        self._humans = (
+            list(range(1, self.num_registered_users))
+            if num_service_machines is not None and self.num_registered_users > 1
+            else list(range(self.num_registered_users))
+        )
         self.machine_users: list[list[int]] = []
         for m in range(num_devices):
-            users = [m % self.num_registered_users]
+            users = [self._humans[m % len(self._humans)]]
             if np.random.rand() < p_shared_device:
                 extra = np.random.randint(1, 4)
-                pool = [u for u in range(self.num_registered_users) if u not in users]
+                pool = [u for u in self._humans if u not in users]
                 users += list(np.random.choice(pool, size=min(extra, len(pool)), replace=False))
             self.machine_users.append(users)
 
@@ -432,17 +523,33 @@ class ZTAStreamSimulator:
             cfgs = np.random.choice(cfg_pool, size=k, replace=False)
             self.machine_configs.append([int(c) for c in cfgs])
 
+        # Legacy clients: machines whose TLS stack the collector cannot fingerprint, so
+        # their BENIGN traffic carries ja3=0 too. Without them "ja3 invalid" is a
+        # zero-false-positive recon tell.
+        self.machine_legacy = (
+            [bool(np.random.rand() < p_legacy_client) for _ in range(num_devices)]
+            if p_legacy_client > 0 else [False] * num_devices
+        )
+        # Service account (user 0): a cronjob runs on a few dedicated server machines,
+        # not on the whole fleet (``None`` = v4 behaviour, any machine).
+        self.service_machines = (
+            None if num_service_machines is None
+            else list(range(min(num_service_machines, num_devices)))
+        )
+
         # --- external keys per node slot ---
         self.keys: list[str | None] = [None] * self.num_nodes
         for u in range(self.num_registered_users):
             self.keys[self.user_lo + u] = f"user_{u:04d}"
         for g in range(self.num_guests):
             self.keys[self.user_lo + self.num_registered_users + g] = f"guest_{g:04d}"
+        # Cookie keys are opaque random tokens (``ck:<hex>``), as a browser cookie is: a
+        # key encoding the machine or the allocation reason (``ck:atk-…``) would be a class
+        # tell through the key hash the model consumes.
+        self._used_cookies: set[str] = set()
         for m in range(num_devices):
             tier = self.machine_tiers[m]
-            self.keys[self.dev_lo + m] = (
-                f"tpm:{m:04d}" if tier == 2 else f"ck:{m:04d}-g0"
-            )
+            self.keys[self.dev_lo + m] = f"tpm:{m:04d}" if tier == 2 else self._new_cookie()
         for k in range(num_wipe_slots + num_theft_slots):
             self.keys[self.dev_lo + num_devices + k] = f"_spare_dev_{k}"
         # Source keys are namespaced ``src:<ip>`` so a client IP can never alias onto a
@@ -453,15 +560,18 @@ class ZTAStreamSimulator:
             self.keys[self.src_lo + s] = (
                 f"src:10.0.0.{s}" if s < num_office else f"src:100.64.{s // 256}.{s % 256}"
             )
-        for k in range(num_theft_slots):
-            self.keys[self.src_lo + num_sources + k] = f"src:203.0.113.{k}"
+        # Fresh-pool sources continue the external address space: slot ``num_sources + j``
+        # is the j-th never-seen IP, whoever uses it first.
+        for k in range(num_theft_slots + num_new_sources):
+            self.keys[self.src_lo + num_sources + k] = self._fresh_ip_key(num_sources + k)
         # Config keys: slot 0 = generic guest, [1, num_configs) = habitual JA3
-        # fingerprints, trailing slots = never-seen attacker configs (credential theft).
+        # fingerprints, trailing slots = fresh fingerprints (JA3 releases and attacker
+        # tools), numbered in allocation order.
         self.keys[self.cfg_lo] = "conf:guest"
         for c in range(1, num_configs):
             self.keys[self.cfg_lo + c] = f"conf:{c:04d}"
-        for k in range(num_theft_slots):
-            self.keys[self.cfg_lo + num_configs + k] = f"_spare_cfg_{k}"
+        for k in range(num_theft_slots + num_new_configs):
+            self.keys[self.cfg_lo + num_configs + k] = f"conf:{num_configs + k:04d}"
         for r in range(num_resources):
             self.keys[self.res_lo + r] = self.resource_uris[r]
 
@@ -539,13 +649,23 @@ class ZTAStreamSimulator:
                     if self.dev_lo + m != guest:
                         self.keys[self.dev_lo + m] = f"_guest_unused_dev_{m:04d}"
                         self.node_features[self.dev_lo + m, 2] = 0.0
-        self._next_wipe_slot = 0
-        self._next_theft_slot = 0
+        # Fresh-slot allocators (round-robin, recycled when exhausted: a recycled slot is
+        # a node the graph has already seen, which only weakens the novelty tell).
+        self._dev_pool = [self.dev_lo + num_devices + k for k in range(num_wipe_slots + num_theft_slots)]
+        self._src_pool = [self.src_lo + num_sources + k for k in range(num_theft_slots + num_new_sources)]
+        self._cfg_pool = [num_configs + k for k in range(num_theft_slots + num_new_configs)]  # local ids
+        self._next_dev = self._next_src = self._next_cfg = 0
         self._slot_age: dict[int, int] = {}      # events seen by a re-keyed (wiped) slot
         self.last_user_t: dict[int, int] = {}
         self.compromised_state: dict[int, int] = {}  # machine -> kill-chain phase
         self.compromised_chain_remaining: dict[int, int] = {} # machine -> steps left in lateral chain
+        self.compromised_dwell: dict[int, int] = {}  # machine -> post-exfil events before remediation
+        self.harvested_creds: dict[int, list[int]] = {}  # machine -> users whose creds were dumped
         self._active_thefts: list[dict] = []
+        # JA3 release model: habitual config (local id) -> its newer version. A machine
+        # still running the old one upgrades at its next use with prob p_config_adopt.
+        self._cfg_upgrade: dict[int, int] = {}
+        self._admitted = num_devices  # machines admitted so far (updated each step)
 
     # --- helpers ---
     def policy_allows(self, role: str, method: int, uri: str) -> bool:
@@ -631,28 +751,87 @@ class ZTAStreamSimulator:
         idx = int(np.random.choice(len(choices), p=p))
         return choices[idx]
 
+    # --- fresh-slot allocation (shared by benign churn and attackers) ---
+    def _new_cookie(self) -> str:
+        while True:
+            key = f"ck:{random.getrandbits(48):012x}"
+            if key not in self._used_cookies:
+                self._used_cookies.add(key)
+                return key
+
+    @staticmethod
+    def _fresh_ip_key(i: int) -> str:
+        """Key of source slot ``i`` — the CGNAT/external range the roaming pool uses."""
+        return f"src:100.{64 + i // 65536}.{(i // 256) % 256}.{i % 256}"
+
+    def _alloc_dev(self, tier: int) -> int | None:
+        """A fresh device slot with a new opaque cookie. Slots held by a machine or by
+        an active theft incident are skipped when the pool wraps around; ``None`` if every
+        slot is held (never re-key a live device node)."""
+        busy = set(self.machine_slot.values()) | {t["dev_slot"] for t in self._active_thefts}
+        for _ in range(len(self._dev_pool)):
+            slot = self._dev_pool[self._next_dev % len(self._dev_pool)]
+            self._next_dev += 1
+            if slot not in busy:
+                break
+        else:
+            return None
+        self.keys[slot] = self._new_cookie()
+        self.node_features[slot, 2] = tier / 2.0
+        self._slot_age[slot] = 0
+        return slot
+
+    def _alloc_src(self) -> int:
+        """Global slot of a never-seen client IP (recycled round-robin when exhausted)."""
+        slot = self._src_pool[self._next_src % len(self._src_pool)]
+        self._next_src += 1
+        return slot
+
+    def _alloc_cfg(self) -> int:
+        """LOCAL id of a never-seen JA3 fingerprint (recycled round-robin when exhausted)."""
+        local = self._cfg_pool[self._next_cfg % len(self._cfg_pool)]
+        self._next_cfg += 1
+        return local
+
     def _maybe_wipe_cookie(self, machine: int) -> None:
         """Re-key a cookie-identified machine onto a fresh (cold) device slot."""
         if (
             not self.guest_device_fallback  # guest devices have no per-machine cookie
             and self.machine_tiers[machine] < 2
-            and self._next_wipe_slot < self.num_wipe_slots
+            and self._dev_pool
             and random.random() < self.p_cookie_wipe
         ):
-            slot = self.dev_lo + self.num_devices + self._next_wipe_slot
-            gen = self._next_wipe_slot + 1
-            self._next_wipe_slot += 1
-            self.keys[slot] = f"ck:{machine:04d}-g{gen}"
-            self.node_features[slot, 2] = self.machine_tiers[machine] / 2.0
-            self.machine_slot[machine] = slot
-            self._slot_age[slot] = 0
+            slot = self._alloc_dev(self.machine_tiers[machine])
+            if slot is not None:
+                self.machine_slot[machine] = slot
+
+    def _maybe_release_config(self) -> None:
+        """A client release (browser/TLS-library update) changes the JA3 of one habitual
+        fingerprint: the fleet migrates to a globally never-seen config over time. This
+        is what makes "new config on a known device / for a known user" a common BENIGN
+        event rather than an attack-only one."""
+        if self.p_config_release <= 0 or random.random() >= self.p_config_release:
+            return
+        in_use = sorted({c for cfgs in self.machine_configs for c in cfgs} - set(self._cfg_upgrade))
+        if in_use:
+            self._cfg_upgrade[int(random.choice(in_use))] = self._alloc_cfg()
 
     def _habitual_config(self, machine: int) -> int:
         """Global slot of a benign client config for ``machine`` (its habitual JA3, or
-        occasionally the generic ``conf:guest``)."""
+        occasionally the generic ``conf:guest``). A pending release is adopted here."""
         if random.random() < _P_GUEST_CONFIG:
             return self.cfg_lo  # conf:guest
-        return self.cfg_lo + int(random.choice(self.machine_configs[machine]))
+        cfgs = self.machine_configs[machine]
+        j = random.randrange(len(cfgs))
+        new = self._cfg_upgrade.get(cfgs[j])
+        if new is not None and random.random() < self.p_config_adopt:
+            cfgs[j] = new
+        return self.cfg_lo + int(cfgs[j])
+
+    def _fleet_config(self) -> int:
+        """Global slot of a config drawn with its fleet popularity (a common client)."""
+        m = int(np.random.randint(0, self._admitted))
+        return self.cfg_lo + int(random.choice(self.machine_configs[m]))
 
     def _new_tool_config(self, machine: int) -> int:
         """Global slot of a config ``machine`` has never used (a new tool on a known
@@ -663,6 +842,29 @@ class ZTAStreamSimulator:
         if not others:
             return self._habitual_config(machine)
         return self.cfg_lo + int(random.choice(others))
+
+    def _compromise(self, machine: int) -> None:
+        """Start a kill chain on ``machine``: the intruder dumps 1-3 credentials of users
+        who do not own it (cached logons, a keylogger) for the lateral pivot."""
+        self.compromised_state[machine] = 1
+        pool = [u for u in range(self.num_registered_users) if u not in self.machine_users[machine]]
+        if pool:
+            k = min(int(np.random.randint(1, 4)), len(pool))
+            self.harvested_creds[machine] = [int(u) for u in np.random.choice(pool, size=k, replace=False)]
+
+    def _remediate(self, machine: int) -> None:
+        for d in (self.compromised_state, self.compromised_chain_remaining,
+                  self.compromised_dwell, self.harvested_creds):
+            d.pop(machine, None)
+
+    def _benign_signals(self, machine: int) -> tuple[float, float, float, float]:
+        """``(ja3, s1, s2, s3)`` of a non-recon request from ``machine``: a legacy client
+        is never fingerprinted, and each IDS probe misfires at ``p_sensor_fp``."""
+        ja3 = 0.0 if self.machine_legacy[machine] else 1.0
+        if self.p_sensor_fp <= 0:
+            return ja3, 0.0, 0.0, 0.0
+        s = (np.random.rand(3) < self.p_sensor_fp).astype(float)
+        return ja3, float(s[0]), float(s[1]), float(s[2])
 
     def _emit_theft_event(self, incident: dict) -> dict:
         """One credential-theft request: attacker IP + config + device, victim identity."""
@@ -677,7 +879,8 @@ class ZTAStreamSimulator:
         # policy-clean and signal-clean by construction — only the broken
         # ip -> config -> device -> user binding exposes it. Constant byte values here used
         # to identify the class with 100% precision and recall, i.e. pure label leakage.
-        feat = [1.0, 0.0, 0.0, 0.0, float(method),
+        _ja3, s1, s2, s3 = self._benign_signals(0)
+        feat = [1.0, s1, s2, s3, float(method),
                 ROLES.index(role) / (len(ROLES) - 1), clr / 4.0,
                 float(abs(np.random.normal(0.1, 0.05))),
                 float(abs(np.random.normal(0.2, 0.1)))]
@@ -735,35 +938,6 @@ class ZTAStreamSimulator:
         # inter-request gap collapse, and that gap is an edge feature — the class became
         # identifiable from ``log1p(Δt)`` alone, with no need for the binding structure that
         # is supposed to be the only thing exposing it.
-        if self._active_thefts and random.random() < 0.15:
-            return self._emit_theft_event(random.choice(self._active_thefts))
-        if (
-            random.random() < self.p_cred_theft
-            and self._next_theft_slot < self.num_theft_slots
-        ):
-            k = self._next_theft_slot
-            self._next_theft_slot += 1
-            if self.guest_device_fallback and self._guest_dev_slot is not None:
-                # Attacker device is TPM-less too, so under the guest-fallback policy it
-                # collapses onto the shared guest node; the never-seen IP / JA3 remain the
-                # only novelty tells (the device-identity tell is intentionally lost).
-                dev_slot = self._guest_dev_slot
-            else:
-                dev_slot = self.dev_lo + self.num_devices + self.num_wipe_slots + k
-                self.keys[dev_slot] = f"ck:atk-{k:03d}"  # attacker gets a fresh cookie
-            cfg_slot = self.cfg_lo + self.num_configs + k
-            self.keys[cfg_slot] = f"conf:atk-{k:03d}"  # ...and a never-seen JA3
-            incident = {
-                "victim": int(np.random.randint(0, self.num_registered_users)),
-                "dev_slot": dev_slot,
-                "src_slot": self.src_lo + self.num_sources + k,
-                "cfg_slot": cfg_slot,
-                "remaining": int(np.random.randint(3, 7)),
-            }
-            self._active_thefts.append(incident)
-            return self._emit_theft_event(incident)
-
-        # --- pick the physical machine (progressively admitted), its user and IP ---
         if self.admission_horizon:
             max_m = min(
                 self.num_devices,
@@ -771,10 +945,89 @@ class ZTAStreamSimulator:
             )
         else:
             max_m = self.num_devices
+        self._admitted = max_m
+        self._maybe_release_config()
+
+        if self._active_thefts and random.random() < self.p_theft_interleave:
+            return self._emit_theft_event(random.choice(self._active_thefts))
+        if (
+            random.random() < self.p_cred_theft and self._src_pool and self._cfg_pool
+            and (self._dev_pool or self._guest_dev_slot is not None)
+        ):
+            victim = int(np.random.randint(0, self.num_registered_users))
+            victim_machines = [
+                m for m in range(self._admitted) if victim in self.machine_users[m]
+                and self.machine_tiers[m] < 2  # a TPM-bound identity cannot be replayed
+            ]
+            replay_m = None
+            if victim_machines and random.random() < self.p_theft_session_replay:
+                # Session hijack (infostealer -> pass-the-cookie): the attacker replays
+                # the victim's device cookie, so device and device->user bindings are the
+                # victim's own; only the source/config around them are foreign.
+                replay_m = int(random.choice(victim_machines))
+                dev_slot = self.machine_slot[replay_m]
+            elif self.guest_device_fallback and self._guest_dev_slot is not None:
+                # Attacker device is TPM-less too, so under the guest-fallback policy it
+                # collapses onto the shared guest node (the device-identity tell is lost).
+                dev_slot = self._guest_dev_slot
+            else:
+                # A fresh cookie, like any new browser (a busy pool falls back to replay
+                # of an arbitrary fleet device rather than re-keying a live one).
+                # Infostealer kits export software (non-TPM) device certificates with
+                # the cookies, so the attacker can present the victim's tier-1 posture;
+                # only a TPM-bound identity is out of reach (``victim_machines`` above).
+                cert = any(self.machine_tiers[m] == 1 for m in victim_machines)
+                dev_slot = self._alloc_dev(
+                    tier=1 if cert and random.random() < self.p_theft_mimic_config else 0
+                )
+                if dev_slot is None:
+                    dev_slot = self.machine_slot[int(np.random.randint(0, max_m))]
+            # Mimicry: a real attacker runs a common client (stock Chrome, curl) and
+            # egresses through residential / mobile address space the fleet also uses.
+            # Only the remainder brings a never-seen JA3 / IP — drawn from the SAME fresh
+            # pools that benign releases and roaming draw from.
+            if random.random() < self.p_theft_known_source:
+                src_slot = self.src_lo + int(np.random.randint(min(30, self.num_sources), self.num_sources))
+            else:
+                src_slot = self._alloc_src()
+            if random.random() < self.p_theft_mimic_config:
+                # A replayed session comes with the victim's fingerprint (anti-detect
+                # browser kits sell both together); otherwise a popular fleet client.
+                cfg_slot = (
+                    self.cfg_lo + int(random.choice(self.machine_configs[replay_m]))
+                    if replay_m is not None else self._fleet_config()
+                )
+            else:
+                cfg_slot = self.cfg_lo + self._alloc_cfg()
+            incident = {
+                "victim": victim,
+                "dev_slot": dev_slot,
+                "src_slot": src_slot,
+                "cfg_slot": cfg_slot,
+                "remaining": int(np.random.randint(3, 7)),
+            }
+            self._active_thefts.append(incident)
+            return self._emit_theft_event(incident)
+
+        # --- pick the physical machine (progressively admitted), its user and IP ---
+        if self.p_compromise is not None and random.random() < self.p_compromise:
+            # A new intrusion lands on a random admitted, currently clean machine. Unlike
+            # the v4 per-visit hazard, the global rate keeps prevalence independent of
+            # fleet size, and remediation (below) returns machines to the clean pool.
+            victim_m = int(np.random.randint(0, max_m))
+            if victim_m not in self.compromised_state:
+                self._compromise(victim_m)
         machine = int(np.random.randint(0, max_m))
         self._maybe_wipe_cookie(machine)
         dev_slot = self.machine_slot[machine]
         user = int(random.choice(self.machine_users[machine]))
+        if (
+            self.p_hotdesk > 0
+            and random.random() < self.p_hotdesk
+        ):
+            # Hot-desking: a registered user signs in on a machine that is not theirs
+            # (meeting room, colleague's desk) — a BENIGN new device->user binding.
+            user = int(random.choice(self._humans))
         u_role, u_clearance = self.user_roles[user], self.user_clearances[user]
 
         scenario = 0
@@ -786,12 +1039,16 @@ class ZTAStreamSimulator:
         home = self.machine_home_ips[machine]
         if random.random() < self.p_roam:
             scenario |= SCEN_ROAMING
-            src_local = int(np.random.randint(0, self.num_sources))
-            while src_local in home:
+            if self.p_new_source > 0 and self._src_pool and random.random() < self.p_new_source:
+                # Mobile / CGNAT / hotel Wi-Fi: an address nobody in the fleet used before.
+                source = self._alloc_src()
+            else:
                 src_local = int(np.random.randint(0, self.num_sources))
+                while src_local in home:
+                    src_local = int(np.random.randint(0, self.num_sources))
+                source = self.src_lo + src_local
         else:
-            src_local = random.choice(sorted(home))
-        source = self.src_lo + src_local
+            source = self.src_lo + random.choice(sorted(home))
 
         # Client config (TLS/JA3): the machine's habitual fingerprint by default. It is a
         # software identity, so roaming (a network change) does NOT change it; lateral
@@ -799,8 +1056,11 @@ class ZTAStreamSimulator:
         config = self._habitual_config(machine)
 
         # --- APT kill chain on the physical machine (recon -> lateral -> exfil) ---
-        if np.random.rand() < 0.005 and machine not in self.compromised_state:
-            self.compromised_state[machine] = 1
+        if (
+            self.p_compromise is None  # v4 hazard: per visit, never remediated
+            and np.random.rand() < 0.005 and machine not in self.compromised_state
+        ):
+            self._compromise(machine)
         is_anomalous = (
             machine in self.compromised_state and np.random.rand() < 0.3
         )  # compromised machines blend in 70% of the time
@@ -813,13 +1073,19 @@ class ZTAStreamSimulator:
                 user = 0  # Dedicate user 0 as a service account
                 u_role, u_clearance = self.user_roles[user], self.user_clearances[user]
                 config = self.cfg_lo + 1  # Fixed JA3 for script
+                if self.service_machines is not None:
+                    # The cronjob lives on its server, not on whichever desk stepped.
+                    sm = int(random.choice(self.service_machines))
+                    machine, dev_slot = sm, self.machine_slot[sm]
+                    source = self.src_lo + random.choice(sorted(self.machine_home_ips[sm]))
+                    scenario = SCEN_SHARED if len(self.machine_users[sm]) > 1 else 0
                 valid = self._policy_valid_actions(u_role)
                 if valid:
                     res_idx, method = valid[0]  # Deterministic access
                     # Tight but continuous byte volumes: a cronjob is predictable, not
                     # bit-identical. Constant values here were a guaranteed-benign
                     # fingerprint the model could memorise.
-                    feat = [1.0, 0.0, 0.0, 0.0, float(method),
+                    feat = [*self._benign_signals(machine), float(method),
                             ROLES.index(u_role) / (len(ROLES) - 1), u_clearance / 4.0,
                             float(abs(np.random.normal(0.2, 0.02))),
                             float(abs(np.random.normal(0.5, 0.03)))]
@@ -831,7 +1097,7 @@ class ZTAStreamSimulator:
                 invalid = self._policy_violations(u_role)
                 if invalid:
                     res_idx, method = self._zipf_choice(invalid, ("viol", u_role))
-                    feat = [1.0, 0.0, 0.0, 0.0, float(method),
+                    feat = [*self._benign_signals(machine), float(method),
                             ROLES.index(u_role) / (len(ROLES) - 1), u_clearance / 4.0,
                             float(abs(np.random.normal(0.1, 0.05))),
                             float(abs(np.random.normal(0.2, 0.1)))]
@@ -845,7 +1111,7 @@ class ZTAStreamSimulator:
                 user = self.num_registered_users + int(np.random.randint(0, self.num_guests))
                 u_role, u_clearance = "guest", 0
                 config = self.cfg_lo  # conf:guest
-                dev_slot = self._guest_dev_slot if self._guest_dev_slot is not None else self.dev_lo + machine
+                dev_slot = self._guest_dev_slot if self._guest_dev_slot is not None else dev_slot
                 if not hasattr(self, "_anon_actions"):
                     self._anon_actions = [
                         (r, m) for r, uri in enumerate(self.resource_uris)
@@ -866,26 +1132,49 @@ class ZTAStreamSimulator:
                 else:
                     res_idx, method = 0, 0  # public-path fallback
 
-            ja3, s1, s2, s3 = 1.0, 0.0, 0.0, 0.0
+            ja3, s1, s2, s3 = self._benign_signals(machine)
             bytes_in = abs(np.random.normal(0.1, 0.05))
             bytes_out = abs(np.random.normal(0.2, 0.1))
             label, etype = 0, 0
         else:
             state = self.compromised_state[machine]
+            # v5 (p_compromise set): recon and exfiltration last 1-3 events each instead
+            # of exactly one, so every class is measurable at a realistic base rate.
+            multi = self.p_compromise is not None
             if state == 1:
                 anomaly_type = "context"  # Recon phase (often triggers Snort)
-                self.compromised_state[machine] = 2
-                self.compromised_chain_remaining[machine] = int(np.random.randint(5, 12))
+                recon_left = self.compromised_chain_remaining.get(machine)
+                if multi and recon_left is None:
+                    recon_left = int(np.random.randint(1, 4))
+                if not multi or recon_left <= 1:
+                    self.compromised_state[machine] = 2
+                    self.compromised_chain_remaining[machine] = int(np.random.randint(5, 12))
+                else:
+                    self.compromised_chain_remaining[machine] = recon_left - 1
             elif state == 2:
                 anomaly_type = "lateral"  # Lateral movement phase chain
                 self.compromised_chain_remaining[machine] -= 1
                 if self.compromised_chain_remaining[machine] <= 0:
                     self.compromised_state[machine] = 3
+                    self.compromised_chain_remaining[machine] = int(np.random.randint(1, 4)) if multi else 1
             elif state == 3:
                 anomaly_type = "exfil"    # Data Exfiltration
-                self.compromised_state[machine] = 4 # Done
+                self.compromised_chain_remaining[machine] -= 1
+                if self.compromised_chain_remaining[machine] <= 0:
+                    self.compromised_state[machine] = 4 # Done
+                    if multi:
+                        # Post-exploitation dwell, then detection + clean-up by the SOC.
+                        self.compromised_dwell[machine] = int(np.random.randint(0, 5))
             else:
                 anomaly_type = np.random.choice(["policy", "context", "lateral"])
+            if (
+                self.compromised_state.get(machine) == 4 and self.p_compromise is not None
+                and self.compromised_dwell.get(machine, 0) <= 0
+            ):
+                self._remediate(machine)
+            elif state == 4 and self.p_compromise is not None:
+                self.compromised_dwell[machine] -= 1
+
 
             bytes_in = abs(np.random.normal(0.1, 0.05))
             bytes_out = abs(np.random.normal(0.2, 0.1))
@@ -896,7 +1185,7 @@ class ZTAStreamSimulator:
                     res_idx, method = self._zipf_choice(sensitive, ("sens", u_role))
                 else:
                     res_idx, method = self._zipf_choice(self._all_actions, ("all",))
-                ja3, s1, s2, s3 = 1.0, 0.0, 0.0, 0.0
+                ja3, s1, s2, s3 = self._benign_signals(machine)
                 # A massive transfer is a legitimate, genuinely easy signal for this class
                 # — drawn continuously rather than as an exact constant. Exfiltration gets
                 # its OWN etype: folding it into etype=3 put a single-feature-separable
@@ -906,17 +1195,39 @@ class ZTAStreamSimulator:
                 bytes_out = abs(np.random.normal(15.0, 3.0))
                 etype = 5
             elif anomaly_type == "lateral":
-                _habit, non_habit = self._user_actions(user, u_role)
-                if non_habit:
-                    res_idx, method = self._zipf_choice(non_habit, ("nonhabit", user))
-                    ja3 = 1.0
+                creds = self.harvested_creds.get(machine)
+                pivot = bool(creds) and random.random() < self.p_lateral_foreign_cred
+                if pivot:
+                    # Pivot with a harvested credential (Euler / LANL sense of lateral
+                    # movement): the compromised machine now acts as ANOTHER user, so
+                    # the tell is a new device->user binding plus its timing. The role
+                    # in the message is that user's real role — the IdP issued a valid
+                    # token — and the destination follows that user's own policy space.
+                    user = int(random.choice(creds))
+                    u_role, u_clearance = self.user_roles[user], self.user_clearances[user]
+                    valid = self._policy_valid_actions(u_role)
+                    target = (
+                        self._zipf_choice(valid, ("valid", u_role)) if valid else None
+                    )
+                else:
+                    # Own-identity lateral: authorised but non-habitual access.
+                    _habit, non_habit = self._user_actions(user, u_role)
+                    target = (
+                        self._zipf_choice(non_habit, ("nonhabit", user)) if non_habit else None
+                    )
+                if target is not None:
+                    res_idx, method = target
+                    ja3 = 0.0 if self.machine_legacy[machine] else 1.0
                     # Lateral movement: stealth — legitimate credentials and protocols,
                     # rarely triggers the IDS (the network must study the graph).
                     s1 = 0.0
                     s2 = 1.0 if np.random.rand() > 0.98 else 0.0  # 2%
                     s3 = 1.0 if np.random.rand() > 0.90 else 0.0  # 10%
                     etype = 3
-                    if random.random() < 0.5:  # stolen identity inside the message
+                    if not pivot and random.random() < self.p_lateral_role_spoof:
+                        # v4 only: a role claim that disagrees with the identity. Since a
+                        # user's role never changes, this is a zero-false-positive rule
+                        # tell — set p_lateral_role_spoof=0 for publication streams.
                         allowed_roles = [
                             r for r in ROLES
                             if r != u_role and self.policy_allows(r, method, self.resource_uris[res_idx])
@@ -924,7 +1235,7 @@ class ZTAStreamSimulator:
                         if allowed_roles:
                             u_role = random.choice(allowed_roles)
                             u_clearance = ROLE_CLEARANCE[u_role]  # spoofed role's clearance
-                    if random.random() < _P_LATERAL_NEW_CONFIG:
+                    if random.random() < self.p_lateral_new_config:
                         # a new tool on this device: a config it has never presented
                         config = self._new_tool_config(machine)
                 else:
@@ -941,7 +1252,7 @@ class ZTAStreamSimulator:
                     anomaly_type = "context"
             if anomaly_type == "policy":
                 res_idx, method = self._zipf_choice(invalid, ("viol", u_role))
-                ja3, s1, s2, s3 = 1.0, 0.0, 0.0, 0.0
+                ja3, s1, s2, s3 = self._benign_signals(machine)
                 etype = 1
             elif anomaly_type == "context":
                 # The tell of a contextual anomaly is the compromised TLS trust and the
@@ -1064,11 +1375,13 @@ def generate_streaming_data(
     use_resource_risk=True,
     use_source_internal=False,
     guest_device_fallback=False,
+    **realism,
 ) -> SyntheticStream:
     """Generate the offline v4 training stream (see the module docstring).
 
     ``seed`` seeds both ``numpy`` and the stdlib ``random`` module so the stream is
-    fully reproducible — ``random.choice`` is used alongside ``np.random``.
+    fully reproducible — ``random.choice`` is used alongside ``np.random``. ``realism``
+    forwards the v5 open-world / difficulty knobs of :class:`ZTAStreamSimulator`.
     """
     sim = ZTAStreamSimulator(
         num_users=num_users, num_guests=num_guests, num_devices=num_devices, num_sources=num_sources,
@@ -1077,7 +1390,7 @@ def generate_streaming_data(
         p_roam=p_roam, p_shared_device=p_shared_device, p_cookie_wipe=p_cookie_wipe,
         p_cred_theft=p_cred_theft, admission_horizon=num_events, seed=seed,
         use_resource_risk=use_resource_risk, use_source_internal=use_source_internal,
-        guest_device_fallback=guest_device_fallback,
+        guest_device_fallback=guest_device_fallback, **realism,
     )
     events = [sim.step() for _ in range(num_events)]
 

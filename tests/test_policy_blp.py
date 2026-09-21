@@ -8,12 +8,18 @@ Reference (kept in lockstep): ``matrice_sicurezza`` / ``ruoli_to_blp`` in
 ``infra/opa/policy.rego``. Method codes: 0=GET, 1=POST, 2=PUT, 3=DELETE, 4=PATCH.
 """
 
+import dataclasses
+
+import pytest
+
+from graphagate.config import TGNConfig
 from graphagate.data.stream_synthetic import (
     RESOURCE_URIS,
     ROLE_CLEARANCE,
     SECURITY_MATRIX,
     ZTAStreamSimulator,
     policy_allows,
+    stream_kwargs_from_cfg,
 )
 
 GET, POST, DELETE = 0, 1, 3
@@ -76,15 +82,26 @@ def test_unserved_method_denied():
     assert not policy_allows("admin", GET, GUARD)
 
 
-def test_generated_stream_is_policy_compliant():
-    """Every benign event is an OPA-allowed access; every etype=1 event is an OPA denial."""
-    sim = ZTAStreamSimulator(
-        num_users=60, num_devices=40, num_sources=80,
-        num_resources=len(RESOURCE_URIS), num_wipe_slots=8, num_theft_slots=16, seed=0,
-    )
+@pytest.mark.parametrize("process", ["v4-defaults", "v5-config"])
+def test_generated_stream_is_policy_compliant(process):
+    """Every benign event is an OPA-allowed access; every etype=1 event is an OPA denial.
+
+    Run on the simulator defaults (v4 process) AND on the TGNConfig stream (v5 knobs:
+    hot-desking, credential pivots, service machines draw their own identities).
+    """
+    if process == "v4-defaults":
+        sim = ZTAStreamSimulator(
+            num_users=60, num_devices=40, num_sources=80,
+            num_resources=len(RESOURCE_URIS), num_wipe_slots=8, num_theft_slots=16, seed=0,
+        )
+        n_events = 8000
+    else:
+        kw = stream_kwargs_from_cfg(dataclasses.replace(TGNConfig(), seed=0, num_events=40000))
+        n_events = kw.pop("num_events")
+        sim = ZTAStreamSimulator(**kw, admission_horizon=n_events)
     roles = sim.user_roles
     res_lo = sim.res_lo
-    events = [sim.step() for _ in range(8000)]
+    events = [sim.step() for _ in range(n_events)]
 
     # Resolve routes against the SIMULATOR's own catalogue, not the module-level one: the
     # synthetic estate is drawn per-seed (build_resource_universe), so a given URI can hold

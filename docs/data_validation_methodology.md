@@ -27,22 +27,63 @@ La strategia di validazione adotta pertanto una **struttura a due binari complem
 Il generatore primario (`src/data/stream_synthetic.py`) è formalmente vincolato per eliminare separabilità banali.
 
 ### 2.1 Audit di De-Leakage (`tests/test_leakage_audit.py`)
-La suite di audit automatico impone 4 invarianti di non-trivialità:
-1.  **Floor AUC su Feature Singola ($\le 0.60$ su Lateral Movement):**  
-    Nessuna colonna scalare in ingresso (messaggio o attributi dei nodi) può separare da sola il lateral movement oltre $\text{AUC} \le 0.60$. Il valore post-audit misurato è **0.567** (Tabella I del paper), prossimo alla distribuzione casuale (0.50). Ciò garantisce che il task sia risolvibile solo modellando le correlazioni relazionali e temporali del grafo.
-2.  **Invarianza Marginale delle Destinazioni (Test KS su Effect Size):**  
-    Il traffico di lateral movement campiona le risorse bersaglio dalla stessa legge di popolarità dell'esplorazione benigna. La divergenza è valutata tramite statistica di Kolmogorov-Smirnov sull'effect size ($D_{\text{KS}} \le 0.15$), impedendo che la "novità della destinazione" costituisca un'etichetta gratuita.
-3.  **Assenza di Impronte Costanti:**  
-    I campi volumetrici (`bytes_in`, `bytes_out`) e temporali ($\Delta t$) sono estratti da distribuzioni continue, evitando costanti per-classe che permetterebbero la memorizzazione esatta.
-4.  **Causalità Inline (Zero Response-Side Leakage):**  
-    Il vettore di messaggio (10 float) include esclusivamente segnali osservabili al momento dell'arrivo della richiesta al PDP (JA3, sonde IDS, metodo, credenziali, recency utente). I campi di risposta (es. status code HTTP o byte inviati dal server) sono rigorosamente esclusi per evitare violazioni di causalità.
+L'audit gira sullo stream di training (200k eventi, 3 seed). Impone sei invarianti:
+1.  **Nessuna scorciatoia su feature singola ($\text{AUC} \le 0.75$):**
+    nessuna colonna scalare in ingresso, cioè il messaggio o le feature statiche di tutti e
+    cinque i nodi, separa da sola una classe oltre la soglia. Fanno eccezione i segnali
+    allow-listati per design (sonde IDS sul recon, volumi sull'exfil, RISK della risorsa sulle
+    violazioni di policy). Lateral movement e credential theft non hanno eccezioni.
+    Il floor misurato sul lateral va rimisurato sul generatore v5: il valore 0.567 della
+    Tabella I si riferisce al generatore v4.
+2.  **Nessuna scorciatoia storica su lookup singolo ($\text{AUC} \le 0.85$, v5):**
+    nessuna regola di set-membership («IP mai visto», «coppia config→utente mai vista»,
+    «claim di ruolo diverso dal solito», …) separa lateral o theft. Le regole sono in
+    `graphagate.data.lookup_rules`. Seguono il protocollo del paper: memoria dei benigni
+    etichettati prima della finestra di test, poi dei soli eventi predetti benigni.
+    Sul generatore v4 il lookup «IP mai visto» raggiungeva AUC 1.000 sul theft. La loro
+    somma (baseline *stateful*) è il riferimento che i modelli appresi devono battere
+    (`tasks/runs/generator_rule_audit.log`).
+3.  **Claim di ruolo coerente con l'identità:** il ruolo nel messaggio è sempre quello
+    reale dell'utente. Nel v4 il ruolo era falsificato nel 50% del lateral: un canale
+    senza falsi positivi.
+4.  **Misurabilità:** ogni classe ha almeno 30 eventi. Lateral e theft ne hanno almeno 100
+    nella finestra di test, così nessun controllo passa per assenza di campioni.
+5.  **Invarianza marginale delle destinazioni (KS sull'effect size, $D_{\text{KS}} \le 0.15$)**
+    e coppie (route, metodo) sempre servite.
+6.  **Assenza di impronte costanti:** volumi e $\Delta t$ sono estratti da distribuzioni
+    continue. Il messaggio contiene solo segnali disponibili al PDP prima della risposta.
 
-### 2.2 Grounding dei Parametri su Standard
-I parametri del generatore non sono arbitrari:
-*   **Risorse:** Legge di Zipf-Mandelbrot con esponente $s \approx 0.9$, coerente con la letteratura sugli accessi a intranet e repository aziendali (*Breslau et al.*, INFOCOM 1999).
-*   **Tempi di inter-arrivo:** Processo di Poisson non-omogeneo (NHPP) con cicli circadiani diurni (8:00–18:00) e traffico batch notturno (*Paxson & Floyd*, ToN 1995).
-*   **Sessioni e Timeout:** Ancorati a standard IETF: Kerberos TGT lifetime di 10 ore (RFC 4120), TLS session parameters (RFC 8446), DHCP lease churn (RFC 2131).
-*   **Rumore benigno:** Inclusione di esplorazione non-abituale legittima, errori umani (richieste 403) e roaming di rete per chiudere il *semantic gap*.
+### 2.2 Modello del traffico (v5) e scelte parametriche
+I valori sono scelte di modellazione, esposte come parametri in `TGNConfig` e ablabili
+con `scratch/knob_ablation.py`. Non sono derivati da uno standard.
+*   **Risorse:** legge di potenza sul rango di popolarità con esponente $s = 1.2$. Il rango è
+    permutato rispetto all'indice della risorsa. Breslau et al. (INFOCOM 1999) riportano
+    $\alpha \approx 0.64$–$0.83$ per richieste a proxy web, quindi $1.2$ è una
+    concentrazione più forte, non un valore di letteratura.
+*   **Inter-arrivi:** processo di Poisson a tasso costante a tratti (ore lavorative, notte,
+    weekend). Paxson & Floyd (ToN 1995) sostengono il modello di Poisson per gli arrivi di
+    *sessione* utente, non per le singole richieste: è un'approssimazione dichiarata.
+*   **Mondo aperto (v5):** la novità è un evento benigno comune.
+    *   IP mai visti nel roaming (`p_new_source`).
+    *   Release di client che cambiano il JA3 della flotta (`p_config_release`).
+    *   Hot-desking, cioè un utente su una macchina non sua (`p_hotdesk`).
+    *   Cancellazione dei cookie (`p_cookie_wipe`).
+    *   Falsi positivi IDS (`p_sensor_fp`) e client legacy senza JA3 (`p_legacy_client`).
+
+    Attaccanti e benigni prendono i nodi nuovi dallo *stesso* pool, con lo stesso formato di
+    chiave.
+*   **Attaccante mimetico (theft):** usa un client comune della flotta, esce da indirizzi già
+    usati dalla flotta o riusa la sessione rubata (pass-the-cookie, con il fingerprint della
+    vittima).
+*   **Lateral movement (v5):** la macchina compromessa usa credenziali raccolte di un altro
+    utente (nuovo binding device→utente, come in Euler/LANL), oppure esegue accessi non
+    abituali del proprietario.
+*   **Tasso base:** intrusioni a tasso globale (`p_compromise`) con kill chain finita e
+    remediation. La prevalenza degli attacchi è circa 1.3–1.5% per seed (etype 1–5), stabile lungo lo
+    stream. Nel v4 era circa 28% e alla fine 76 macchine su 80 risultavano compromesse.
+*   **Cosa non modelliamo:** timeout di sessione Kerberos/TLS e lease DHCP (RFC 4120, 8446,
+    2131) non sono implementati nel generatore. Il TTL di 10 ore della §3 riguarda il
+    binding in serving su PicoDomain.
 
 ---
 
@@ -94,7 +135,7 @@ Dimostrare questa curva nel paper prova che il parametro discende dallo standard
 *   Non presentare PicoDomain come un "benchmark quantitativo di scala".
 
 ### 4.2 Cosa affermare (Formulazione Consigliata)
-1.  *Sul sintetico:* «Data l'assenza di benchmark pubblici ZTA a 5 nodi, utilizziamo un generatore streaming vincolato formalmente da un leakage audit automatico, dimostrando che il task di rilevamento del lateral movement non è risolvibile tramite scorciatoie univariata (floor AUC 0.567) o invarianze marginali.»
+1.  *Sul sintetico:* «Data l'assenza di benchmark pubblici ZTA a 5 nodi, utilizziamo un generatore streaming vincolato formalmente da un leakage audit automatico, dimostrando che il task di rilevamento del lateral movement non è risolvibile tramite scorciatoie univariate, lookup storici singoli o invarianze marginali, e riportando la baseline a regole stateful come riferimento.» *(Floor da rimisurare sul generatore v5.)*
 2.  *Su PicoDomain:* «PicoDomain funge da studio empirico di fattibilità: dimostra che la catena a 5 nodi si mappa direttamente su telemetria Zeek reale (JA3 + Kerberos) e che la pipeline di apprendimento temporale, istanziata senza tuning per-corpus, preserva capacità induttiva di ranking (AUC 0.640 su lateral, 0.696 su theft) laddove i rilevatori a firme falliscono interamente.»
 3.  *Sulle limitazioni:* Dichiarare con trasparenza la dispersione dei seed ($\text{ddof}=1$), l'impossibilità di significatività asintotica con $N=3$ (riportando il pattern di segno di Wilcoxon), e la necessità di istanziare policy formali per calcolare metriche di recall a soglia.
 

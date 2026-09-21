@@ -1,0 +1,9 @@
+v5 (all on)              lateral: best-single=0.654 (cfg|usr_new/dev|usr_new) stateful=0.678 | theft: best-single=0.746 (cfg|dev_new/cfg|usr_new) stateful=0.824
+- benign IP churn        lateral: best-single=0.662 (cfg|usr_new) stateful=0.666 | theft: best-single=0.757 (src_new/src|usr_new) stateful=0.809
+- JA3 releases           lateral: best-single=0.632 (cfg|usr_new/dev|usr_new) stateful=0.681 | theft: best-single=0.770 (cfg|dev_new/src|usr_new) stateful=0.838
+- hot-desking            lateral: best-single=0.788 (cfg|usr_new) stateful=0.752 | theft: best-single=0.789 (cfg|usr_new/src|usr_new) stateful=0.832
+- theft mimicry+replay   lateral: best-single=0.643 (cfg|usr_new) stateful=0.682 | theft: best-single=0.961 (cfg_new/src_new) stateful=0.986
+- credential pivot       lateral: best-single=0.640 (cfg|dev_new) stateful=0.581 | theft: best-single=0.779 (cfg|dev_new/src|usr_new) stateful=0.859
++ role spoof (v4)        lateral: best-single=0.657 (cfg|dev_new/cfg|usr_new) stateful=0.723 | theft: best-single=0.767 (cfg|dev_new/src|usr_new) stateful=0.810
+- sensor noise/legacy    lateral: best-single=0.641 (cfg|usr_new/dev|usr_new) stateful=0.686 | theft: best-single=0.766 (cfg|dev_new/src|usr_new) stateful=0.820
+all v4 knobs             lateral: best-single=0.711 (cfg|usr_new/role_changed) stateful=0.742 | theft: best-single=1.000 (src_new) stateful=0.972

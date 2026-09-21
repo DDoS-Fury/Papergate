@@ -1,0 +1,12 @@
+seed=  1 worst lookup 0.744 (4,src_new)  worst static 0.717 (4,('nf_dev', 2))
+seed=  2 worst lookup 0.774 (4,src|usr_new)  worst static 0.657 (4,('msg', 9))
+seed=  3 worst lookup 0.782 (4,src|usr_new)  worst static 0.679 (4,('nf_dev', 2))
+seed=  4 worst lookup 0.802 (4,src|usr_new)  worst static 0.635 (4,('msg', 9))
+seed=  5 worst lookup 0.748 (4,cfg|dev_new)  worst static 0.644 (4,('msg', 9))
+seed=  6 worst lookup 0.708 (4,src|usr_new)  worst static 0.683 (4,('nf_dev', 2))
+seed=  8 worst lookup 0.798 (4,src|usr_new)  worst static 0.683 (4,('nf_dev', 2))
+seed=  9 worst lookup 0.747 (4,src|usr_new)  worst static 0.629 (4,('msg', 9))
+seed= 42 worst lookup 0.722 (4,cfg|dev_new)  worst static 0.673 (4,('nf_dev', 2))
+seed=  7 worst lookup 0.737 (4,cfg|dev_new)  worst static 0.686 (4,('nf_dev', 2))
+seed=123 worst lookup 0.777 (4,cfg|usr_new)  worst static 0.638 (4,('msg', 9))
+lookup: mean 0.758 max 0.802 | static: mean 0.666 max 0.717
