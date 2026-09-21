@@ -50,6 +50,8 @@ def latex_cell(vals, *, bold: bool = False, decimals: int = 3) -> str:
     body = f"{m:.{decimals}f}"
     if bold:
         body = rf"\mathbf{{{body}}}"
+    if np.isnan(s):  # fewer than 2 valid seeds: no spread to report (``\pmnan`` does not compile)
+        return f"${body}$"
     return rf"${body}\pm{s:.{decimals}f}$"
 
 

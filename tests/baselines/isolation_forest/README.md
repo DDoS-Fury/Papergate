@@ -3,10 +3,16 @@
 A classic, **non-relational** anomaly detector. Every ZTA access event
 is described by a 45-dim static vector: edge features `msg` (10) ⊕
 static features of the device node (16) ⊕ static features of the resource node (16) ⊕
-causal benign-gated history counters (3; the same statistics the TGN maintains
-online, consumed here as a flat tabular vector by the device actor). No
-memory, no temporal neighbourhood: it is the most a detector can see of a
-single, isolated event.
+causal benign-gated history counters (3; the same *family* of statistics the TGN
+maintains online, consumed here as a flat tabular vector by the device actor). No
+memory, no temporal neighbourhood, and **strictly fewer signals than the TGN**: device
+actor only — no user / source / config identity and no binding counters.
+
+The counters are gated by ground-truth benign labels up to `val_end` and commit every
+event after it (`label_horizon=val_end`, required by `_build_features`); the test labels
+never reach the features (`tests/test_isolation_forest_baseline.py`). The TGN's own gate
+past that point is `not signal_dirty`; the two differ only on signal-dirty events
+(see `docs/external_dataset_optc.md`, "Stato al 2026-09-19").
 
 Protocol identical to `graphagate.train_tgn` (same `TGNConfig`, same seed,
 same chronological split 70/10/20, same precursor prior). The `IsolationForest`

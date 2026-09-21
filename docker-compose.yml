@@ -262,10 +262,15 @@ services:
     entrypoint: ["python"]
     command: ["/app/tests/ablations/run_arch_sweep.py"]
 
-  # Reproducible regeneration of the report's Panels A/B (tab:baselines, tab:v3v4),
-  # multi-seed (save=False, does not touch public/). Writes the metric JSONs to
-  # tasks/runs/ and the LaTeX fragments to docs/paper/generated/.
+  # Reproducible regeneration of the report's lean evaluation (generator v5), multi-seed
+  # (save=False, does not touch public/). Writes the metric JSONs to tasks/runs/ and the
+  # LaTeX fragments to docs/paper/generated/. Default = Panel A only (TGN vs Isolation Forest
+  # vs stateful rules, 10 seeds, ~2.5 h); Panels B (config node off) and C (data-budget
+  # curve) are gated on its result and run explicitly. Finished runs are cached in
+  # tasks/runs/cache/, so a rerun after a crash resumes.
   #   docker compose --profile regen-report up
+  #   docker compose run --rm regen-report /app/tests/regen_report_tables.py --panels B
+  #   docker compose run --rm regen-report /app/tests/regen_report_tables.py --panels C
   regen-report:
     <<: *base
     profiles: ["regen-report"]

@@ -39,7 +39,7 @@
 
 % --- Preliminary-draft switch --------------------------------------------------------
 \newif\ifpreliminary
-\preliminaryfalse
+\preliminarytrue
 
 \ifpreliminary
   \newcommand{\prelim}[1]{#1}
@@ -71,9 +71,11 @@ for lateral movement and credential reuse in Zero Trust access streams}
 \fcolorbox{red!60!black}{red!6}{%
   \begin{minipage}{0.94\columnwidth}\small
   \textbf{Preliminary draft.} Every figure in Section~\ref{sec:results} is a
-  placeholder carried from runs that predate the generator de-leakage of
-  2026-08-03 and is \emph{not} reproducible from the current code. The structure,
-  the protocol and the qualitative claims are final; the numbers are not.
+  placeholder carried from runs on the closed-world generator (v4), which predate the
+  open-world generator v5 of 2026-09-21 and are \emph{not} reproducible from the
+  current code. The evaluation protocol is being revised (TGN against an Isolation
+  Forest and stateful lookup rules); the qualitative claims are pending that
+  evaluation, and so are the numbers.
   \end{minipage}}
 \end{center}
 \vspace{2mm}

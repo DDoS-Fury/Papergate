@@ -6,17 +6,51 @@ streaming TGN maintains online:
   * the interaction-history counters (per-pair / per-src access counts), and
   * the kill-chain precursor (a per-entity, time-decayed "recently alerted" prior).
 
-Giving the baselines (Isolation Forest / One-Class SVM / static GNN) the *same* signals
-means the TGN's remaining advantage on lateral movement is attributable to its
-temporal-graph machinery (recurrent memory + temporal neighbourhood) rather than to the
-counters or the precursor heuristic. Everything here is **causal** (uses only events
-strictly before each event) and **benign-gated** (only benign events advance the counts),
-exactly like the TGN's online state.
+Giving the baselines (Isolation Forest / One-Class SVM / static GNN) the same *family* of
+signals keeps the comparison from being a strawman — but they get strictly fewer than the
+TGN (device actor only: no user / source / config identity, no binding counters), so the
+remaining gap is not attributable to the temporal-graph machinery alone. Everything here
+is **causal** (uses only events strictly before each event) and **benign-gated** (only
+benign events advance the counts, up to a ``label_horizon``), like the TGN's online state.
 """
 
 from __future__ import annotations
 
+import dataclasses
+
 import numpy as np
+
+# Per-event tensors of a generated stream (``SyntheticStream``); everything else in it
+# (node features, keys, node-space layout) describes the entity space and must not be cut.
+_PER_EVENT = ("source", "config", "device", "user", "dst", "t", "msg", "y", "types", "scenario")
+
+
+def tail_stream(stream, cfg, n_train: int):
+    """Keep only the last ``n_train`` training events, leaving validation and test intact.
+
+    The data-budget experiment asks how much benign history a *new deployment* needs, so
+    the budget is taken from the events closest to the validation window (no temporal gap)
+    and the validation / test windows must stay bit-identical to the full stream's — every
+    method is then scored on the same events.
+
+    Returns ``(stream', cfg')``. ``cfg'`` carries ``train_frac`` / ``val_frac`` chosen so
+    that ``int(n' * frac)`` lands exactly on ``n_train`` and on the original validation
+    length (asserted); the ``+ 0.5`` keeps the product away from the ``int`` boundary.
+    Node ids, features and keys are untouched: entities absent from the kept events simply
+    have no history, as in a fresh deployment.
+    """
+    n = len(stream.y)
+    train_end = int(n * cfg.train_frac)
+    val_len = int(n * cfg.val_frac)
+    if not 0 < n_train <= train_end:
+        raise ValueError(f"n_train must be in (0, {train_end}], got {n_train}")
+    start = train_end - n_train
+    n2 = n - start
+    tf, vf = (n_train + 0.5) / n2, (val_len + 0.5) / n2
+    assert int(n2 * tf) == n_train and int(n2 * vf) == val_len
+    cut = {k: getattr(stream, k)[start:] for k in _PER_EVENT}
+    return (dataclasses.replace(stream, **cut),
+            dataclasses.replace(cfg, num_events=n2, train_frac=tf, val_frac=vf))
 
 
 def causal_hist_features(src, dst, y, *, label_horizon: int | None = None) -> np.ndarray:

@@ -59,16 +59,28 @@ def _binary_metrics(scores, labels, threshold):
     return precision, recall
 
 
-def _build_features(msg, src, dst, node_features, y):
+def _build_features(msg, src, dst, node_features, y, *, label_horizon: int):
     """Per-event feature matrix for the Isolation Forest.
 
     The 10-dim edge feature ``msg[i]`` concatenated with the 16-dim static attributes of
     both endpoints (device, destination resource) — 42 dims — PLUS the 3-dim causal
     interaction-history features (per-pair / per-src benign access counts; see
     ``graphagate.eval_common``), giving a 45-dim vector. The history columns are the same
-    counter statistics the TGN maintains online (flat per-event vector, device actor), so
-    this non-relational baseline is compared fairly: its remaining gap to the TGN measures
-    the value of the temporal-graph machinery, not of the counters.
+    *family* of counters the TGN maintains online, but the vector is strictly poorer than
+    the TGN's signals: device actor only — no user / source / config identity and none of
+    the binding counters — so this baseline measures what a flat per-event detector gets
+    from device-level counters, not the value of the temporal-graph machinery alone.
+
+    ``label_horizon`` (= ``val_end``) is required, deliberately without a default: past it
+    no ground-truth label reaches the counters and every event commits (the
+    commit-everything gate). Without it the counters of a test event depend on the labels
+    of the test events before it — an oracle the deployed system does not have (attack
+    pairs would stay "never seen" however often they repeat), and one that favours this
+    baseline. The gate is still not exactly the TGN's: past the horizon the TGN commits
+    iff ``not signal_dirty`` (external JA3/sensor signal), here everything commits. They
+    differ only on signal-dirty events — measured on v5 (seeds 2000-2001, test window):
+    lateral 8-14 %, cred-theft 3-5 %, benign 6-7 %; the lookup rules gate on their own
+    binding flags (``proto-self``). Effect on the comparison: small, direction undetermined.
 
     Tensors are torch tensors → converted to numpy here (sklearn input).
     """
@@ -76,19 +88,27 @@ def _build_features(msg, src, dst, node_features, y):
     nf_np = node_features.numpy()              # [num_nodes, 16]
     src_feat = nf_np[src.numpy()]              # [N, 16]  device attributes
     dst_feat = nf_np[dst.numpy()]              # [N, 16]  destination (resource) attributes
-    hist = causal_hist_features(src.numpy(), dst.numpy(), y.numpy())  # [N, 3] causal, benign-gated
+    hist = causal_hist_features(src.numpy(), dst.numpy(), y.numpy(),
+                                label_horizon=label_horizon)  # [N, 3] benign-gated up to the horizon
     return np.concatenate([msg_np, src_feat, dst_feat, hist], axis=1)
 
 
-def isolation_forest_baseline(cfg: TGNConfig = TGNConfig()):
+def isolation_forest_baseline(cfg: TGNConfig = TGNConfig(), stream=None):
+    """Fit/evaluate the Isolation Forest under the TGN protocol; see the module docstring.
+
+    ``stream`` is an optional pre-built :class:`SyntheticStream` (the data-budget curve
+    passes a truncated tail so every method sees the same events); ``None`` generates it
+    from ``cfg`` exactly as before.
+    """
     # Seed everything up front for reproducibility (the generator re-seeds numpy
     # and stdlib ``random`` internally too, but we seed here so the IsolationForest
     # and any incidental randomness are deterministic as well).
     np.random.seed(cfg.seed)
     random.seed(cfg.seed)
 
-    print("Generating synthetic streaming data (same params as TGN)...")
-    stream = generate_streaming_data(**stream_kwargs_from_cfg(cfg))
+    if stream is None:
+        print("Generating synthetic streaming data (same params as TGN)...")
+        stream = generate_streaming_data(**stream_kwargs_from_cfg(cfg))
     # Tabular actor = the DEVICE node (hardware id), the v2 analogue of the old
     # IP-keyed src; the access target stays the resource.
     src, dst, t, msg, y, types, node_features = (
@@ -96,8 +116,15 @@ def isolation_forest_baseline(cfg: TGNConfig = TGNConfig()):
         stream.node_features,
     )
 
+    # Chronological split (the stream is already time-ordered → no shuffling). Computed
+    # before the features: ``val_end`` is the label horizon of the history counters.
+    n = len(src)
+    n_train = int(n * cfg.train_frac)
+    n_val = int(n * cfg.val_frac)
+    train_end, val_end = n_train, n_train + n_val
+
     # Per-event features incl. causal history counts (no graph structure / temporal context).
-    X = _build_features(msg, src, dst, node_features, y)
+    X = _build_features(msg, src, dst, node_features, y, label_horizon=val_end)
     y_np = y.numpy()
     types_np = types.numpy()
 
@@ -106,12 +133,6 @@ def isolation_forest_baseline(cfg: TGNConfig = TGNConfig()):
     precursor_fac = causal_precursor_factor(
         src.numpy(), t.numpy(), msg.numpy(), cfg.precursor_half_life, cfg.precursor_max_boost
     )
-
-    # Chronological split (the stream is already time-ordered → no shuffling).
-    n = len(src)
-    n_train = int(n * cfg.train_frac)
-    n_val = int(n * cfg.val_frac)
-    train_end, val_end = n_train, n_train + n_val
 
     X_train, y_train = X[:train_end], y_np[:train_end]
     X_val, y_val = X[train_end:val_end], y_np[train_end:val_end]

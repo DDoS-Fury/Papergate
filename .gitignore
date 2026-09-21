@@ -31,6 +31,9 @@ tasks/*.md
 # LANL dataset
 data/
 
+# Per-run cache of tests/regen_report_tables.py (resumes a crashed multi-hour run)
+tasks/runs/cache/
+
 # Throwaway weight copy for weight-safe live tests (docker-compose.test.yml)
 .test_public/
 

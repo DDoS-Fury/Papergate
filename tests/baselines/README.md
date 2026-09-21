@@ -47,8 +47,8 @@ time-sorted):
 
 Node indices are block-allocated per type (`num_users`, `num_ips`, `num_devices`,
 `num_configs`...), defined in `stream_synthetic.py`; the `config` node collapses to
-`conf:guest` for non-TLS clients according to `guest_device_fallback` (default True),
-consistent with the deployable protocol.
+`conf:guest` for non-TLS clients according to `guest_device_fallback` (default **False**
+since generator v5), consistent with the deployable protocol.
 
 ## Status of the cited numbers
 
@@ -57,6 +57,15 @@ The Panel A values (Table III of the paper) come from `tasks/runs/panelA.json`
 the baseline rows must be **regenerated** (`docker compose --profile regen-report up`)
 before the TGN-vs-baseline deltas are cited again. The TGN-2node row is already
 at parity (it received all the parameters) and its values remain valid.
+
+## Label oracle in the non-IF baselines — do not cite
+
+`ocsvm/`, `xgboost/` and `simple_gnn/` still call `causal_hist_features(...)` **without**
+`label_horizon`: the history counters of a *test* event are built from the ground-truth
+labels of earlier test events (an oracle the deployed system does not have). Their numbers
+are optimistic and must not be cited until fixed the way `isolation_forest/` was
+(2026-09-21, `label_horizon=val_end`, see `tests/test_isolation_forest_baseline.py`). The
+lean evaluation of the paper (TGN vs Isolation Forest vs `lookup_rules/`) does not run them.
 
 ## Execution
 

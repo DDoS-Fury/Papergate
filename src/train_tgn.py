@@ -25,6 +25,7 @@ No attack label is ever used to compute a test-set score.
 import copy
 import random
 import sys
+import time
 from dataclasses import dataclass
 
 import numpy as np
@@ -408,15 +409,13 @@ class StreamData:
     cfg_num: int = 0
 
 
-def _synthetic_stream_data(cfg: TGNConfig) -> StreamData:
-    """Build :class:`StreamData` from the synthetic v4 generator (the default path).
+def stream_to_data(s) -> StreamData:
+    """Wrap a generated :class:`SyntheticStream` as :class:`StreamData` for :func:`train_tgn`.
 
-    Users are keyed by their integer ids, devices by ``tpm:<id>`` / ``ck:<uuid>``
-    strings, sources by IP strings and resources by their URI strings (so the
-    orchestrator can send all of them natively); structural negatives are sampled over
-    the resource id-range.
+    Split out of :func:`_synthetic_stream_data` so a caller can hand ``train_tgn`` a
+    stream it has already built or reshaped (e.g. the truncated tail of the data-budget
+    curve, ``eval_common.tail_stream``) through the ``dataset=`` argument.
     """
-    s = generate_streaming_data(**stream_kwargs_from_cfg(cfg))
     return StreamData(
         user=s.user, dst=s.dst, t=s.t, msg=s.msg, y=s.y, types=s.types,
         node_features=s.node_features, keys=s.keys, num_nodes=s.num_nodes,
@@ -426,6 +425,17 @@ def _synthetic_stream_data(cfg: TGNConfig) -> StreamData:
         usr_lo=s.user_lo, usr_num=s.user_num, dev_lo=s.dev_lo, dev_num=s.dev_num,
         cfg_lo=s.cfg_lo, cfg_num=s.cfg_num,
     )
+
+
+def _synthetic_stream_data(cfg: TGNConfig) -> StreamData:
+    """Build :class:`StreamData` from the synthetic v4 generator (the default path).
+
+    Users are keyed by their integer ids, devices by ``tpm:<id>`` / ``ck:<uuid>``
+    strings, sources by IP strings and resources by their URI strings (so the
+    orchestrator can send all of them natively); structural negatives are sampled over
+    the resource id-range.
+    """
+    return stream_to_data(generate_streaming_data(**stream_kwargs_from_cfg(cfg)))
 
 
 def train_tgn(cfg: TGNConfig = TGNConfig(), *, dataset: "StreamData | None" = None,
@@ -547,6 +557,7 @@ def train_tgn(cfg: TGNConfig = TGNConfig(), *, dataset: "StreamData | None" = No
     # One-class, not unsupervised: labels select the training set (benign only). See the
     # module docstring for the full statement of what is and is not supervised.
     print("--- ONE-CLASS TRAINING START (benign traffic only) ---")
+    _t_train0 = time.perf_counter()  # wall time of the gradient loop only (no calibration / replay)
     for epoch in range(1, cfg.epochs + 1):
         model.memory.reset_state()  # restart the recurrent memory each epoch
         model.neighbor_loader.reset_state()  # ...and the temporal neighbourhood
@@ -790,6 +801,7 @@ def train_tgn(cfg: TGNConfig = TGNConfig(), *, dataset: "StreamData | None" = No
                     model.pair_count[(dev_l[j], d)] = model.pair_count.get((dev_l[j], d), 0) + 1
 
         print(f"Epoch {epoch:02d} | Train Loss: {total_loss / max(num_train_batches, 1):.4f}")
+    train_seconds = time.perf_counter() - _t_train0
 
     # --- THRESHOLD CALIBRATION (held-out benign slice) -----------------------
     print("\n--- THRESHOLD CALIBRATION (on the benign validation stream) ---")
@@ -1011,7 +1023,11 @@ def train_tgn(cfg: TGNConfig = TGNConfig(), *, dataset: "StreamData | None" = No
         # Recall at the routed operational decision (not a single global threshold).
         preds_sel = test_preds[sel]
         t_recall = float(preds_sel[l_sel == 1].mean()) if (l_sel == 1).any() else 0.0
-        per_type[name] = {"auc": t_auc, "ap": t_ap, "recall": t_recall, "n": int(l_sel.sum())}
+        # Recall at the single global 1%-FPR threshold: the metric every baseline reports.
+        # ``recall`` above is the ROUTED recall — the two must never share a table column.
+        t_recall_global = float(old_preds[sel][l_sel == 1].mean())
+        per_type[name] = {"auc": t_auc, "ap": t_ap, "recall": t_recall,
+                          "recall_global": t_recall_global, "n": int(l_sel.sum())}
         print(f"  {name:10s} | {vs_rule[type_id]} | n={int(l_sel.sum()):4d} | AUC: {t_auc:.4f} | "
               f"AP: {t_ap:.4f} | Recall@thr: {t_recall:.4f}")
 
@@ -1176,6 +1192,9 @@ def train_tgn(cfg: TGNConfig = TGNConfig(), *, dataset: "StreamData | None" = No
         "per_type": per_type,
         "cold_start": cold_start,
         "scenario": scenario_metrics,
+        # Wall time of the gradient loop alone (the data-budget curve's cost axis): the call
+        # as a whole is dominated by the fixed validation / test replays.
+        "train_seconds": train_seconds,
         "use_struct_head": use_struct_head,
         "use_hash_identity": use_hash_identity,
         "use_hist_feats": use_hist_feats,

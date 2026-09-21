@@ -145,7 +145,7 @@ che su UWF è sempre vero.
 | Punto di chiamata | Stato |
 |---|---|
 | `tests/eval_uwf_baseline.py` | corretto (`label_horizon=val_end`); test in `tests/test_eval_common.py` |
-| `tests/baselines/isolation_forest/isolation_forest_baseline.py` (**l'IF della tabella baseline del paper**) | da correggere |
+| `tests/baselines/isolation_forest/isolation_forest_baseline.py` (**l'IF della tabella baseline del paper**) | corretto il 2026-09-21 (`label_horizon=val_end`, obbligatorio; gate commit-all, vedi sotto); test in `tests/test_isolation_forest_baseline.py` |
 | `tests/baselines/ocsvm/ocsvm_baseline.py` | da correggere |
 | `tests/baselines/xgboost/xgboost_baseline.py` | da correggere |
 | `tests/baselines/simple_gnn/simple_gnn_baseline.py` | da correggere |
@@ -156,6 +156,10 @@ che su UWF è sempre vero.
 *   **Sul flusso sintetico il gate di parità col TGN è "aggiorna se non `signal_dirty`", non
     "aggiorna tutto"**: serve un parametro analogo a `pred` di `causal_src_seen`. Da decidere
     prima di applicare il fix lì.
+    *Deciso il 2026-09-21 per l'IF del confronto snello*: `label_horizon=val_end` (commit-all),
+    senza il parametro. Misurato su v5 (seed 2000–2001, finestra di test) il gap riguarda solo gli
+    eventi `signal_dirty`: lateral 8–14 %, cred-theft 3–5 %, benigni 6–7 %, contextual ≈90–95 %.
+    Effetto sul confronto: piccolo, direzione non determinata. Gli altri baseline restano da correggere.
 *   Effetto atteso sulla IF sintetica: uguale o peggiore (lateral AUC già 0.537, sotto il floor
     0.567), quindi il claim del paper ne esce rafforzato. È un'attesa, non una misura.
 *   Finché non è sistemato, la frase di `docs/paper/sections/setup.tex` sui contatori "causal
