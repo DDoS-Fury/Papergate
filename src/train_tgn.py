@@ -51,6 +51,7 @@ from graphagate.data.stream_synthetic import (
 from graphagate.eval_common import causal_src_seen
 from graphagate.model.registry import NodeRegistry
 from graphagate.model.tgn import ZTATemporalGraphNetwork, stable_hash
+from graphagate.mps_compat import resolve_device
 from graphagate.serve_tgn import (
     infer_score,
     precursor_boost,
@@ -481,13 +482,9 @@ def train_tgn(cfg: TGNConfig = TGNConfig(), *, dataset: "StreamData | None" = No
     capacity = total_nodes + cfg.capacity_headroom
     neg_lo, neg_num = data.neg_lo, data.neg_num
 
-    if torch.cuda.is_available():
-        device = torch.device("cuda")
-    elif torch.backends.mps.is_available():
-        device = torch.device("mps")
-    else:
-        device = torch.device("cpu")
-    print(f"Using device: {device}")
+    # Device choice + the Apple-Silicon scatter workaround both live in one place; see
+    # graphagate.mps_compat (GRAPHAGATE_DEVICE overrides the CUDA → MPS → CPU auto-detection).
+    device = resolve_device()
     # NOTE: the data generator's per-IP authorised-resource matrix is intentionally NOT
     # used during training — see _sample_structural_negatives. Using it would re-introduce
     # the circular "authorised-but-non-habitual" negative that mirrors the lateral-movement
