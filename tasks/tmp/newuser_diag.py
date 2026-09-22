@@ -29,7 +29,7 @@ for i, u in enumerate(user):
 first_pos = np.array([first[u] for u in user])
 nreg_min = s.user_lo
 is_guest = user >= nreg_min + cfg.num_users
-sco = cap["scores"]; thr = m["threshold_clean_unsup"]  # FPR@1% on clean val benign; threshold_dirty is fit on signal-dirty events only
+sco = cap["scores"]; thr = m["threshold_clean_unsup"]  # FPR@1% on signal-clean val benign
 np.save(f"/app/tasks/tmp/newuser_diag_scores_{mode}.npy", sco)
 ben = types[va:] == 0
 g = {

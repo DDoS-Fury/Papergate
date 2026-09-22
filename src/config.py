@@ -93,16 +93,19 @@ class TGNConfig:
     #   p_config_release — per-step chance a client release gives one habitual JA3 a new
     #                      version; machines adopt it at p_config_adopt per use;
     #   p_hotdesk        — share of events where a user signs in on a machine not theirs;
-    #   p_sensor_fp      — IDS probe false-positive rate on non-recon traffic;
-    #   p_legacy_client  — share of machines whose JA3 is never resolvable (ja3=0).
+    #   p_sensor_fp      — IDS probe false-positive rate on non-recon traffic.
     # Mimetic credential theft — the attacker runs a common client / a known egress /
     # replays the victim's stolen session cookie (pass-the-cookie):
     #   p_theft_mimic_config, p_theft_known_source, p_theft_session_replay.
+    # Session-replay kits ship residential proxies, so most thefts egress from address
+    # space the fleet also uses; at 0.5 src|usr_new alone crossed the audit's 0.85 AUC.
     # Kill chain — p_compromise is a global per-step intrusion rate with remediation
     # after exfiltration (None = the v4 per-visit hazard with no remediation, which left
     # ~95% of machines compromised and ~28% of events anomalous). A lateral event pivots
-    # with a harvested credential (new device->user binding, Euler/LANL sense) at
-    # p_lateral_foreign_cred; p_lateral_role_spoof is the v4 role-claim tell, kept at 0.
+    # with a harvested credential (Euler/LANL sense) at p_lateral_foreign_cred; each
+    # harvested credential comes from the machine's logon cache at p_harvest_cached (a
+    # device->user binding already seen), otherwise from a user who never signed in there.
+    # p_lateral_role_spoof is the v4 role-claim tell, kept at 0.
     # Fresh slot pools (shared by benign churn and attackers, recycled when exhausted):
     num_new_sources: int = 6000
     num_new_configs: int = 1024
@@ -111,12 +114,12 @@ class TGNConfig:
     p_config_adopt: float = 0.05
     p_hotdesk: float = 0.02
     p_sensor_fp: float = 0.01
-    p_legacy_client: float = 0.05
     p_theft_mimic_config: float = 0.7
-    p_theft_known_source: float = 0.5
+    p_theft_known_source: float = 0.7
     p_theft_session_replay: float = 0.5
     p_compromise: float | None = 0.0006
     p_lateral_foreign_cred: float = 0.7
+    p_harvest_cached: float = 0.7
     p_lateral_role_spoof: float = 0.0
     p_lateral_new_config: float = 0.3
     # The service account (user 0) runs on this many dedicated server machines.

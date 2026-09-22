@@ -42,15 +42,17 @@ stream while every attacker brought globally fresh IP / JA3 slots, so a set-memb
 lookup ("never seen this IP") scored AUC 1.000 on credential theft with no learning. Now
 novelty is a common BENIGN event too — never-seen roaming IPs, client releases that move
 the fleet to new JA3s, hot-desking (a user on a machine that is not theirs), cookie
-wipes, IDS false positives, unfingerprintable legacy clients, one-off clients with a
-never-seen JA3, employees hired mid-stream and anonymous visitors arriving over the whole
-stream (never-seen user nodes in training and at inference) — and benign churn and
-attackers draw fresh nodes from ONE pool per role, with one key format, so neither the
-slot index nor the key hash says who drew it. Lateral movement pivots with harvested
-credentials (a new device->user binding, the Euler / LANL sense) instead of spoofing a
-role claim; intrusions arrive at a global rate and are remediated after exfiltration, for
-a ~1-2% attack prevalence. ``V4_KNOBS`` rebuilds the v4 process for before/after audits;
-``graphagate.data.lookup_rules`` is the no-learning baseline the audit bounds.
+wipes, IDS false positives, one-off clients with a never-seen JA3, employees hired
+mid-stream and anonymous visitors arriving over the whole stream (never-seen user nodes
+in training and at inference) — and benign churn and attackers draw fresh nodes from ONE
+pool per role, with one key format, so neither the slot index nor the key hash says who
+drew it. Lateral movement pivots with harvested credentials (the Euler / LANL sense)
+instead of spoofing a role claim: most come from the machine's own logon cache, so the
+device->user binding is one the fleet has already seen, and the rest bind to the machine
+for the first time; intrusions arrive at a global rate and are remediated after
+exfiltration, for a ~1-2% attack prevalence. ``V4_KNOBS`` rebuilds the v4 process for
+before/after audits; ``graphagate.data.lookup_rules`` is the no-learning baseline the
+audit bounds.
 
 Anomaly types (``types``): 0=benign, 1=policy violation (OPA-owned), 2=contextual,
 3=lateral movement, 4=credential theft, 5=data exfiltration, 6=benign OPA denial (a
@@ -131,10 +133,10 @@ def stream_kwargs_from_cfg(cfg) -> dict:
         p_theft_session_replay=cfg.p_theft_session_replay,
         p_compromise=cfg.p_compromise,
         p_lateral_foreign_cred=cfg.p_lateral_foreign_cred,
+        p_harvest_cached=cfg.p_harvest_cached,
         p_lateral_role_spoof=cfg.p_lateral_role_spoof,
         p_lateral_new_config=cfg.p_lateral_new_config,
         p_sensor_fp=cfg.p_sensor_fp,
-        p_legacy_client=cfg.p_legacy_client,
         num_service_machines=cfg.num_service_machines,
         tier_mix=cfg.tier_mix,
         p_theft_interleave=cfg.p_theft_interleave,
@@ -150,9 +152,10 @@ def stream_kwargs_from_cfg(cfg) -> dict:
 V4_KNOBS = dict(
     guest_device_fallback=True, num_wipe_slots=16, p_cookie_wipe=0.0003,
     num_new_sources=0, num_new_configs=0, p_new_source=0.0, p_config_release=0.0,
-    p_hotdesk=0.0, p_sensor_fp=0.0, p_legacy_client=0.0,
+    p_hotdesk=0.0, p_sensor_fp=0.0,
     p_theft_mimic_config=0.0, p_theft_known_source=0.0, p_theft_session_replay=0.0,
-    p_compromise=None, p_lateral_foreign_cred=0.0, p_lateral_role_spoof=0.5,
+    p_compromise=None, p_lateral_foreign_cred=0.0, p_harvest_cached=0.0,
+    p_lateral_role_spoof=0.5,
     p_lateral_new_config=0.5, num_service_machines=None, tier_mix=(0.2, 0.5, 0.3),
     p_theft_interleave=0.15, num_new_users=0, ramp_guests=False,
     p_benign_new_config=0.0,
@@ -391,10 +394,10 @@ class ZTAStreamSimulator:
         p_theft_session_replay: float = 0.0,
         p_compromise: float | None = None,
         p_lateral_foreign_cred: float = 0.0,
+        p_harvest_cached: float = 0.0,
         p_lateral_role_spoof: float = 0.5,
         p_lateral_new_config: float = 0.5,
         p_sensor_fp: float = 0.0,
-        p_legacy_client: float = 0.0,
         num_service_machines: int | None = None,
         tier_mix: tuple[float, float, float] = (0.2, 0.5, 0.3),
         p_theft_interleave: float = 0.15,
@@ -452,6 +455,7 @@ class ZTAStreamSimulator:
         self.p_theft_interleave = p_theft_interleave
         self.p_compromise = p_compromise
         self.p_lateral_foreign_cred = p_lateral_foreign_cred
+        self.p_harvest_cached = p_harvest_cached
         self.p_lateral_role_spoof = p_lateral_role_spoof
         self.p_lateral_new_config = p_lateral_new_config
         self.p_sensor_fp = p_sensor_fp
@@ -557,13 +561,6 @@ class ZTAStreamSimulator:
             cfgs = np.random.choice(cfg_pool, size=k, replace=False)
             self.machine_configs.append([int(c) for c in cfgs])
 
-        # Legacy clients: machines whose TLS stack the collector cannot fingerprint, so
-        # their BENIGN traffic carries ja3=0 too. Without them "ja3 invalid" is a
-        # zero-false-positive recon tell.
-        self.machine_legacy = (
-            [bool(np.random.rand() < p_legacy_client) for _ in range(num_devices)]
-            if p_legacy_client > 0 else [False] * num_devices
-        )
         # Service account (user 0): a cronjob runs on a few dedicated server machines,
         # not on the whole fleet (``None`` = v4 behaviour, any machine).
         self.service_machines = (
@@ -695,6 +692,7 @@ class ZTAStreamSimulator:
         self.compromised_chain_remaining: dict[int, int] = {} # machine -> steps left in lateral chain
         self.compromised_dwell: dict[int, int] = {}  # machine -> post-exfil events before remediation
         self.harvested_creds: dict[int, list[int]] = {}  # machine -> users whose creds were dumped
+        self.machine_logons: dict[int, set[int]] = {}  # machine -> hot-desk users who signed in
         self._active_thefts: list[dict] = []
         # JA3 release model: habitual config (local id) -> its newer version. A machine
         # still running the old one upgrades at its next use with prob p_config_adopt.
@@ -901,27 +899,35 @@ class ZTAStreamSimulator:
                    int(self.step_count / self.admission_horizon * self.num_guests) + 1)
 
     def _compromise(self, machine: int) -> None:
-        """Start a kill chain on ``machine``: the intruder dumps 1-3 credentials of users
-        who do not own it (cached logons, a keylogger) for the lateral pivot."""
+        """Start a kill chain on ``machine``: the intruder harvests 1-3 credentials for the
+        lateral pivot. Each comes with probability ``p_harvest_cached`` from the machine's
+        logon cache (MITRE T1003: its owners and anyone who hot-desked there), otherwise from
+        a user who never signed in on it (phishing, Kerberoasting, credentials in files)."""
         self.compromised_state[machine] = 1
-        pool = [u for u in self._registered if u not in self.machine_users[machine]]
-        if pool:
-            k = min(int(np.random.randint(1, 4)), len(pool))
-            self.harvested_creds[machine] = [int(u) for u in np.random.choice(pool, size=k, replace=False)]
+        cached = sorted(set(self.machine_users[machine]) | self.machine_logons.get(machine, set()))
+        foreign = [u for u in self._registered if u not in cached]
+        k = int(np.random.randint(1, 4))
+        n_cached = int(np.random.binomial(k, self.p_harvest_cached)) if self.p_harvest_cached > 0 else 0
+        creds = []
+        for pool, n in ((cached, n_cached), (foreign, k - n_cached)):
+            n = min(n, len(pool))
+            if n:
+                creds += [int(u) for u in np.random.choice(pool, size=n, replace=False)]
+        if creds:
+            self.harvested_creds[machine] = creds
 
     def _remediate(self, machine: int) -> None:
         for d in (self.compromised_state, self.compromised_chain_remaining,
                   self.compromised_dwell, self.harvested_creds):
             d.pop(machine, None)
 
-    def _benign_signals(self, machine: int) -> tuple[float, float, float, float]:
-        """``(ja3, s1, s2, s3)`` of a non-recon request from ``machine``: a legacy client
-        is never fingerprinted, and each IDS probe misfires at ``p_sensor_fp``."""
-        ja3 = 0.0 if self.machine_legacy[machine] else 1.0
+    def _benign_sensors(self) -> tuple[float, float, float]:
+        """``(s1, s2, s3)`` of a non-recon request: each IDS probe misfires at
+        ``p_sensor_fp``."""
         if self.p_sensor_fp <= 0:
-            return ja3, 0.0, 0.0, 0.0
+            return 0.0, 0.0, 0.0
         s = (np.random.rand(3) < self.p_sensor_fp).astype(float)
-        return ja3, float(s[0]), float(s[1]), float(s[2])
+        return float(s[0]), float(s[1]), float(s[2])
 
     def _emit_theft_event(self, incident: dict) -> dict:
         """One credential-theft request: attacker IP + config + device, victim identity."""
@@ -936,7 +942,7 @@ class ZTAStreamSimulator:
         # policy-clean and signal-clean by construction — only the broken
         # ip -> config -> device -> user binding exposes it. Constant byte values here used
         # to identify the class with 100% precision and recall, i.e. pure label leakage.
-        _ja3, s1, s2, s3 = self._benign_signals(0)
+        s1, s2, s3 = self._benign_sensors()
         feat = [1.0, s1, s2, s3, float(method),
                 ROLES.index(role) / (len(ROLES) - 1), clr / 4.0,
                 float(abs(np.random.normal(0.1, 0.05))),
@@ -1090,6 +1096,7 @@ class ZTAStreamSimulator:
             # Hot-desking: a registered user signs in on a machine that is not theirs
             # (meeting room, colleague's desk) — a BENIGN new device->user binding.
             user = int(random.choice(self._humans))
+            self.machine_logons.setdefault(machine, set()).add(user)
         u_role, u_clearance = self.user_roles[user], self.user_clearances[user]
 
         scenario = 0
@@ -1151,7 +1158,7 @@ class ZTAStreamSimulator:
                     # Tight but continuous byte volumes: a cronjob is predictable, not
                     # bit-identical. Constant values here were a guaranteed-benign
                     # fingerprint the model could memorise.
-                    feat = [*self._benign_signals(machine), float(method),
+                    feat = [1.0, *self._benign_sensors(), float(method),
                             ROLES.index(u_role) / (len(ROLES) - 1), u_clearance / 4.0,
                             float(abs(np.random.normal(0.2, 0.02))),
                             float(abs(np.random.normal(0.5, 0.03)))]
@@ -1163,7 +1170,7 @@ class ZTAStreamSimulator:
                 invalid = self._policy_violations(u_role)
                 if invalid:
                     res_idx, method = self._zipf_choice(invalid, ("viol", u_role))
-                    feat = [*self._benign_signals(machine), float(method),
+                    feat = [1.0, *self._benign_sensors(), float(method),
                             ROLES.index(u_role) / (len(ROLES) - 1), u_clearance / 4.0,
                             float(abs(np.random.normal(0.1, 0.05))),
                             float(abs(np.random.normal(0.2, 0.1)))]
@@ -1198,7 +1205,7 @@ class ZTAStreamSimulator:
                 else:
                     res_idx, method = 0, 0  # public-path fallback
 
-            ja3, s1, s2, s3 = self._benign_signals(machine)
+            ja3, (s1, s2, s3) = 1.0, self._benign_sensors()
             bytes_in = abs(np.random.normal(0.1, 0.05))
             bytes_out = abs(np.random.normal(0.2, 0.1))
             label, etype = 0, 0
@@ -1251,7 +1258,7 @@ class ZTAStreamSimulator:
                     res_idx, method = self._zipf_choice(sensitive, ("sens", u_role))
                 else:
                     res_idx, method = self._zipf_choice(self._all_actions, ("all",))
-                ja3, s1, s2, s3 = self._benign_signals(machine)
+                ja3, (s1, s2, s3) = 1.0, self._benign_sensors()
                 # A massive transfer is a legitimate, genuinely easy signal for this class
                 # — drawn continuously rather than as an exact constant. Exfiltration gets
                 # its OWN etype: folding it into etype=3 put a single-feature-separable
@@ -1261,14 +1268,16 @@ class ZTAStreamSimulator:
                 bytes_out = abs(np.random.normal(15.0, 3.0))
                 etype = 5
             elif anomaly_type == "lateral":
-                creds = self.harvested_creds.get(machine)
+                creds = [u for u in self.harvested_creds.get(machine, ()) if u != user]
                 pivot = bool(creds) and random.random() < self.p_lateral_foreign_cred
                 if pivot:
                     # Pivot with a harvested credential (Euler / LANL sense of lateral
-                    # movement): the compromised machine now acts as ANOTHER user, so
-                    # the tell is a new device->user binding plus its timing. The role
-                    # in the message is that user's real role — the IdP issued a valid
-                    # token — and the destination follows that user's own policy space.
+                    # movement): the compromised machine now acts as ANOTHER user. A
+                    # cached credential reuses a device->user binding already seen, so
+                    # only the destination and timing tell; a foreign one is also a new
+                    # binding. The role in the message is that user's real role — the
+                    # IdP issued a valid token — and the destination follows that user's
+                    # own policy space.
                     user = int(random.choice(creds))
                     u_role, u_clearance = self.user_roles[user], self.user_clearances[user]
                     valid = self._policy_valid_actions(u_role)
@@ -1283,7 +1292,7 @@ class ZTAStreamSimulator:
                     )
                 if target is not None:
                     res_idx, method = target
-                    ja3 = 0.0 if self.machine_legacy[machine] else 1.0
+                    ja3 = 1.0
                     # Lateral movement: stealth — legitimate credentials and protocols,
                     # rarely triggers the IDS (the network must study the graph).
                     s1 = 0.0
@@ -1318,7 +1327,7 @@ class ZTAStreamSimulator:
                     anomaly_type = "context"
             if anomaly_type == "policy":
                 res_idx, method = self._zipf_choice(invalid, ("viol", u_role))
-                ja3, s1, s2, s3 = self._benign_signals(machine)
+                ja3, (s1, s2, s3) = 1.0, self._benign_sensors()
                 etype = 1
             elif anomaly_type == "context":
                 # The tell of a contextual anomaly is the compromised TLS trust and the

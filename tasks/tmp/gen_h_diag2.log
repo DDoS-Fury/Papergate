@@ -1,0 +1,6 @@
+seed 2000 p_cached=0.0 lat= 189 theft= 224 prev=0.030 | lateral dev|usr_new=0.72 src|usr_new=0.46 cfg|usr_new=0.54 | stateful AUC lat=0.760 theft=0.834
+seed 2000 p_cached=0.7 lat= 209 theft= 198 prev=0.029 | lateral dev|usr_new=0.44 src|usr_new=0.26 cfg|usr_new=0.41 | stateful AUC lat=0.610 theft=0.840
+seed 2001 p_cached=0.0 lat= 241 theft= 244 prev=0.032 | lateral dev|usr_new=0.77 src|usr_new=0.44 cfg|usr_new=0.62 | stateful AUC lat=0.774 theft=0.824
+seed 2001 p_cached=0.7 lat= 182 theft= 178 prev=0.029 | lateral dev|usr_new=0.45 src|usr_new=0.40 cfg|usr_new=0.46 | stateful AUC lat=0.649 theft=0.798
+seed 2002 p_cached=0.0 lat= 212 theft= 197 prev=0.029 | lateral dev|usr_new=0.69 src|usr_new=0.39 cfg|usr_new=0.69 | stateful AUC lat=0.754 theft=0.853
+seed 2002 p_cached=0.7 lat= 290 theft= 156 prev=0.032 | lateral dev|usr_new=0.61 src|usr_new=0.41 cfg|usr_new=0.51 | stateful AUC lat=0.697 theft=0.862

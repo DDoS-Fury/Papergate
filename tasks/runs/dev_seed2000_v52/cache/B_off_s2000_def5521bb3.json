@@ -1,0 +1,85 @@
+{
+  "threshold": 1.000000001,
+  "threshold_dirty": 0.9999999403953552,
+  "threshold_clean_unsup": 0.07887387931346469,
+  "agg_auc": 0.8132251724200499,
+  "agg_ap": 0.15501362643479807,
+  "agg_precision": 0.031668696711327646,
+  "agg_recall": 0.02106969205834684,
+  "agg_recall_global": 0.09562398703403566,
+  "lateral_recall_before": 0.0,
+  "lateral_recall_after": 0.0,
+  "fpr_before": 0.023938502811742247,
+  "fpr_after": 0.020507661352731774,
+  "per_type": {
+    "policy": {
+      "auc": 0.9503437629827548,
+      "ap": 0.008169907595663228,
+      "recall": 0.05263157894736842,
+      "recall_global": 0.15789473684210525,
+      "n": 19
+    },
+    "contextual": {
+      "auc": 0.8319945686755239,
+      "ap": 0.012527816181527606,
+      "recall": 0.08695652173913043,
+      "recall_global": 0.08695652173913043,
+      "n": 69
+    },
+    "lateral": {
+      "auc": 0.6313185511563856,
+      "ap": 0.007248154265489876,
+      "recall": 0.0,
+      "recall_global": 0.0,
+      "n": 218
+    },
+    "cred-theft": {
+      "auc": 0.6036128939485248,
+      "ap": 0.009556755207163177,
+      "recall": 0.0,
+      "recall_global": 0.05531914893617021,
+      "n": 235
+    },
+    "exfil": {
+      "auc": 0.9883789919001187,
+      "ap": 0.04756871035940803,
+      "recall": 0.06666666666666667,
+      "recall_global": 1.0,
+      "n": 45
+    },
+    "benign-denied": {
+      "auc": 0.9322564462431442,
+      "ap": 0.15333430182470922,
+      "recall": 0.024691358024691357,
+      "recall_global": 0.0787037037037037,
+      "n": 648
+    }
+  },
+  "cold_start": {
+    "n_warmed": 218,
+    "n_cold": 0,
+    "recall_warmed": 0.0,
+    "recall_cold": NaN,
+    "auc_warmed": 0.6313185511563856
+  },
+  "scenario": {
+    "fpr_plain": 0.018392074831274422,
+    "fpr_roaming": 0.020546093538794268,
+    "fpr_wiped": 0.031578947368421054,
+    "n_roaming": 3699,
+    "n_wiped": 760,
+    "fpr_new_user": 0.0,
+    "n_new_user": 111,
+    "theft_recall": 0.0,
+    "theft_auc": 0.6036128939485248,
+    "n_theft": 235,
+    "shared_lateral_recall": 0.0,
+    "n_shared_lateral": 40
+  },
+  "train_seconds": 890.5775159580007,
+  "use_struct_head": true,
+  "use_hash_identity": true,
+  "use_hist_feats": true,
+  "use_precursor": true,
+  "use_config_node": false
+}

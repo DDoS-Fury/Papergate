@@ -1,0 +1,3 @@
+seed 2000 p_cached=0.7 lat= 211 theft= 181 prev=0.030 | lateral dev|usr_new=0.45 src|usr_new=0.38 cfg|usr_new=0.53 | stateful AUC lat=0.699 theft=0.841
+seed 2001 p_cached=0.7 lat= 182 theft= 178 prev=0.029 | lateral dev|usr_new=0.45 src|usr_new=0.40 cfg|usr_new=0.46 | stateful AUC lat=0.649 theft=0.798
+seed 2002 p_cached=0.7 lat= 268 theft= 238 prev=0.032 | lateral dev|usr_new=0.54 src|usr_new=0.37 cfg|usr_new=0.49 | stateful AUC lat=0.692 theft=0.822
