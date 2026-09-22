@@ -36,11 +36,11 @@ class TGNConfig:
     # cookie), so an IP change (smart working) no longer looks like a brand-new
     # machine, while a new device suddenly binding to a known user (credential theft)
     # stands out.
-    num_users: int = 50
+    num_users: int = 100
     # Anonymous (unauthenticated) visitors, one user node each: part of the node space.
     num_guests: int = 1000
-    num_devices: int = 80
-    num_sources: int = 150
+    num_devices: int = 160
+    num_sources: int = 300
     # MUST equal len(RESOURCE_URIS) in stream_synthetic.py: resource node keys are
     # the exact route URIs the security-orchestrator sends as key_dst.
     num_resources: int = 1000
@@ -132,7 +132,10 @@ class TGNConfig:
     # in the first few percent: num_new_users registered users are hired mid-stream, one
     # per equal stratum of the stream, and with ramp_guests anonymous visitors keep
     # arriving over the whole stream like the device fleet.
-    num_new_users: int = 12
+    # 24 hires on 100 users over a ~10-month stream is ~2.4%/month, inside the JOLTS 2025
+    # annual-average hires rates (finance 2.1%, professional services 4.6%); with 12 on 50
+    # users only ~8 hires fell in training, too few for the model to learn a cold employee.
+    num_new_users: int = 24
     ramp_guests: bool = True
     # Share of events issued by a one-off client whose JA3 nobody presented before (new
     # app, CLI tool, updater). Without it a globally never-seen JA3 is half theft in the

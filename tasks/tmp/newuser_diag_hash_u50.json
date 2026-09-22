@@ -1,0 +1,34 @@
+{
+ "mode": "hash",
+ "threshold_dirty": 0.19238806486129698,
+ "lateral_auc": 0.7202862761772899,
+ "theft_auc": 0.5663868368032237,
+ "groups": {
+  "hire_first25": {
+   "n": 44,
+   "fpr_at_thr": 0.5227272727272727,
+   "mean_pct_rank_among_test_benign": 0.7453287981326935
+  },
+  "guest_new_first25 (first seen in test)": {
+   "n": 785,
+   "fpr_at_thr": 0.2764331210191083,
+   "mean_pct_rank_among_test_benign": 0.7368735087851496
+  },
+  "guest_established": {
+   "n": 2417,
+   "fpr_at_thr": 0.033098882912701695,
+   "mean_pct_rank_among_test_benign": 0.6729677929034513
+  },
+  "registered_established": {
+   "n": 33024,
+   "fpr_at_thr": 0.03330910852713178,
+   "mean_pct_rank_among_test_benign": 0.4691872380724898
+  }
+ },
+ "train_exposure": {
+  "benign_train": 135773,
+  "hire_first25": 219,
+  "guest_first25": 11547,
+  "distinct_new_guests_train": 677
+ }
+}

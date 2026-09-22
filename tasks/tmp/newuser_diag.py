@@ -29,7 +29,8 @@ for i, u in enumerate(user):
 first_pos = np.array([first[u] for u in user])
 nreg_min = s.user_lo
 is_guest = user >= nreg_min + cfg.num_users
-sco = cap["scores"]; thr = m["threshold_dirty"]  # FPR@1% quantile; the cost-sensitive one can degenerate to 1.0
+sco = cap["scores"]; thr = m["threshold_clean_unsup"]  # FPR@1% on clean val benign; threshold_dirty is fit on signal-dirty events only
+np.save(f"/app/tasks/tmp/newuser_diag_scores_{mode}.npy", sco)
 ben = types[va:] == 0
 g = {
   "hire_first25": (sc[va:] & 8) > 0,
@@ -38,7 +39,7 @@ g = {
   "registered_established": ~is_guest[va:] & ((sc[va:] & 8) == 0),
 }
 bs = sco[ben]
-out = {"mode": mode, "threshold_dirty": thr, "lateral_auc": m["per_type"]["lateral"]["auc"],
+out = {"mode": mode, "threshold_clean_unsup": thr, "lateral_auc": m["per_type"]["lateral"]["auc"],
        "theft_auc": m["per_type"]["cred-theft"]["auc"], "groups": {}}
 for name, mask in g.items():
     mk = mask & ben
