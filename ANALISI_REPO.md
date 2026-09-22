@@ -253,12 +253,100 @@ python3.12 -m venv .venv
 ./.venv/bin/python -m pytest
 ```
 
-Il training nativo funziona su Apple Silicon con accelerazione Metal (vedi §7.1). Per forzare
-un device diverso dall'auto-detect:
+Il training nativo funziona su Apple Silicon (vedi §7.1), ma **su questo modello conviene
+forzare la CPU**: Metal è circa 4,5× più lento (misure in §5.6).
 
 ```bash
 GRAPHAGATE_DEVICE=cpu ./.venv/bin/python -m graphagate.train_tgn
 ```
+
+### 5.6 MPS o CPU? — misurato
+
+Controintuitivo ma netto. Stessa configurazione (4000 eventi, 2 epoche), stesso seed:
+
+| Device | Wall time |
+|---|---|
+| `cpu` | **38,2 s** |
+| `mps` | 177,5 s (4,6× più lento) |
+
+**Non è colpa del fallback su CPU introdotto da §7.1**: quelle chiamate pesano 5,2 s su 171 s,
+il **3,1%** del totale. È Metal stesso. Il modello è piccolo (`memory_dim=256`, `batch_size=200`)
+e ogni evento fa 5 espansioni di vicinato e 5 forward GNN: tantissimi kernel minuscoli, dove il
+costo fisso di dispatch su GPU domina e i core CPU di Apple Silicon — con i tensori che stanno
+in cache — vincono nettamente.
+
+L'auto-detect sceglie MPS perché è la scelta giusta su hardware NVIDIA e una scelta ragionevole
+in generale; qui è quella sbagliata. Per questo `GRAPHAGATE_DEVICE` esiste.
+
+#### Quanto dura il training completo (200k eventi × 15 epoche)
+
+Scaling misurato su CPU a 2 epoche: 4k → 38,2 s · 8k → 83,0 s · 16k → 194,2 s. È
+**superlineare**, con esponente in crescita (1,12 → 1,23): evidenza empirica diretta di §7.9,
+i dizionari non limitati che crescono con ogni coppia vista.
+
+Scomponendo a 16k eventi — (2 ep, 194,2 s) e (6 ep, 262,8 s) — si ottiene **160 s di costo
+fisso e 17 s per epoca**. Il grosso non è il training ma la generazione dello stream e i replay
+sequenziali di calibrazione e test a `eval_batch_size=1`.
+
+| Ipotesi di scaling | Stima a 200k × 15 epoche |
+|---|---|
+| `n^1.15` | ~2,1 h |
+| `n^1.25` (più probabile) | ~2,7 h |
+| `n^1.35` | ~3,5 h |
+
+Quindi **2-3,5 ore su CPU**, contro le ~10-15 ore che servirebbero su MPS. Da estrapolazione, non
+da un run completo: l'esponente cresce con `n` e potrebbe peggiorare ancora oltre i 16k misurati.
+
+> Nota per §8.2: poiché il costo è dominato dalla parte fissa e non dalle epoche, l'opzione B
+> (6 run invece di 3) costa davvero circa il doppio in tempo macchina — la stima «×2» è corretta.
+
+#### Verifica sul run reale (22/09, M5 Pro)
+
+L'estrapolazione qui sopra è stata poi verificata su un'epoca reale a 200k eventi, con
+`OMP_NUM_THREADS=5` (il perché è nella sottosezione seguente):
+
+| Misura | Valore |
+|---|---|
+| Epoca completa, 200k eventi | **9 min 28 s** |
+| 15 epoche | ~2 h 22 min |
+| Run completo, calibrazione ed eval inclusi | **3-4 h** |
+| CPU occupata | 322% → 3,2 core sui 15 |
+| **Picco RSS** | **15,4 GB su 24 (64%)** |
+
+Due correzioni alle stime precedenti:
+
+* le **2-3,5 h** valevano a thread liberi; a 5 thread il run costa **3-4 h**, ed è un prezzo che
+  conviene pagare (sotto);
+* il vincolo operativo vero non è il tempo ma la **memoria**. 15,4 GB di picco su 24 lasciano
+  meno di 9 GB al resto del sistema: è §7.9 che smette di essere debito teorico e diventa il
+  limite pratico del run. È anche la spiegazione più probabile del `JetsamEvent` che il sistema
+  ha registrato durante un tentativo precedente.
+
+#### Perché 5 thread e non tutti e 15
+
+A thread liberi macOS ha sospeso la macchina per **emergenza termica tre volte in un'ora** — con
+il Mac in carica:
+
+```
+12:44:32  Entering Sleep state due to 'Thermal Emergency Sleep'  (Charge 62%)
+13:16:54  Entering Sleep state due to 'Thermal Emergency Sleep'  (Charge 82%)
+13:51:31  Entering Sleep state due to 'Thermal Emergency Sleep'  (Charge 97%)
+```
+
+In quello stato il display non si riaccende e gli input vengono registrati ma ignorati
+(`pmset -g log` mostra i `sleepDisplayTickle` da tastiera e da tasto di accensione, seguiti da
+`kIOMessageSystemWillSleep`): dall'esterno è indistinguibile da un blocco totale, e invita a uno
+spegnimento forzato che costa l'intero run.
+
+Passare a MPS **non** risolve il problema: CPU e GPU condividono lo stesso die e lo stesso budget
+termico, e un run 4,6× più lungo incontra più finestre di emergenza termica, non meno. In più, il
+profilo dominato dal dispatch (sopra) tiene comunque un core CPU occupato al 100% mentre accende
+la GPU. La leva giusta è abbassare i watt, non spalmarli: con `OMP_NUM_THREADS=5` il processo usa
+~3,2 core e l'emergenza termica non è scattata.
+
+Da tenere presente anche il `sleep 1` in `pmset -g custom`: la macchina si sospende dopo **un
+minuto** di inattività dell'utente, e il carico CPU non lo impedisce. Un run lasciato solo va
+avviato sotto `caffeinate -i`.
 
 ### 5.4 API HTTP
 
@@ -545,15 +633,24 @@ generati su questa macchina). Senza checkpoint, `serve-tgn` e `verify-tgn` falli
 
 Nell'ordine:
 
-1. **Generare gli artefatti.** Il training è 200k eventi × 15 epoche. Ora che §7.1 è risolto il
-   percorso più rapido è quello nativo con Metal:
+1. **Generare gli artefatti.** Il training è 200k eventi × 15 epoche. Il percorso più rapido su
+   questa macchina è quello nativo **su CPU** — non su Metal, che qui è 4,6× più lento (§5.6):
 
    ```bash
-   ./.venv/bin/python -m graphagate.train_tgn      # → public/tgn_checkpoint.pt + tgn_stats.json
+   nohup caffeinate -i env OMP_NUM_THREADS=5 GRAPHAGATE_DEVICE=cpu \
+     ./.venv/bin/python -u -m graphagate.train_tgn \
+     > tasks/runs/tgn_full_cpu.log 2>&1 &
+   # → public/tgn_checkpoint.pt + public/tgn_stats.json
    ```
 
-   Il tempo su questa macchina non è ancora stato misurato su un run completo; lo smoke test
-   (3k eventi, 1 epoca) ha impiegato ~2 minuti, ma non è estrapolabile linearmente.
+   **3-4 ore**, misurate (§5.6). `caffeinate -i` neutralizza il `sleep 1` delle impostazioni
+   energia, `OMP_NUM_THREADS=5` tiene il SoC sotto la soglia di emergenza termica e `nohup` fa
+   sopravvivere il run alla chiusura del terminale. Chiudere prima i browser: il picco è 15,4 GB
+   su 24.
+
+   Il training salva lo stato a ogni epoca in `public/tgn_resume.pt` e riparte da lì: una
+   sospensione termica, un kill per memoria o un'interruzione di corrente costano al massimo
+   un'epoca. `GRAPHAGATE_RESUME=0` forza un run pulito.
 2. **Fix rapidi e isolati**: §7.6 (errno), §7.5 (requirements), §7.7 (emissions.csv).
    Aggiungere §7.4, ora che è una riga per file.
 3. **Debito strutturale**: §7.9, i dizionari non limitati — il vero limite alla messa in
