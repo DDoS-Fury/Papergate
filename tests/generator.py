@@ -16,7 +16,9 @@ from graphagate.config import TGNConfig
 from graphagate.data.stream_synthetic import ZTAStreamSimulator, stream_kwargs_from_cfg
 
 
-async def event_generator(seed=None, warmup_steps=None, cfg: TGNConfig = TGNConfig(), omit_device: bool = False):
+async def event_generator(seed=None, warmup_steps=None, cfg: TGNConfig | None = None, omit_device: bool = False):
+    if cfg is None:
+        cfg = TGNConfig()
     # All generator parameters come from cfg via the shared mapping, so the live stream
     # is guaranteed to live in the same entity space as the trained checkpoint.
     sim = ZTAStreamSimulator(

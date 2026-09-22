@@ -50,16 +50,14 @@ from graphagate.data.stream_synthetic import (
     generate_streaming_data,
     stream_kwargs_from_cfg,
 )
-from graphagate.eval_common import causal_src_seen
+from graphagate.eval_common import binary_metrics, causal_src_seen
 from graphagate.model.registry import NodeRegistry
 from graphagate.model.tgn import ZTATemporalGraphNetwork, stable_hash
 from graphagate.serve_tgn import (
-    infer_score,
     precursor_boost,
     record_alert,
     save_model,
     signal_dirty,
-    update_memory,
 )
 
 
@@ -294,27 +292,6 @@ def _replay(model, source_nodes, device_nodes, user, dst, t, msg, y, device, *,
     return scores, labels
 
 
-def _binary_metrics(scores, labels, threshold):
-    """Precision / recall (+ raw counts) of ``score >= threshold`` against ``labels``."""
-    preds = (scores >= threshold).astype(int)
-    tp = int(((preds == 1) & (labels == 1)).sum())
-    fp = int(((preds == 1) & (labels == 0)).sum())
-    fn = int(((preds == 0) & (labels == 1)).sum())
-    precision = tp / (tp + fp) if (tp + fp) else 0.0
-    recall = tp / (tp + fn) if (tp + fn) else 0.0
-    return precision, recall
-
-
-def _pr_from_preds(preds, labels):
-    """Precision / recall of pre-computed 0/1 ``preds`` (e.g. signal-routed) vs ``labels``."""
-    preds = np.asarray(preds).astype(int)
-    labels = np.asarray(labels).astype(int)
-    tp = int(((preds == 1) & (labels == 1)).sum())
-    fp = int(((preds == 1) & (labels == 0)).sum())
-    fn = int(((preds == 0) & (labels == 1)).sum())
-    precision = tp / (tp + fp) if (tp + fp) else 0.0
-    recall = tp / (tp + fn) if (tp + fn) else 0.0
-    return precision, recall
 
 
 def _rule_baseline(test_msg):
@@ -439,7 +416,7 @@ def _synthetic_stream_data(cfg: TGNConfig) -> StreamData:
     return stream_to_data(generate_streaming_data(**stream_kwargs_from_cfg(cfg)))
 
 
-def train_tgn(cfg: TGNConfig = TGNConfig(), *, dataset: "StreamData | None" = None,
+def train_tgn(cfg: TGNConfig | None = None, *, dataset: "StreamData | None" = None,
               use_struct_head=True, use_hash_identity=True, use_hist_feats=True,
               use_precursor=True, use_config_node=True, save=True):
     """Train + evaluate the streaming TGN.
@@ -455,6 +432,8 @@ def train_tgn(cfg: TGNConfig = TGNConfig(), *, dataset: "StreamData | None" = No
     generator, reusing the whole pipeline for external validity; ``None`` is the default
     synthetic path. Returns a metrics dict.
     """
+    if cfg is None:
+        cfg = TGNConfig()
     # Full seeding. `torch.manual_seed` alone leaves the CUDA generators and the
     # non-deterministic scatter kernels free, so run-to-run spread on the same stream
     # is not below the across-seed standard deviation — the reported sigmas
@@ -963,7 +942,7 @@ def train_tgn(cfg: TGNConfig = TGNConfig(), *, dataset: "StreamData | None" = No
 
     auc = roc_auc_score(test_labels, test_scores)
     ap = average_precision_score(test_labels, test_scores)
-    precision, recall = _pr_from_preds(test_preds, test_labels)
+    precision, recall = binary_metrics(test_preds, test_labels, threshold=1)
     print(f"Test Stream | AUC: {auc:.4f} | AP: {ap:.4f}")
     print(f"Routed decision | Precision: {precision:.4f} | Recall: {recall:.4f}")
 

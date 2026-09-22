@@ -54,7 +54,7 @@ def extract_7z(archive_path: str, dest_dir: str) -> bool:
     # Method 1: py7zr
     try:
         import py7zr
-        print("  -> Estrazione con py7zr...")
+        print("  -> Extracting with py7zr...")
         with py7zr.SevenZipFile(archive_path, mode="r") as z:
             z.extractall(path=dest_dir)
         return True
@@ -65,8 +65,8 @@ def extract_7z(archive_path: str, dest_dir: str) -> bool:
 
     # Method 2: Native Windows tar (bsdtar supports .7z on Windows 10/11)
     try:
-        print("  -> Estrazione con tar...")
-        res = subprocess.run(
+        print("  -> Extracting with tar...")
+        subprocess.run(
             ["tar", "-xf", archive_path, "-C", dest_dir],
             capture_output=True,
             text=True,
@@ -86,7 +86,7 @@ def extract_7z(archive_path: str, dest_dir: str) -> bool:
     for cmd in candidates:
         if shutil.which(cmd) or os.path.exists(cmd):
             try:
-                print(f"  -> Estrazione con {cmd}...")
+                print(f"  -> Extracting with {cmd}...")
                 subprocess.run(
                     [cmd, "x", archive_path, f"-o{dest_dir}", "-y"],
                     capture_output=True,
@@ -104,29 +104,29 @@ def main() -> int:
     os.makedirs(LOGS_DIR, exist_ok=True)
 
     print("=== PicoDomain Downloader & Extractor ===")
-    print(f"Destinazione data: {DATA_DIR}\n")
+    print(f"Data destination: {DATA_DIR}\n")
 
     red_dest = os.path.join(DATA_DIR, "Red Log.xlsx")
     zeek_dest = os.path.join(DATA_DIR, "Zeek_Logs.7z")
 
     # 1. Red Log.xlsx
     if os.path.exists(red_dest):
-        print(f"[OK] Red Log.xlsx già presente ({os.path.getsize(red_dest)} bytes)")
+        print(f"[OK] Red Log.xlsx already present ({os.path.getsize(red_dest)} bytes)")
     else:
-        print("-> Scaricamento Red Log.xlsx...")
+        print("-> Downloading Red Log.xlsx...")
         download_with_progress(RED_LOG_URL, red_dest)
-        print("   Completato.")
+        print("   Done.")
 
     # 2. Zeek_Logs.7z
     if os.path.exists(zeek_dest):
-        print(f"[OK] Zeek_Logs.7z già presente ({os.path.getsize(zeek_dest) / (1024*1024):.2f} MB)")
+        print(f"[OK] Zeek_Logs.7z already present ({os.path.getsize(zeek_dest) / (1024*1024):.2f} MB)")
     else:
-        print("\n-> Scaricamento Zeek_Logs.7z (~16 MB)...")
+        print("\n-> Downloading Zeek_Logs.7z (~16 MB)...")
         download_with_progress(ZEEK_LOGS_URL, zeek_dest)
-        print("   Completato.")
+        print("   Done.")
 
     # 3. Extraction
-    print("\n-> Estrazione Zeek_Logs.7z in data/logs/...")
+    print("\n-> Extracting Zeek_Logs.7z to data/logs/...")
     success = extract_7z(zeek_dest, LOGS_DIR)
 
     if success:
@@ -136,15 +136,15 @@ def main() -> int:
             for f in files:
                 if f.endswith(".log"):
                     extracted_files.append(f)
-        print(f"\n[OK] Estrazione completata! Trovati {len(extracted_files)} file .log in data/logs/")
+        print(f"\n[OK] Extraction completed. Found {len(extracted_files)} .log file(s) in data/logs/")
     else:
         print(
-            "\n[!] Impossibile estrarre automaticamente il file .7z.\n"
-            "    Estrai manualmente 'data/Zeek_Logs.7z' nella cartella 'data/logs/' "
-            "usando 7-Zip, WinRAR o PeaZip."
+            "\n[!] Unable to automatically extract .7z archive.\n"
+            "    Please manually extract 'data/Zeek_Logs.7z' into 'data/logs/' "
+            "using 7-Zip, tar, or PeaZip."
         )
 
-    print("\n=== Operazione completata! ===")
+    print("\n=== Done ===")
     return 0
 
 

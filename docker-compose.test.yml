@@ -38,7 +38,7 @@ services:
       - ./src:/app/src
       - ./tests:/app/tests
     entrypoint: ["python"]
-    command: ["/app/tests/test_client.py", "--host", "serve-tgn", "--port", "8088", "--duration", "120"]
+    command: ["/app/tests/stream_client.py", "--host", "serve-tgn", "--port", "8088", "--duration", "120"]
     depends_on:
       serve-tgn:
         condition: service_healthy

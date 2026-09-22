@@ -70,7 +70,7 @@ def main() -> int:
         print(f"[INFO] builtin hash() differs as expected (the bug fixed): "
               f"{a['builtin']} != {b['builtin']}")
     else:
-        print(f"[INFO] builtin hash() matched here (key-dependent); not relied upon.")
+        print("[INFO] builtin hash() matched here (key-dependent); not relied upon.")
 
     print(f"\n{'ALL CHECKS PASSED' if ok else 'SOME CHECKS FAILED'}")
     return 0 if ok else 1

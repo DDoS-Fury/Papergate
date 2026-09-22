@@ -34,18 +34,7 @@ from datasets.picodomain import (  # noqa: E402
     T_THEFT,
     load_picodomain_stream,
 )
-from graphagate.eval_common import causal_hist_features  # noqa: E402
-
-
-def _binary_metrics(scores: np.ndarray, labels: np.ndarray, threshold: float) -> tuple[float, float]:
-    """Precision and recall of ``scores >= threshold`` against binary ``labels``."""
-    preds = (scores >= threshold).astype(int)
-    tp = int(((preds == 1) & (labels == 1)).sum())
-    fp = int(((preds == 1) & (labels == 0)).sum())
-    fn = int(((preds == 0) & (labels == 1)).sum())
-    precision = tp / (tp + fp) if (tp + fp) else 0.0
-    recall = tp / (tp + fn) if (tp + fn) else 0.0
-    return precision, recall
+from graphagate.eval_common import binary_metrics, causal_hist_features  # noqa: E402
 
 
 def _build_features(msg, src, dst, node_features, y) -> np.ndarray:
@@ -72,7 +61,7 @@ def _download(urls: list[str], dest: str, desc: str) -> None:
                     out.write(chunk)
             print(f"  Downloaded from {url}")
             return
-        except Exception as e:
+        except Exception:
             continue
     raise RuntimeError(f"Failed to download {desc} from: {urls}")
 
@@ -208,7 +197,7 @@ def main() -> int:
     test_scores = -iso.score_samples(X_test)
     agg_auc = roc_auc_score(y_test, test_scores)
     agg_ap = average_precision_score(y_test, test_scores)
-    prec, rec = _binary_metrics(test_scores, y_test, threshold)
+    prec, rec = binary_metrics(test_scores, y_test, threshold)
     benign_test_mask = y_test == 0
     benign_fpr = float((test_scores[benign_test_mask] >= threshold).mean()) if benign_test_mask.any() else 0.0
 
@@ -238,7 +227,7 @@ def main() -> int:
         scores_sub = test_scores[mask]
         auc_sub = roc_auc_score(y_sub, scores_sub) if len(np.unique(y_sub)) > 1 else 0.0
         ap_sub = average_precision_score(y_sub, scores_sub) if len(np.unique(y_sub)) > 1 else 0.0
-        _, rec_sub = _binary_metrics(scores_sub, y_sub, threshold)
+        _, rec_sub = binary_metrics(scores_sub, y_sub, threshold)
         print(f"    - {name:<28s} AUC={auc_sub:.4f}  AP={ap_sub:.4f}  Recall={rec_sub:.4f}  (n={n_pos})")
     print("================================================================\n")
     return 0

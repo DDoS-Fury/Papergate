@@ -49,7 +49,7 @@ def cost_sensitive_threshold(
     labels = np.asarray(labels, dtype=np.int64)
     pos = np.sort(scores[labels == 1])
     neg = np.sort(scores[labels == 0])
-    n_pos, n_neg = pos.size, neg.size
+    n_neg = neg.size
 
     # Candidate thresholds: every observed score, plus a sentinel just above the max so
     # "flag nothing" is reachable. ``score >= thr`` ⇒ at thr = a score, that event fires.

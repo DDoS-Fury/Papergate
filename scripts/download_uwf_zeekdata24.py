@@ -61,8 +61,8 @@ def main() -> None:
 
     dest_dir = os.path.abspath(args.dest)
     os.makedirs(dest_dir, exist_ok=True)
-    print(f"=== UWF-ZeekData24 Downloader ===")
-    print(f"Destinazione: {dest_dir}\n")
+    print("=== UWF-ZeekData24 Downloader ===")
+    print(f"Destination: {dest_dir}\n")
 
     grand_total_downloaded = 0
 
@@ -71,7 +71,7 @@ def main() -> None:
         cat_dest = os.path.join(dest_dir, cat)
         os.makedirs(cat_dest, exist_ok=True)
 
-        print(f"-> Controllo categoria: {cat}")
+        print(f"-> Checking category: {cat}")
         try:
             req = urllib.request.Request(cat_url, headers={"User-Agent": "Mozilla/5.0"})
             with urllib.request.urlopen(req) as resp:
@@ -82,7 +82,7 @@ def main() -> None:
             csv_files = sorted(set(files))
 
             if not csv_files:
-                print(f"   Nessun file CSV trovato in {cat_url}")
+                print(f"   No CSV files found in {cat_url}")
                 continue
 
             for fname in csv_files:
@@ -91,19 +91,19 @@ def main() -> None:
 
                 if os.path.exists(target_file):
                     size = os.path.getsize(target_file)
-                    print(f"   [GIA' PRESENTE] {fname} ({size / (1024*1024):.2f} MB)")
+                    print(f"   [ALREADY PRESENT] {fname} ({size / (1024*1024):.2f} MB)")
                     continue
 
-                print(f"   Download: {fname}...")
+                print(f"   Downloading: {fname}...")
                 download_file(file_url, target_file)
                 grand_total_downloaded += os.path.getsize(target_file)
 
         except Exception as e:
-            print(f"   [ERRORE] {cat}: {e}", file=sys.stderr)
+            print(f"   [ERROR] {cat}: {e}", file=sys.stderr)
 
-    print("\n=== Download completato con successo! ===")
+    print("\n=== Download completed successfully ===")
     if grand_total_downloaded > 0:
-        print(f"Totale scaricato in questa sessione: {grand_total_downloaded / (1024*1024):.2f} MB")
+        print(f"Total downloaded in this session: {grand_total_downloaded / (1024*1024):.2f} MB")
 
 
 if __name__ == "__main__":

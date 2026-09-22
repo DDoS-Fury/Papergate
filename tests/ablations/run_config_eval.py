@@ -84,7 +84,7 @@ def main():
             m = train_tgn(cfg, save=False, **flags)
             results[name].append(_grab(m))
 
-    cols = ["theft_auc", "theft_rec", "theft_n", "lat_auc", "lat_rec",
+    _cols = ["theft_auc", "theft_rec", "theft_n", "lat_auc", "lat_rec",
             "agg_auc", "fpr_wiped", "n_wiped"]
     print("\n" + "=" * 96)
     print(f"CONFIG-NODE TARGETED VALIDATION — {len(SEEDS)} seeds {SEEDS}, "

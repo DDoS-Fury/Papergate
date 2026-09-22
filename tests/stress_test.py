@@ -1,6 +1,6 @@
 """Concurrent load + registry-capacity stress harness for the serve_api service.
 
-The functional client (`test_client.py`) is strictly sequential — one request in
+The functional client (`stream_client.py`) is strictly sequential — one request in
 flight — so it never exercises the two things that actually stress the v4 service:
 
   Phase A — CONCURRENCY/LOAD: the service runs sync endpoints in FastAPI's
@@ -30,14 +30,17 @@ import time
 import aiohttp
 import numpy as np
 
-from generator import event_generator
+try:
+    from generator import event_generator
+except ImportError:
+    from tests.generator import event_generator
 
 BASE_URL = "http://localhost:8888"
 TYPE_NAMES = {
     0: "Benign", 1: "Policy", 2: "Contextual", 3: "Lateral", 4: "CredTheft",
     5: "Exfil", 6: "BenignDenied",
 }
-# Unloaded single-client P50 round-trip (measured by test_client.py, see
+# Unloaded single-client P50 round-trip (measured by stream_client.py, see
 # tasks/runs/serving_client.log: P50 9.81 ms / P99 12.33 ms) — the yardstick the
 # load phase reports contention against. The service serialises on one global
 # lock, so the headline finding is the lock-bound throughput ceiling, NOT scaling.
@@ -88,7 +91,7 @@ async def _load_worker(wid, session, seed, deadline, lat, preds, errors, counts)
         preds.append((is_anom, label == 1, etype))
         counts[0] += 1
 
-        # OPA decision, then conditional /update. Same proxy as test_client.py:
+        # OPA decision, then conditional /update. Same proxy as stream_client.py:
         # the commit follows the EXTERNAL policy/sensor signal, never the model's
         # own score (a self-gating loop would let the model decide its own baseline).
         user_counts[key_actor] = user_counts.get(key_actor, 0) + 1

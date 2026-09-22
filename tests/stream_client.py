@@ -2,10 +2,14 @@ import asyncio
 import aiohttp
 import time
 import argparse
-from generator import event_generator
-from metrics import MetricsTracker
+try:
+    from generator import event_generator
+    from metrics import MetricsTracker
+except ImportError:
+    from tests.generator import event_generator
+    from tests.metrics import MetricsTracker
 
-async def test_client(host="localhost", port=8888, duration_seconds=120, no_device=False):
+async def run_stream_client(host="localhost", port=8888, duration_seconds=120, no_device=False):
     tracker = MetricsTracker()
     tracker.start()
     
@@ -84,4 +88,4 @@ if __name__ == "__main__":
     parser.add_argument("--no-device", action="store_true", help="Omit key_device from events")
     args = parser.parse_args()
     
-    asyncio.run(test_client(host=args.host, port=args.port, duration_seconds=args.duration, no_device=args.no_device))
+    asyncio.run(run_stream_client(host=args.host, port=args.port, duration_seconds=args.duration, no_device=args.no_device))

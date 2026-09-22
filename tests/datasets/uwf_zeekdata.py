@@ -20,11 +20,7 @@ from __future__ import annotations
 import glob
 import math
 import os
-import re
-import sys
-from pathlib import Path
 
-import numpy as np
 import pandas as pd
 import torch
 
@@ -62,7 +58,7 @@ def _service_to_code(srv: str | float) -> float:
 
 
 def _is_rfc1918(ip: str) -> bool:
-    if ip.startswith("10.") or ip.startswith("192.168."):
+    if ip.startswith(("10.", "192.168.")):
         return True
     if ip.startswith("172."):
         parts = ip.split(".")
@@ -70,9 +66,7 @@ def _is_rfc1918(ip: str) -> bool:
             val = int(parts[1])
             return 16 <= val <= 31
     # UWF cyber-range internal subnet: 143.88.x.x
-    if ip.startswith("143.88."):
-        return True
-    return False
+    return ip.startswith("143.88.")
 
 
 def load_uwf_stream(
@@ -217,7 +211,7 @@ def load_uwf_stream(
         _get_idx(f"dev:{ip}")
     dev_num = len(src_ips)
 
-    src_lo = len(keys)
+    _src_lo = len(keys)
     for ip in src_ips:
         _get_idx(f"src:{ip}")
     src_num = len(src_ips)

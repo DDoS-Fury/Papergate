@@ -35,7 +35,6 @@ from __future__ import annotations
 import gzip
 import math
 import sys
-from pathlib import Path
 
 import torch
 
@@ -123,7 +122,7 @@ def load_lanl_stream(
                 break  # auth.txt is time-ordered: past the window/cap, we're done.
 
             user, src_comp, dst_comp = parts[1], parts[3], parts[4]
-            orient, success = parts[7], parts[8]
+            orient = parts[7]
             is_rt = (t, user, src_comp, dst_comp) in redteam
             if not is_rt:
                 # Down-sample benign by stride to stay tractable; red-team is always kept.

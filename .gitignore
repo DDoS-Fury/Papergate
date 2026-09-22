@@ -43,3 +43,5 @@ docs/paper/*.aux
 docs/paper/generated/
 !docs/paper/main.pdf
 backups/
+scratch/
+*emissions.csv

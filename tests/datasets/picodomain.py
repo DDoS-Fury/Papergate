@@ -164,7 +164,7 @@ def _norm_principal(client: str) -> tuple[str | None, str | None]:
 
 
 def _is_rfc1918(ip: str) -> bool:
-    if ip.startswith("10.") or ip.startswith("192.168."):
+    if ip.startswith(("10.", "192.168.")):
         return True
     if ip.startswith("172."):
         try:
@@ -333,7 +333,7 @@ def load_picodomain_stream(
     dev_lo = len(keys)
     for n in dev_names:
         _idx(f"dev:{n}")
-    src_lo = len(keys)
+    _src_lo = len(keys)
     for n in src_names:
         _idx(f"src:{n}")
     cfg_lo = len(keys)

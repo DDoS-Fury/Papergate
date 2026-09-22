@@ -31,12 +31,19 @@ by design (event-by-event), so this is the correct semantics, not a bottleneck h
 
 from __future__ import annotations
 
+import asyncio
+from contextlib import asynccontextmanager
 import os
+import platform
+import socket
 import threading
 import time
-import socket
-import platform
-from contextlib import asynccontextmanager
+from typing import Optional, Union
+
+from fastapi import BackgroundTasks, FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel, Field
+import torch
 
 try:
     import psutil
@@ -44,20 +51,14 @@ try:
 except ImportError:
     HAS_PSUTIL = False
 
+
 def get_sys_stats():
     if HAS_PSUTIL:
         return {
             "cpu_percent": psutil.cpu_percent(),
-            "ram_gb": psutil.virtual_memory().used / (1024**3)
+            "ram_gb": psutil.virtual_memory().used / (1024**3),
         }
     return {"cpu_percent": 0.0, "ram_gb": 0.0}
-from typing import Optional, Union
-
-import torch
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, BackgroundTasks
-from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field
-import asyncio
 
 from graphagate.config import TGN_CHECKPOINT_PATH, TGN_STATS_PATH
 from graphagate.serve_tgn import (
@@ -297,21 +298,21 @@ def infer(ev: EventIn, background_tasks: BackgroundTasks) -> ScoreOut:
             guest_device_fallback=bool(STATE.hp.get("guest_device_fallback", False)),
         )
     t1 = time.perf_counter()
-    sys_stats = get_sys_stats()
-
-    background_tasks.add_task(_broadcast_task, {
-        "action": "infer",
-        "key_user": ev.key_user,
-        "key_device": ev.key_device,
-        "key_source": ev.key_source,
-        "key_config": ev.key_config,
-        "key_dst": ev.key_dst,
-        "score": float(score),
-        "is_anomaly": bool(is_anomaly),
-        "inf_time_ms": (t1 - t0) * 1000,
-        "cpu_percent": sys_stats["cpu_percent"],
-        "ram_gb": sys_stats["ram_gb"]
-    })
+    if STATE.active_websockets:
+        sys_stats = get_sys_stats()
+        background_tasks.add_task(_broadcast_task, {
+            "action": "infer",
+            "key_user": ev.key_user,
+            "key_device": ev.key_device,
+            "key_source": ev.key_source,
+            "key_config": ev.key_config,
+            "key_dst": ev.key_dst,
+            "score": float(score),
+            "is_anomaly": bool(is_anomaly),
+            "inf_time_ms": (t1 - t0) * 1000,
+            "cpu_percent": sys_stats["cpu_percent"],
+            "ram_gb": sys_stats["ram_gb"],
+        })
     return ScoreOut(anomaly_score=score, is_anomaly=is_anomaly, threshold=eff_threshold)
 
 
@@ -346,21 +347,21 @@ def score(ev: EventIn, background_tasks: BackgroundTasks) -> ScoreOut:
             guest_device_fallback=bool(STATE.hp.get("guest_device_fallback", False)),
         )
     t1 = time.perf_counter()
-    sys_stats = get_sys_stats()
-
-    background_tasks.add_task(_broadcast_task, {
-        "action": "score",
-        "key_user": ev.key_user,
-        "key_device": ev.key_device,
-        "key_source": ev.key_source,
-        "key_config": ev.key_config,
-        "key_dst": ev.key_dst,
-        "score": float(s),
-        "is_anomaly": bool(is_anomaly),
-        "inf_time_ms": (t1 - t0) * 1000,
-        "cpu_percent": sys_stats["cpu_percent"],
-        "ram_gb": sys_stats["ram_gb"]
-    })
+    if STATE.active_websockets:
+        sys_stats = get_sys_stats()
+        background_tasks.add_task(_broadcast_task, {
+            "action": "score",
+            "key_user": ev.key_user,
+            "key_device": ev.key_device,
+            "key_source": ev.key_source,
+            "key_config": ev.key_config,
+            "key_dst": ev.key_dst,
+            "score": float(s),
+            "is_anomaly": bool(is_anomaly),
+            "inf_time_ms": (t1 - t0) * 1000,
+            "cpu_percent": sys_stats["cpu_percent"],
+            "ram_gb": sys_stats["ram_gb"],
+        })
     return ScoreOut(anomaly_score=s, is_anomaly=is_anomaly, threshold=eff_threshold)
 
 

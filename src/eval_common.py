@@ -138,3 +138,15 @@ def causal_precursor_factor(src, t, msg, half_life: float, max_boost: float) -> 
         if snort[i]:
             last[s] = t[i]
     return fac
+
+
+def binary_metrics(scores, labels, threshold: float) -> tuple[float, float]:
+    """Precision and recall of ``scores >= threshold`` against binary ``labels``."""
+    preds = (np.asarray(scores) >= threshold).astype(int)
+    labels = np.asarray(labels).astype(int)
+    tp = int(((preds == 1) & (labels == 1)).sum())
+    fp = int(((preds == 1) & (labels == 0)).sum())
+    fn = int(((preds == 0) & (labels == 1)).sum())
+    precision = tp / (tp + fp) if (tp + fp) else 0.0
+    recall = tp / (tp + fn) if (tp + fn) else 0.0
+    return precision, recall

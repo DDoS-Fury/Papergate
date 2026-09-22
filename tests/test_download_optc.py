@@ -18,6 +18,7 @@ import sys
 import threading
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 
 import pytest
 
@@ -415,14 +416,14 @@ def _dest(root, f) -> str:
 def test_download_direct_file(dl, drive):
     f = _file(dl, "direct")
     dl.download_file(dl._make_opener(), f, str(drive))
-    assert open(_dest(drive, f), "rb").read() == PAYLOAD
+    assert Path(_dest(drive, f)).read_bytes() == PAYLOAD
     assert not os.path.exists(_dest(drive, f) + ".part")
 
 
 def test_download_goes_through_the_interstitial(dl, drive):
     f = _file(dl, "interstitial")
     dl.download_file(dl._make_opener(), f, str(drive))
-    assert open(_dest(drive, f), "rb").read() == PAYLOAD
+    assert Path(_dest(drive, f)).read_bytes() == PAYLOAD
     assert [c[0] for c in _Handler.calls] == ["/uc", "/confirm"]
 
 
@@ -464,7 +465,7 @@ def test_size_mismatch_is_an_error_not_a_file(dl, drive):
 def test_cut_connection_resumes_with_range(dl, drive):
     f = _file(dl, "flaky")
     dl.download_file(dl._make_opener(), f, str(drive))
-    assert open(_dest(drive, f), "rb").read() == PAYLOAD
+    assert Path(_dest(drive, f)).read_bytes() == PAYLOAD
     assert _Handler.calls[0][2] is None and _Handler.calls[1][2].startswith("bytes=")
 
 
@@ -474,7 +475,7 @@ def test_existing_part_file_is_resumed(dl, drive):
     with open(_dest(drive, f) + ".part", "wb") as p:
         p.write(PAYLOAD[:1000])
     dl.download_file(dl._make_opener(), f, str(drive))
-    assert open(_dest(drive, f), "rb").read() == PAYLOAD
+    assert Path(_dest(drive, f)).read_bytes() == PAYLOAD
     assert _Handler.calls[0][2] == "bytes=1000-"
 
 
@@ -484,7 +485,7 @@ def test_server_ignoring_range_restarts_instead_of_corrupting(dl, drive):
     with open(_dest(drive, f) + ".part", "wb") as p:
         p.write(b"x" * 1000)  # junk prefix: appending the 200 body to it would corrupt the file
     dl.download_file(dl._make_opener(), f, str(drive))
-    assert open(_dest(drive, f), "rb").read() == PAYLOAD
+    assert Path(_dest(drive, f)).read_bytes() == PAYLOAD
     # restarted in place on the 200: without the 206 check the junk would be appended first and only
     # the size guard would notice, costing a second full download
     assert len(_Handler.calls) == 1

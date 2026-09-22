@@ -36,21 +36,10 @@ from sklearn.metrics import average_precision_score, roc_auc_score
 
 from graphagate.config import TGNConfig
 from graphagate.data.stream_synthetic import generate_streaming_data, stream_kwargs_from_cfg
-from graphagate.eval_common import causal_hist_features, causal_precursor_factor
+from graphagate.eval_common import binary_metrics, causal_hist_features, causal_precursor_factor
 
 # Subsample size for the (O(n^2)) kernel fit.
 OCSVM_FIT_SAMPLES = 5000
-
-
-def _binary_metrics(scores, labels, threshold):
-    """Precision / recall of ``score >= threshold`` (verbatim from train_tgn)."""
-    preds = (scores >= threshold).astype(int)
-    tp = int(((preds == 1) & (labels == 1)).sum())
-    fp = int(((preds == 1) & (labels == 0)).sum())
-    fn = int(((preds == 0) & (labels == 1)).sum())
-    precision = tp / (tp + fp) if (tp + fp) else 0.0
-    recall = tp / (tp + fn) if (tp + fn) else 0.0
-    return precision, recall
 
 
 def _build_features(msg, src, dst, node_features, y):
@@ -139,7 +128,7 @@ def ocsvm_baseline(cfg: TGNConfig = TGNConfig()):
 
     auc = roc_auc_score(y_test, test_scores)
     ap = average_precision_score(y_test, test_scores)
-    precision, recall = _binary_metrics(test_scores, y_test, threshold)
+    precision, recall = binary_metrics(test_scores, y_test, threshold)
     print(f"Test Stream | AUC: {auc:.4f} | AP: {ap:.4f}")
     print(f"At threshold {threshold:.4f} | Precision: {precision:.4f} | Recall: {recall:.4f}")
 
@@ -155,7 +144,7 @@ def ocsvm_baseline(cfg: TGNConfig = TGNConfig()):
             continue
         t_auc = roc_auc_score(l_sel, s_sel)
         t_ap = average_precision_score(l_sel, s_sel)
-        _, t_recall = _binary_metrics(s_sel, l_sel, threshold)
+        _, t_recall = binary_metrics(s_sel, l_sel, threshold)
         per_type[name] = {"auc": float(t_auc), "ap": float(t_ap),
                           "recall": float(t_recall), "n": int(l_sel.sum())}
         print(f"  {name:10s} | n={int(l_sel.sum()):4d} | AUC: {t_auc:.4f} | "

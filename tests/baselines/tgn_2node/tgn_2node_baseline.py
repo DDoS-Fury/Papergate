@@ -21,27 +21,16 @@ from typing import Optional
 
 import numpy as np
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
 from torch.optim import AdamW
 from sklearn.metrics import average_precision_score, roc_auc_score
 
 from graphagate.config import TGNConfig
 from graphagate.data.stream_synthetic import generate_streaming_data, stream_kwargs_from_cfg
-from graphagate.eval_common import causal_precursor_factor
+from graphagate.eval_common import binary_metrics
 from graphagate.model.registry import NodeRegistry
 from graphagate.model.tgn import ZTATemporalGraphNetwork, stable_hash
 from graphagate.serve_tgn import precursor_boost, record_alert
-
-
-def _binary_metrics(scores, labels, threshold):
-    preds = (scores >= threshold).astype(int)
-    tp = int(((preds == 1) & (labels == 1)).sum())
-    fp = int(((preds == 1) & (labels == 0)).sum())
-    fn = int(((preds == 0) & (labels == 1)).sum())
-    precision = tp / (tp + fp) if (tp + fp) else 0.0
-    recall = tp / (tp + fn) if (tp + fn) else 0.0
-    return precision, recall
 
 
 def tgn_2node_baseline(cfg: Optional[TGNConfig] = None) -> dict:
@@ -292,7 +281,7 @@ def tgn_2node_baseline(cfg: Optional[TGNConfig] = None) -> dict:
     test_scores_np = np.array(test_scores)
     auc = roc_auc_score(test_labels, test_scores_np)
     ap = average_precision_score(test_labels, test_scores_np)
-    precision, recall = _binary_metrics(test_scores_np, test_labels, threshold)
+    precision, recall = binary_metrics(test_scores_np, test_labels, threshold)
 
     print(f"\nTest 2-Node TGN | AUC: {auc:.4f} | AP: {ap:.4f}")
     print(f"At threshold {threshold:.4f} | Precision: {precision:.4f} | Recall: {recall:.4f}")
@@ -308,7 +297,7 @@ def tgn_2node_baseline(cfg: Optional[TGNConfig] = None) -> dict:
             continue
         t_auc = roc_auc_score(l_sel, s_sel)
         t_ap = average_precision_score(l_sel, s_sel)
-        _, t_recall = _binary_metrics(s_sel, l_sel, threshold)
+        _, t_recall = binary_metrics(s_sel, l_sel, threshold)
         per_type[name] = {
             "auc": float(t_auc),
             "ap": float(t_ap),

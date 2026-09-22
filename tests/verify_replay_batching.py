@@ -174,13 +174,16 @@ def _warm(model, data, lo, hi, device, *, use_config=True):
 
 def _slice_data(data, lo, hi, *, use_config=True):
     cfg_nodes = getattr(data, "config_nodes", None)
-    return dict(
-        source_nodes=data.source_nodes[lo:hi] if data.source_nodes is not None else None,
-        device_nodes=data.device_nodes[lo:hi] if data.device_nodes is not None else None,
-        config_nodes=cfg_nodes[lo:hi] if (use_config and cfg_nodes is not None) else None,
-        user=data.user[lo:hi], dst=data.dst[lo:hi], t=data.t[lo:hi],
-        msg=data.msg[lo:hi], y=data.y[lo:hi],
-    )
+    return {
+        "source_nodes": data.source_nodes[lo:hi] if data.source_nodes is not None else None,
+        "device_nodes": data.device_nodes[lo:hi] if data.device_nodes is not None else None,
+        "config_nodes": cfg_nodes[lo:hi] if (use_config and cfg_nodes is not None) else None,
+        "user": data.user[lo:hi],
+        "dst": data.dst[lo:hi],
+        "t": data.t[lo:hi],
+        "msg": data.msg[lo:hi],
+        "y": data.y[lo:hi],
+    }
 
 
 def main() -> int:
@@ -213,9 +216,9 @@ def main() -> int:
     ok = True
     for schema, use_config in schemas:
         sl = _slice_data(data, test_lo, test_hi, use_config=use_config)
-        for gate, kw in (("calib(gate_by_label)", dict(gate_by_label=True)),
-                         ("eval(routed)", dict(threshold=thr, threshold_dirty=thr_dirty,
-                                               gate_by_label=False))):
+        for gate, kw in (("calib(gate_by_label)", {"gate_by_label": True}),
+                         ("eval(routed)", {"threshold": thr, "threshold_dirty": thr_dirty,
+                                           "gate_by_label": False})):
             s_ref = run(_replay_ref, sl, use_config, **kw)
             s_b1 = run(_replay, sl, use_config, bs=1, **kw)
             d1 = float(np.max(np.abs(s_ref - s_b1)))

@@ -36,7 +36,6 @@ import json
 from pathlib import Path
 from typing import Hashable
 
-import numpy as np
 import torch
 
 from graphagate.config import TGNConfig
@@ -122,7 +121,7 @@ def infer_score(model, src_idx: int, dst_idx: int, t_val: int, msg_vec, device,
     habituality counters on the access edge — see ``compute_hist_feats``); ``None``
     zero-pads it (binding edges / device-less datasets).
     """
-    b_src, b_dst, b_t, b_msg = _event_tensors(src_idx, dst_idx, t_val, msg_vec, device)
+    b_src, b_dst, _b_t, b_msg = _event_tensors(src_idx, dst_idx, t_val, msg_vec, device)
     nodes = torch.unique(torch.cat([b_src, b_dst]))
     n_id, edge_index, hist_t, hist_msg = model.neighbor_loader(nodes)
     assoc = model.neighbor_loader._assoc
@@ -281,7 +280,7 @@ def _reset_slot(model, idx: int) -> None:
     mem.msg_s_store[idx] = (empty_i, empty_i, empty_i, empty_msg)
     mem.msg_d_store[idx] = (empty_i, empty_i, empty_i, empty_msg)
     if hasattr(model, "last_contact"):
-        keys_to_delete = [k for k in model.last_contact.keys() if k[0] == idx or k[1] == idx]
+        keys_to_delete = [k for k in model.last_contact if k[0] == idx or k[1] == idx]
         for k in keys_to_delete:
             del model.last_contact[k]
     # Purge the recycled slot's interaction-history counters too, so a reused index

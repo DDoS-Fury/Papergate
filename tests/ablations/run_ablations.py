@@ -19,8 +19,10 @@ baseline (``tests/baselines/simple_gnn``), which now shares the exact same tabul
 Run inside the project's Docker image (torch required):
 
     docker compose --profile ablations up
+    docker compose run --rm ablations /app/tests/ablations/run_ablations.py --seeds 2000 --events 200000 --epochs 15
 """
 
+import argparse
 import dataclasses
 
 import numpy as np
@@ -52,28 +54,41 @@ def _lat(metrics):
     return p.get("auc", float("nan")), p.get("ap", float("nan")), p.get("recall", float("nan"))
 
 
-def main():
-    base = dataclasses.replace(TGNConfig(), num_events=ABLATION_EVENTS, epochs=ABLATION_EPOCHS)
-    # results[name] = list over seeds of (lat_auc, lat_ap, lat_rec, agg_auc)
-    results = {name: [] for name, _ in VARIANTS}
+def _theft_auc(metrics):
+    return metrics["per_type"].get("cred-theft", {}).get("auc", float("nan"))
 
-    for seed in SEEDS:
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--seeds", type=int, nargs="+", default=SEEDS)
+    ap.add_argument("--events", type=int, default=ABLATION_EVENTS)
+    ap.add_argument("--epochs", type=int, default=ABLATION_EPOCHS)
+    ap.add_argument("--variants", nargs="+", choices=[n for n, _ in VARIANTS],
+                    default=[n for n, _ in VARIANTS])
+    args = ap.parse_args()
+
+    base = dataclasses.replace(TGNConfig(), num_events=args.events, epochs=args.epochs)
+    # results[name] = list over seeds of (lat_auc, lat_ap, lat_rec, theft_auc, agg_auc)
+    variants = [(n, f) for n, f in VARIANTS if n in args.variants]
+    results = {name: [] for name, _ in variants}
+
+    for seed in args.seeds:
         cfg = dataclasses.replace(base, seed=seed)
-        for name, flags in VARIANTS:
+        for name, flags in variants:
             print("\n" + "=" * 78)
             print(f"=== ABLATION: {name}  (seed={seed}) ===")
             print("=" * 78)
             m = train_tgn(cfg, save=False, **flags)
             la, lp, lr = _lat(m)
-            results[name].append((la, lp, lr, m["agg_auc"]))
+            results[name].append((la, lp, lr, _theft_auc(m), m["agg_auc"]))
 
     # --- summary table (mean ± std over seeds) -------------------------------
     print("\n" + "=" * 90)
-    print(f"ABLATION SUMMARY — {len(SEEDS)} seeds {SEEDS}, "
-          f"{ABLATION_EVENTS} events / {ABLATION_EPOCHS} epochs, FPR target {base.target_fpr:.0%}")
+    print(f"ABLATION SUMMARY — {len(args.seeds)} seeds {args.seeds}, "
+          f"{args.events} events / {args.epochs} epochs, FPR target {base.target_fpr:.0%}")
     print("=" * 90)
     header = (f"{'variant':16s} | {'lateral AUC':>15s} | {'lateral AP':>15s} | "
-              f"{'lateral Rec@thr':>17s} | {'agg AUC':>13s}")
+              f"{'lateral Rec@thr':>17s} | {'theft AUC':>15s} | {'agg AUC':>13s}")
     print(header)
     print("-" * len(header))
 
@@ -82,10 +97,10 @@ def main():
         m, sd = mean_std(a)
         return f"{m:.3f}±{sd:.3f}"
 
-    for name, _ in VARIANTS:
-        arr = np.array(results[name], dtype=float)  # [seeds, 4]
+    for name, _ in variants:
+        arr = np.array(results[name], dtype=float)  # [seeds, 5]
         print(f"{name:16s} | {ms(arr[:, 0]):>15s} | {ms(arr[:, 1]):>15s} | "
-              f"{ms(arr[:, 2]):>17s} | {ms(arr[:, 3]):>13s}")
+              f"{ms(arr[:, 2]):>17s} | {ms(arr[:, 3]):>15s} | {ms(arr[:, 4]):>13s}")
 
     print(
         "\nReading: 'lateral AUC' is the discriminating column (the only model-owned class). "

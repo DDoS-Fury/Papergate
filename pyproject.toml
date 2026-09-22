@@ -41,7 +41,7 @@ packages = ["graphagate", "graphagate.data", "graphagate.model"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-ra --ignore=tests/test_client.py"
+addopts = "-ra"
 filterwarnings = [
     "ignore::DeprecationWarning",
 ]

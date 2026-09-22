@@ -52,7 +52,7 @@ MIN_TEST_EVENTS = 100          # test window, critical classes
 # A single history lookup may not separate a critical class beyond this (per seed, paper
 # protocol gating). A regression guard, not a target: over 11 seeds the worst v5 lookup
 # is 0.71-0.80 (theft, src|usr_new / cfg|dev_new), while v4 reached 1.000. Their SUM is the
-# stateful baseline the learned models must beat (scratch/generator_rule_audit.py).
+# stateful baseline the learned models must beat.
 MAX_SINGLE_LOOKUP_AUC = 0.85
 
 # Type id -> name. 0 is the benign reference class.

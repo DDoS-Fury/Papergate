@@ -54,8 +54,8 @@ L'audit gira sullo stream di training (200k eventi, 3 seed). Impone sei invarian
     continue. Il messaggio contiene solo segnali disponibili al PDP prima della risposta.
 
 ### 2.2 Modello del traffico (v5) e scelte parametriche
-I valori sono scelte di modellazione, esposte come parametri in `TGNConfig` e ablabili
-con `scratch/knob_ablation.py`. Non sono derivati da uno standard.
+I valori sono scelte di modellazione, esposte come parametri in `TGNConfig`. Non sono
+derivati da uno standard.
 *   **Risorse:** legge di potenza sul rango di popolarità con esponente $s = 1.2$. Il rango è
     permutato rispetto all'indice della risorsa. Breslau et al. (INFOCOM 1999) riportano
     $\alpha \approx 0.64$–$0.83$ per richieste a proxy web, quindi $1.2$ è una

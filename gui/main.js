@@ -57,9 +57,6 @@ eventGroup.position.y = layerYs.events;
 scene.add(eventGroup);
 
 const sphereGeom = new THREE.SphereGeometry(0.5, 16, 16);
-for (let i = 0; i < 0; i++) {
-    // Particles are now generated dynamically based on incoming events
-}
 
 // Grid for Event Stream
 const gridHelper = new THREE.GridHelper(80, 20, 0x00ffcc, 0x222244);

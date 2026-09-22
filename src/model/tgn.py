@@ -1,7 +1,7 @@
 import hashlib
 
 import torch
-import torch.nn as nn
+from torch import nn
 import torch.nn.functional as F
 from torch_geometric.nn.models.tgn import (
     TGNMemory,

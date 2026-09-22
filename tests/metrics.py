@@ -1,4 +1,3 @@
-import time
 import psutil
 try:
     import pynvml

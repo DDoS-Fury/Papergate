@@ -53,7 +53,7 @@ def main() -> int:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     data = torch.load(args.cache, weights_only=False)
     n = len(data.dst)
-    train_end = int(n * args.train_frac)
+    _train_end = int(n * args.train_frac)
     val_end = int(n * (args.train_frac + args.val_frac))
     print(f"events={n} test=[{val_end},{n}) test_lat={int((data.types[val_end:] == 3).sum())}")
 
