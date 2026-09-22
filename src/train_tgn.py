@@ -23,9 +23,11 @@ No attack label is ever used to compute a test-set score.
 """
 
 import copy
+import os
 import random
 import sys
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
+from pathlib import Path
 
 import numpy as np
 import torch
@@ -40,7 +42,12 @@ from graphagate.calibration import (
     recall_fpr_curve,
     routed_predict,
 )
-from graphagate.config import TGNConfig, TGN_CHECKPOINT_PATH, TGN_STATS_PATH
+from graphagate.config import (
+    TGNConfig,
+    TGN_CHECKPOINT_PATH,
+    TGN_RESUME_PATH,
+    TGN_STATS_PATH,
+)
 from graphagate.data.stream_synthetic import (
     SCEN_ROAMING,
     SCEN_SHARED,
@@ -429,6 +436,79 @@ def _synthetic_stream_data(cfg: TGNConfig) -> StreamData:
     )
 
 
+# --- CRASH-RESILIENT RESUME --------------------------------------------------
+# A full run is 200k events x 15 epochs -- hours of wall time -- and the deployable
+# artifact is only written at the very end, so any interruption used to cost the whole
+# run. (It happens: three thermal-emergency sleeps in one afternoon on an M5 Pro.) Every
+# epoch therefore ends by persisting enough state to restart from the next one.
+#
+# Only the weights and the optimizer have to survive. The epoch loop resets the TGN
+# memory, the neighbour loader and the history counters at its top, so nothing else
+# crosses an epoch boundary; ``node_feat`` is read-only during training. The RNG states
+# are saved too, so a resumed run follows the same random trajectory as an uninterrupted
+# one -- up to the non-deterministic scatter kernels the module docstring documents.
+
+
+def _resume_fingerprint(cfg: TGNConfig, flags: dict) -> dict:
+    """Identify the run a resume file belongs to.
+
+    Restoring weights into a different configuration would silently blend two runs into
+    one set of numbers, so the fingerprint covers everything that changes what an epoch
+    does: the whole config plus the ablation switches.
+    """
+    return {"cfg": asdict(cfg), "flags": flags}
+
+
+def _save_resume(path, model, optimizer, epoch: int, fingerprint: dict) -> None:
+    """Persist mid-run state atomically, so a crash mid-write cannot corrupt it."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".pt.tmp")
+    torch.save(
+        {
+            "epoch": epoch,
+            "fingerprint": fingerprint,
+            "model": model.state_dict(),
+            "optimizer": optimizer.state_dict(),
+            "rng": {
+                "torch": torch.get_rng_state(),
+                "numpy": np.random.get_state(),
+                "python": random.getstate(),
+            },
+        },
+        tmp,
+    )
+    tmp.replace(path)
+
+
+def _load_resume(path, model, optimizer, fingerprint: dict, device) -> int:
+    """Restore mid-run state; return how many epochs are already done (0 = start fresh).
+
+    Every failure path returns 0 rather than raising: a missing, stale or half-written
+    resume file must cost a restart, never the ability to run at all.
+    """
+    path = Path(path)
+    if not path.exists():
+        return 0
+    try:
+        ckpt = torch.load(path, map_location=device, weights_only=False)
+    except Exception as exc:  # truncated by the very crash it exists to survive
+        print(f"[resume] {path.name} is unreadable ({exc}); starting from scratch")
+        return 0
+    if ckpt.get("fingerprint") != fingerprint:
+        print(f"[resume] {path.name} belongs to a different configuration; starting from scratch")
+        return 0
+    model.load_state_dict(ckpt["model"])
+    optimizer.load_state_dict(ckpt["optimizer"])
+    rng = ckpt.get("rng")
+    if rng:
+        # set_rng_state wants a CPU uint8 tensor; map_location may have moved it.
+        torch.set_rng_state(rng["torch"].to("cpu", torch.uint8))
+        np.random.set_state(rng["numpy"])
+        random.setstate(rng["python"])
+    return int(ckpt["epoch"])
+
+
 def train_tgn(cfg: TGNConfig = TGNConfig(), *, dataset: "StreamData | None" = None,
               use_struct_head=True, use_hash_identity=True, use_hist_feats=True,
               use_precursor=True, use_config_node=True, save=True):
@@ -543,8 +623,36 @@ def train_tgn(cfg: TGNConfig = TGNConfig(), *, dataset: "StreamData | None" = No
     bs = cfg.batch_size
     # One-class, not unsupervised: labels select the training set (benign only). See the
     # module docstring for the full statement of what is and is not supervised.
-    print("--- ONE-CLASS TRAINING START (benign traffic only) ---")
-    for epoch in range(1, cfg.epochs + 1):
+    # Ablation runs must not read or write the full model's resume state, for the same
+    # reason they must not clobber its checkpoint (see ``save``). GRAPHAGATE_RESUME=0
+    # forces a clean run.
+    resume_enabled = save and os.environ.get("GRAPHAGATE_RESUME", "1") != "0"
+    resume_path = Path(os.environ.get("GRAPHAGATE_RESUME_PATH", TGN_RESUME_PATH))
+    fingerprint = _resume_fingerprint(cfg, {
+        "use_struct_head": use_struct_head,
+        "use_hash_identity": use_hash_identity,
+        "use_hist_feats": use_hist_feats,
+        "use_precursor": use_precursor,
+        "use_config_node": use_config_node,
+        "dataset": "injected" if dataset is not None else "synthetic",
+    })
+    epochs_done = (
+        _load_resume(resume_path, model, optimizer, fingerprint, device)
+        if resume_enabled else 0
+    )
+    # Always replay at least the final epoch. Calibration and evaluation continue from the
+    # memory, neighbour buffers and history counters that the last epoch leaves behind, and
+    # those are rebuilt from scratch inside each epoch rather than restored from the resume
+    # file -- skipping straight to calibration would run it against an empty memory. The
+    # weights are unaffected (an epoch's starting point is what was saved), so at worst a
+    # resume costs one repeated epoch.
+    start_epoch = min(epochs_done, cfg.epochs - 1) + 1
+    if start_epoch > 1:
+        print(f"--- RESUMING: {epochs_done}/{cfg.epochs} epochs done, "
+              f"restarting at epoch {start_epoch:02d} ---")
+    else:
+        print("--- ONE-CLASS TRAINING START (benign traffic only) ---")
+    for epoch in range(start_epoch, cfg.epochs + 1):
         model.memory.reset_state()  # restart the recurrent memory each epoch
         model.neighbor_loader.reset_state()  # ...and the temporal neighbourhood
         model.last_contact.clear()  # ...and the per-pair recency cache (Δt must reset too)
@@ -787,6 +895,8 @@ def train_tgn(cfg: TGNConfig = TGNConfig(), *, dataset: "StreamData | None" = No
                     model.pair_count[(dev_l[j], d)] = model.pair_count.get((dev_l[j], d), 0) + 1
 
         print(f"Epoch {epoch:02d} | Train Loss: {total_loss / max(num_train_batches, 1):.4f}")
+        if resume_enabled:
+            _save_resume(resume_path, model, optimizer, epoch, fingerprint)
 
     # --- THRESHOLD CALIBRATION (held-out benign slice) -----------------------
     print("\n--- THRESHOLD CALIBRATION (on the benign validation stream) ---")
@@ -1153,6 +1263,9 @@ def train_tgn(cfg: TGNConfig = TGNConfig(), *, dataset: "StreamData | None" = No
         )
         print(f"\nSaved checkpoint -> {TGN_CHECKPOINT_PATH}")
         print(f"Saved stats      -> {TGN_STATS_PATH}")
+        # The deployable artifact exists: the mid-run state is now dead weight.
+        if resume_enabled:
+            resume_path.unlink(missing_ok=True)
 
     return {
         "threshold": threshold,

@@ -20,6 +20,10 @@ ARTIFACTS_DIR: Path = REPO_ROOT / "public"
 TGN_CHECKPOINT_PATH: Path = ARTIFACTS_DIR / "tgn_checkpoint.pt"
 TGN_STATS_PATH: Path = ARTIFACTS_DIR / "tgn_stats.json"
 
+# Mid-run state for crash-resilient training (written per epoch, deleted once the
+# deployable artifact above exists). Not a deployment artifact: see train_tgn._save_resume.
+TGN_RESUME_PATH: Path = ARTIFACTS_DIR / "tgn_resume.pt"
+
 
 @dataclass(frozen=True)
 class TGNConfig:
