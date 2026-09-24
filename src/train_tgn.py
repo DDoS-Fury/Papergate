@@ -625,7 +625,6 @@ def train_tgn(cfg: TGNConfig | None = None, *, dataset: "StreamData | None" = No
             # Trust is now a static, orchestrator-supplied attribute (optionally evolved
             # at serving time only); it is never used to build a training negative.
 
-            # Only train on benign events.
             benign_mask = b_y == 0
             if not benign_mask.any():
                 continue

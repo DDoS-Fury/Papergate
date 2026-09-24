@@ -163,7 +163,7 @@ def run_xgboost(
 
     # Score = probability of anomaly P(y=1)
     val_probs = clf.predict_proba(X_val)[:, 1]
-    threshold = float(np.percentile(val_probs, 99.0))  # 99th percentile of validation
+    threshold = float(np.percentile(val_probs, 99.0))
     print(f"Calibrated threshold (99th percentile): {threshold:.4f}")
 
     print("\n--- EVALUATION: TEST STREAM ---")

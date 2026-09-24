@@ -352,7 +352,6 @@ function animate() {
     
     controls.update();
     
-    // Animate Events
     eventParticles.forEach((p, i) => {
         p.userData.angle += p.userData.speed;
         p.position.x = Math.cos(p.userData.angle) * p.userData.radius;
@@ -360,7 +359,6 @@ function animate() {
         p.position.y = Math.sin(time * 2 + i) * 2;
     });
     
-    // Animate Memory Cubes
     memoryCubes.forEach((c, i) => {
         c.position.y = c.userData.baseY + Math.sin(time * 3 + c.userData.phase) * 1.5;
         c.rotation.x = time * 0.5 + c.userData.phase;
@@ -368,20 +366,17 @@ function animate() {
         c.material.opacity = 0.5 + Math.sin(time * 2 + i) * 0.4;
     });
     
-    // Animate GNN Nodes
     gnnNodes.forEach((n) => {
         n.rotation.x += n.userData.rotX;
         n.rotation.y += n.userData.rotY;
         n.material.emissiveIntensity = 0.2 + Math.sin(time * 4 + n.position.x) * 0.3;
     });
     
-    // Animate Scoring Heads
     featureHead.rotation.x = time;
     featureHead.rotation.y = time * 0.5;
     structuralHead.rotation.x = time * -1;
     structuralHead.rotation.z = time * 0.5;
     
-    // Animate Gate
     gateMesh.rotation.y = time;
     gateMesh.rotation.z = time * 0.5;
     gateMesh.material.emissiveIntensity = 0.5 + Math.sin(time * 5) * 0.5;
@@ -434,7 +429,7 @@ function animate() {
 
 animate();
 
-// UI Interactivity (Optional but good for polishing)
+// Layer visibility controls
 document.querySelectorAll('#layer-list li').forEach(li => {
     li.addEventListener('click', (e) => {
         document.querySelectorAll('#layer-list li').forEach(el => el.classList.remove('active'));
@@ -608,21 +603,19 @@ function stopSimulation() {
 }
 
 function clearGraphState() {
-    // Remove the event packets
+    // Reset active visual elements and node geometry
     eventParticles.forEach(p => {
         eventGroup.remove(p);
         if (p.material) p.material.dispose();
     });
     eventParticles.length = 0;
     
-    // Remove the flow packets
     flowingParticles.forEach(p => {
         flowGroup.remove(p);
         if (p.material) p.material.dispose();
     });
     flowingParticles.length = 0;
     
-    // Remove the real nodes
     realNodesMap.forEach(mesh => {
         realGnnGroup.remove(mesh);
         const idx = gnnNodes.indexOf(mesh);
@@ -630,7 +623,6 @@ function clearGraphState() {
     });
     realNodesMap.clear();
     
-    // Reset the real edges
     realEdgesSet.clear();
     realEdgesPositions.length = 0;
     realEdgesGeometry.setAttribute('position', new THREE.Float32BufferAttribute(realEdgesPositions, 3));

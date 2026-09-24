@@ -89,15 +89,14 @@ decision point observes strictly more than a host-to-host authentication log: fo
 every request it sees the client network origin, the client's TLS configuration
 fingerprint, the device posture identity, the authenticated principal, and the
 requested asset. The substrate is modelled as a 5-node causal chain per request, and
-a Temporal Graph Network is evaluated over it under a protocol that keeps the
-deployment honest: one-class training on benign traffic only, event-by-event
+a Temporal Graph Network is evaluated over it under an operational streaming
+protocol: one-class training on benign traffic only, event-by-event
 chronological scoring, and a memory-commit gate driven by an \emph{external} policy
-engine rather than by the model's own verdict. Two properties follow from the extra
-nodes. Credential reuse
-from an unfamiliar client tool becomes expressible as an anomalous
+engine rather than by the model's own verdict. The extra nodes make credential reuse
+from an unfamiliar client tool expressible as an anomalous
 configuration-to-principal binding, a class not representable on a host-to-host
-graph. In addition, the anti-poisoning commit gate provides verifiable resilience against
-adversarial baseline drift, as entity memory advances strictly on events admitted by
+graph. Complementing the graph schema, the anti-poisoning commit gate prevents
+adversarial baseline drift by advancing entity memory strictly on events admitted by
 external policy. An automated label-leakage audit for the synthetic generator is reported alongside
 an empirical case study on PicoDomain, where all 5 nodes are grounded in real
 enterprise telemetry, providing JA3 fingerprints alongside Kerberos principals.

@@ -109,7 +109,6 @@ def main() -> int:
     red_dest = os.path.join(DATA_DIR, "Red Log.xlsx")
     zeek_dest = os.path.join(DATA_DIR, "Zeek_Logs.7z")
 
-    # 1. Red Log.xlsx
     if os.path.exists(red_dest):
         print(f"[OK] Red Log.xlsx already present ({os.path.getsize(red_dest)} bytes)")
     else:
@@ -117,7 +116,6 @@ def main() -> int:
         download_with_progress(RED_LOG_URL, red_dest)
         print("   Done.")
 
-    # 2. Zeek_Logs.7z
     if os.path.exists(zeek_dest):
         print(f"[OK] Zeek_Logs.7z already present ({os.path.getsize(zeek_dest) / (1024*1024):.2f} MB)")
     else:
@@ -125,12 +123,10 @@ def main() -> int:
         download_with_progress(ZEEK_LOGS_URL, zeek_dest)
         print("   Done.")
 
-    # 3. Extraction
     print("\n-> Extracting Zeek_Logs.7z to data/logs/...")
     success = extract_7z(zeek_dest, LOGS_DIR)
 
     if success:
-        # Check extracted files
         extracted_files = []
         for root, _, files in os.walk(LOGS_DIR):
             for f in files:

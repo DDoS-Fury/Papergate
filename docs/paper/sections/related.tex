@@ -78,17 +78,16 @@ rather than the underlying substrate, threat model, or streaming protocol.
 \subsection{Client fingerprinting}
 
 JA3~\cite{ja3} hashes the ordered parameters of a TLS \texttt{ClientHello} into a
-fingerprint of the originating client library and its configuration. While widely deployed for
-malware-family attribution, JA3 is employed as a \emph{node identity} whose habitual
-association with a principal is learned. Consequently, a familiar credential arriving
-under an unfamiliar fingerprint represents a structural anomaly rather than a signature match.
+fingerprint of the originating client library and its configuration. Although widely used for
+malware-family attribution, JA3 serves here as a \emph{node identity} whose habitual
+association with a principal is learned over time. A familiar credential arriving
+under an unfamiliar fingerprint thus registers as a structural anomaly rather than a signature match.
 This inductive property accommodates previously unseen client tools, provided an adversary
 does not replicate the legitimate client TLS parameters.
 
 \subsection{System positioning}
 
-The contributions focus on the substrate, the gate, and the deployment protocol:
-(i) a 5-node ZTA chain including a configuration node, making credential reuse
-from an unfamiliar client explicitly detectable; (ii) an anti-poisoning commit gate driven
-by external policy validation, preventing memory corruption; and (iii) an inductive streaming
-architecture with hashed node identity and validated inference parity.
+In contrast to prior temporal-graph detectors that consume host-to-host authentication
+snapshots without client context, the present system couples a 5-node request chain with
+an external commit gate, preserving inductive expressiveness on client configurations while
+preventing adversarial drift under streaming execution.

@@ -200,12 +200,10 @@ The two-step schema of the previous section is realized as follows:
 
 ### Identity handling (new users and guests, Hashed Identity)
 
-Being trained on synthetic data, in production the model will only see entities
-(users/IPs) never seen before. Thanks to the dynamic memory handling and the use of the
-**Hashed Identity**, the model allocates a new RAM slot in real time for every unknown
-identity (cold-start) by computing the scalable URI hashing on the fly
-(`hash(URI) % buckets`). This provides at once a coherent and inductive embedding base
-even for the just-discovered nodes.
+When deployed, the model encounters previously unseen entity identifiers (users, IPs, devices).
+Through dynamic memory allocation and **Hashed Identity**, the model assigns an in-memory
+slot in real time to previously unseen identities via deterministic hash projection
+(`hash(URI) % buckets`), producing an inductive embedding baseline for newly observed nodes.
 
 For this reason, the Orchestrator must inject the privileges at runtime via `user_feat`:
 

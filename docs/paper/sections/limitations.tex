@@ -1,8 +1,6 @@
 \section{Limitations}
 \label{sec:limits}
 
-Several technical and operational limitations inherent to the approach and evaluation methodology are outlined.
-
 \subsection{Run-to-run variance and multi-seed dispersion}
 
 All reported dispersions are the sample standard deviation over three independent
@@ -18,19 +16,17 @@ seeds with $\geq$3 same-stream replicates remains future work.
 
 \subsection{Synthetic benchmark fidelity}
 
-While synthetic access streams enable controlled parameter variation and multi-seed benchmarking,
-synthetic simulations inherently cannot capture the full behavioral heterogeneity of enterprise
-networks. To mitigate this risk, the leakage audit (Section~\ref{sec:setup}) enforces invariance
-against trivial separability across generator revisions. Furthermore, empirical evaluation on
-PicoDomain (Section~\ref{sec:external}) provides qualitative grounding on real enterprise telemetry.
+Synthetic access streams cannot capture the full behavioral diversity of production
+enterprise networks. We constrain artificial separability through the automated
+leakage audit (Section~\ref{sec:setup}) and ground the 5-node schema in real enterprise
+telemetry via PicoDomain (Section~\ref{sec:external}).
 
 \subsection{Operating recall trade-offs}
 
-While cost-sensitive threshold routing translates ranking discriminability into practical
-operating recall, achieving higher detection rates on subtle lateral movement involves an
-inherent trade-off with the false-positive rate on benign activity. In production environments,
-operators must tune threshold operating points based on organizational risk tolerance and alert
-triage capacity.
+Cost-sensitive threshold routing maps ranking discriminability to concrete operating points,
+yet subtle lateral movement partially overlaps with legitimate exploratory access.
+Operating thresholds must therefore be calibrated against SOC triage capacity and
+acceptable alert volume rather than unweighted ranking metrics.
 
 \subsection{State complexity and scalability}
 \label{sec:limits-state}
@@ -45,20 +41,17 @@ deployments serving millions of concurrent entities require distributed cache ev
 
 \subsection{Commit gate boundary conditions}
 
-Decoupling memory updates via an external policy gate introduces two boundary conditions.
-First, if an adversary executes an unauthorized action that satisfies external policy constraints,
-the event will be committed to graph memory. Second, if a benign entity undergoes a legitimate
-operational change that triggers persistent anomaly flags, its memory updates risk starvation.
-In practice, these scenarios require administrative policy review and defined grace periods for
-newly provisioned entities.
+As detailed in Section~\ref{sec:problem}, external commit gating admits authorized
+adversary actions into entity memory while risking update starvation for persistently
+flagged benign entities. Resolving these boundary conditions requires operational
+grace periods and periodic administrative overrides.
 
 \subsection{Precursor heuristic scope}
 
 The precursor prior operates on the assumption that lateral movement often follows detectable
-reconnaissance activity originating from the same host. While this holds across many enterprise
-intrusion patterns, an adversary conducting silent reconnaissance or moving directly from a
-pre-established foothold will not trigger the precursor multiplier, leaving detection reliant solely
-on graph structural and feature heads.
+reconnaissance activity on the same origin host. An adversary conducting silent reconnaissance
+or moving directly from a pre-established foothold will not trigger the additive precursor prior,
+leaving detection to the graph structural and feature heads alone.
 
 \subsection{Cold start dynamics}
 
@@ -70,7 +63,7 @@ phases, detection sensitivity is reduced until minimum interaction counts are es
 \subsection{Fingerprint evasion}
 
 The client-configuration node detects unfamiliar client tool stacks associated with known
-principals. If a sophisticated adversary faithfully replicates the legitimate user's TLS parameters,
+principals. If an adversary faithfully replicates the client TLS parameters,
 ciphersuite ordering, and client environment, the request appears structurally habitual on the
 \textit{config}\,$\rightarrow$\,\textit{user} binding. The configuration node increases adversary
 work factor, but does not prevent exact client cloning.

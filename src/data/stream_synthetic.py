@@ -1234,7 +1234,7 @@ class ZTAStreamSimulator:
                 anomaly_type = "exfil"    # Data Exfiltration
                 self.compromised_chain_remaining[machine] -= 1
                 if self.compromised_chain_remaining[machine] <= 0:
-                    self.compromised_state[machine] = 4 # Done
+                    self.compromised_state[machine] = 4  # State 4: kill-chain finished, enter post-exploitation dwell
                     if multi:
                         # Post-exploitation dwell, then detection + clean-up by the SOC.
                         self.compromised_dwell[machine] = int(np.random.randint(0, 5))

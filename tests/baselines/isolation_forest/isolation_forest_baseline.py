@@ -143,7 +143,7 @@ def isolation_forest_baseline(cfg: TGNConfig = TGNConfig(), stream=None):
     best_auc = -1.0
     best_params = None
     
-    print(f"Avvio ricerca randomizzata su {n_iter} combinazioni con n_jobs=-1...")
+    print(f"Randomized search over {n_iter} combinations (n_jobs=-1)...")
     for i, params in enumerate(param_list):
         model = IsolationForest(
             random_state=cfg.seed,
@@ -152,16 +152,15 @@ def isolation_forest_baseline(cfg: TGNConfig = TGNConfig(), stream=None):
         )
         model.fit(X_train_benign)
         
-        # Validazione sul validation set per trovare il miglior set di iperparametri
+        # Validation slice tuning for best hyperparameters
         # Orientation: higher = more anomalous
         val_scores_raw = -model.score_samples(X_val)
         val_scores = val_scores_raw * precursor_fac[train_end:val_end]
         
-        # If the validation set contains at least one anomaly, compute the AUC
         if len(np.unique(y_val)) > 1:
             auc = roc_auc_score(y_val, val_scores)
         else:
-            auc = 0.0 # fallback
+            auc = 0.0
             
         print(f"Iter {i+1:2d}/{n_iter} - Val AUC: {auc:.4f} - Params: {params}")
         
@@ -170,7 +169,7 @@ def isolation_forest_baseline(cfg: TGNConfig = TGNConfig(), stream=None):
             best_model = model
             best_params = params
             
-    print(f"\nMigliori parametri trovati (Val AUC={best_auc:.4f}): {best_params}")
+    print(f"\nBest parameters (Val AUC={best_auc:.4f}): {best_params}")
     model = best_model
 
     # Anomaly score: higher = more anomalous (matches the TGN's 1 - P(benign)).

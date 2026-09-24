@@ -81,21 +81,17 @@ and can be overridden by external policy rules.}
 
 A streaming detector maintaining a dynamic baseline faces potential self-poisoning: if the
 model ingests traffic based solely on its own classification, an adversary can gradually
-shift the baseline. The decoupling of inference from memory updates (Fig.~\ref{fig:gate})
-addresses this: the entity memory and temporal neighborhood store advance only on requests
-admitted by the external policy engine.
+shift the baseline. Decoupling inference from memory updates (Fig.~\ref{fig:gate})
+addresses this: entity memory and temporal neighborhoods advance only on requests
+admitted by the external policy engine, preventing error compounding and runaway
+baseline drift. All evaluations in this paper operate under this external commit protocol.
 
-Decoupling the detector's score from the commit gate prevents error compounding and runaway
-false-positive drift. All experimental evaluations in this paper operate under this external
-commit gate protocol.
-
-Specifically, in the streaming evaluation, the commit gate evaluates a deterministic function
-over edge signals that an external policy engine inspects (such as invalid TLS posture or
+In the streaming evaluation, this commit gate evaluates a deterministic function
+over edge signals inspected by an external policy engine (such as invalid TLS posture or
 sensor alerts), implemented as an explicit admission filter (\texttt{signal\_dirty}) in
-\texttt{serve\_tgn.py} and \texttt{train\_tgn.py}. This decouples the update decision from the
-model's own anomaly score $a_i$. Evaluating on this deterministic signal represents a
-conservative baseline: authorized lateral movement events that carry clean signals are
-admitted to memory, maintaining realistic stream poisoning challenges during evaluation.
+\texttt{serve\_tgn.py} and \texttt{train\_tgn.py}. Evaluating against this deterministic signal
+establishes a conservative baseline: authorized lateral movement events with clean signals
+enter memory, exposing the detector to realistic stream poisoning during evaluation.
 Direct integration with an interactive external policy service (\texttt{policy\_allows},
 evaluated in \texttt{tests/test\_policy\_blp.py}) serves as the reference architecture.
 

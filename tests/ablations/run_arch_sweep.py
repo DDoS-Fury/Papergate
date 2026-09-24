@@ -27,7 +27,7 @@ SEEDS = [42, 7, 123]
 EVENTS = 40000
 EPOCHS = 12
 
-# Ordered per the user's request: the MLP layer first, then memory + heads.
+# Architecture sweep order: MLP depth, then memory dimension and attention heads.
 VARIANTS = [
     ("baseline v4",        dict()),
     ("+1 MLP layer",       dict(link_pred_hidden_layers=3)),

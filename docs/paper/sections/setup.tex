@@ -22,10 +22,8 @@ It emits binary anomaly labels, per-class type vectors, and a benign-context bit
 
 Benign principals perform legitimate non-habitual accesses with non-zero
 probability. Without exploratory benign traffic, lateral movement would trivially coincide
-with destination novelty, allowing models to achieve high performance without modeling temporal
-dynamics. By introducing benign exploration, an individual lateral event cannot be separated
-by destination novelty alone, requiring models to discriminate based on relational history
-and temporal sequences.
+with destination novelty. Introducing legitimate non-habitual access forces the detector
+to discriminate based on relational history and temporal sequences rather than target novelty alone.
 
 \subsection{The leakage audit}
 

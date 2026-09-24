@@ -86,11 +86,11 @@ def xgboost_baseline(cfg: TGNConfig = TGNConfig()):
         verbose=1
     )
     
-    print("Avvio RandomizedSearchCV su 3 fold...")
+    print("Running 3-fold RandomizedSearchCV...")
     search.fit(X_train, y_train)
     
-    print(f"\nMigliori parametri trovati: {search.best_params_}")
-    print(f"Miglior CV ROC AUC: {search.best_score_:.4f}")
+    print(f"\nBest parameters: {search.best_params_}")
+    print(f"Best CV ROC AUC: {search.best_score_:.4f}")
     
     model = search.best_estimator_
 

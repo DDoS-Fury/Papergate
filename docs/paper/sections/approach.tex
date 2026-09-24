@@ -100,9 +100,9 @@ principals, devices, or fingerprints to be scored inductively without retraining
 \label{fig:arch}
 \end{figure*}
 
-A request involves multiple relational dimensions. Representing it solely as
-$u \rightarrow r$ (the standard authentication-graph formulation) omits the contextual
-path of the principal. Five edges are emitted per request (Fig.~\ref{fig:chain}): the four bindings
+An access request spans contextual entities beyond the principal and target resource.
+Representing it solely as $u \rightarrow r$ (the standard authentication-graph formulation)
+omits the client execution context. Five edges are emitted per request (Fig.~\ref{fig:chain}): the four bindings
 \textit{source}\,$\rightarrow$\,\textit{config},
 \textit{config}\,$\rightarrow$\,\textit{device},
 \textit{config}\,$\rightarrow$\,\textit{user} and
@@ -180,8 +180,8 @@ and leaves the prior no room above it.
 The prior arms on a threshold of its own, lower than the decision threshold. Reconnaissance
 sits below the decision threshold by construction, since otherwise it would already be an
 alert; arming on the decision threshold would therefore let only the sensor flag arm the
-chain. The arming threshold is the label-free clean-FPR quantile of
-Section~\ref{sec:approach}; arming feeds the prior alone, while the trust feature and the
+chain. The arming threshold is set to the label-free clean-FPR quantile
+(Section~\ref{sec:calib}); arming feeds the prior alone, while the trust feature and the
 reported decision keep using the decision threshold.
 
 The decay constant $\tau$ is set from the measured delay between reconnaissance and the
@@ -192,6 +192,7 @@ optimum. This mechanism operates as an inference-time prior outside the trained 
 as benign-only training would treat sensor flags as inactive.
 
 \subsection{Threshold calibration}
+\label{sec:calib}
 
 The primary threshold (persisted with the model and used by serving) is the
 cost-sensitive threshold, which calibrates operating recall against labeled lateral events in

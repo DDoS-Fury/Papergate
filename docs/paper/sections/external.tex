@@ -3,9 +3,7 @@
 
 \subsection{Evaluation of public corpora}
 
-Candidate public cybersecurity datasets were surveyed to evaluate the feasibility of
-instantiating the 5-node ZTA graph on real-world enterprise telemetry, yielding two
-key findings:
+A survey of public cybersecurity datasets highlights two systemic telemetry gaps:
 
 \textit{Lack of Zero Trust benchmarks.} Existing Zero Trust literature on continuous
 trust scoring and policy decision points evaluates predominantly on proprietary or
@@ -79,11 +77,9 @@ are assigned by matching access events against red-team activity logs within a $
 on host or principal identity. The red-team activity log timestamps carry an estimated uncertainty
 of $\pm1$ minute, reflecting manual operator logging.
 
-With eight distinct source addresses over \PicoSpan{} days, PicoDomain serves as an empirical
-case study rather than an enterprise-scale benchmark. Variance across the \PicoNlateral{} lateral
-events is inherently non-trivial, and policy violations cannot be evaluated due to the absence
-of authorization policy definitions. Nonetheless, it provides valuable empirical confirmation
-that the 5-node graph schema maps directly to enterprise monitoring telemetry.
+Because PicoDomain contains only \PicoNlateral{} lateral events across eight source addresses
+and lacks authorization policies, it serves as an empirical case study rather than a benchmark.
+However, it confirms that all five node types map directly to real enterprise Zeek telemetry.
 
 \subsection{Model results on PicoDomain}
 \label{sec:pico-model}
@@ -95,8 +91,8 @@ aggregate AUC \PicoModelAggAuc{} (AP \PicoModelAggAp), lateral movement AUC \Pic
 (AP \PicoModelLatAp, $n=\PicoNlateral$), credential reuse AUC \PicoModelTheftAuc{} (AP
 \PicoModelTheftAp, $n=\PicoNtheft$), and contextual anomaly AUC \PicoModelCtxAuc{} (AP
 \PicoModelCtxAp, $n=\PicoModelCtxN$). While absolute performance is lower than on the synthetic
-benchmark, reflecting the limited sample size and small entity population, the model successfully
-maintains inductive ranking ability on real network traces.
+benchmark, reflecting the limited sample size and small entity population, the model
+maintains inductive ranking capability on real network traces.
 
 Ranking metrics (AUC and AP) are reported rather than operating recall for this dataset,
 due to the temporal distribution of attacks. In PicoDomain, red-team activities occur exclusively in the
@@ -122,5 +118,5 @@ with its core contextual components disabled.
 Future empirical validation on enterprise-scale data can build upon corpora such as the AIT
 Log Data Set~\cite{ait}, which features multiple testbeds with real network boundaries, diverse
 authentication mechanisms, and packet captures from which TLS fingerprints can be derived.
-Providing comprehensive lateral movement ground truth on such multi-source telemetry represents
-an important direction for the Zero Trust research community.
+Equipping multi-source corpora like AIT with explicit lateral-movement labels is necessary
+to benchmark fine-grained Zero Trust graph architectures at scale.

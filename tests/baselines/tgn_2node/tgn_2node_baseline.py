@@ -60,7 +60,6 @@ def tgn_2node_baseline(cfg: Optional[TGNConfig] = None) -> dict:
     keys = stream.keys
     total_nodes = stream.num_nodes
 
-    # Initialise the registry and the TGN model (standard capacity)
     capacity = total_nodes + cfg.capacity_headroom
     registry = NodeRegistry(capacity=capacity)
     registry.preregister(keys)
@@ -152,7 +151,6 @@ def tgn_2node_baseline(cfg: Optional[TGNConfig] = None) -> dict:
             hist_pos = model.compute_hist_feats(u_list, d_list, device)
             hist_neg = model.compute_hist_feats(pu_rep.tolist(), neg_res.tolist(), device)
 
-            # Recency
             d_pair_pos = model.pair_delta_t(u_list, d_list, t_list, device)
             d_src_pos = model.src_delta_t(pu, pt, device)
             d_pair_neg = model.pair_delta_t(pu_rep.tolist(), neg_res.tolist(), pt_rep.tolist(), device)
@@ -286,7 +284,6 @@ def tgn_2node_baseline(cfg: Optional[TGNConfig] = None) -> dict:
     print(f"\nTest 2-Node TGN | AUC: {auc:.4f} | AP: {ap:.4f}")
     print(f"At threshold {threshold:.4f} | Precision: {precision:.4f} | Recall: {recall:.4f}")
 
-    # Per-type breakdown
     per_type = {}
     benign_mask = test_types == 0
     for type_id, name in ((1, "policy"), (2, "contextual"), (3, "lateral"),

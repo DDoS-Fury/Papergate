@@ -99,7 +99,6 @@ def load_uwf_stream(
         print(f"[uwf] Down-sampling benign from {len(df_benign)} to {max_benign_events} events")
         df_benign = df_benign.iloc[:max_benign_events]
 
-    # Load attack categories
     attack_map = {
         "Credential_Access": T_THEFT,
         "Reconnaissance": T_CONTEXTUAL,
@@ -228,7 +227,6 @@ def load_uwf_stream(
 
     num_nodes = len(keys)
 
-    # Build event tensors
     src_l, cfg_l, dev_l, usr_l, dst_l = [], [], [], [], []
     t_l, y_l, ty_l, msg_l = [], [], [], []
     last_user_t: dict[int, int] = {}

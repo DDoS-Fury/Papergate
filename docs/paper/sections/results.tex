@@ -48,15 +48,13 @@ Table~\ref{tab:qualitative} summarizes the positioning against existing systems.
 Reference architectures in the literature operate over host-to-host authentication logs.
 Consequently, they cannot capture adversaries replaying valid credentials from novel
 client configurations, as client fingerprints are omitted from their graph schema.
-Furthermore, benchmark corpora like LANL omit client fingerprints entirely; evaluating the
-architecture on such data requires ablating the configuration node, as examined in
-Section~\ref{sec:external}.
+Benchmark corpora like LANL also omit client fingerprints entirely; evaluating the
+architecture on such data requires ablating the configuration node (Section~\ref{sec:external}).
 
-Two additional operational distinctions are noteworthy. Snapshot-based models discretize
+Two operational distinctions separate this protocol from prior work: snapshot models discretize
 streams into fixed time windows, whereas an authorization PDP must evaluate requests
-synchronously upon arrival. Additionally, previous evaluations assume offline static
-graphs without addressing commit gating, leaving models vulnerable to self-poisoning
-under streaming updates.
+synchronously upon arrival; and static offline evaluations ignore commit gating, leaving streaming
+models vulnerable to baseline poisoning.
 
 \subsection{Against non-temporal and non-relational baselines}
 
@@ -105,10 +103,9 @@ Supervised XGBoost achieves \LatAucXGB{} lateral AUC and \LatRecXGB{} recall, re
 an empirical upper bound attainable when training with full label supervision.
 
 On the de-leaked benchmark, lateral movement is strictly bounded below by the single-feature
-floor of $\FloorLatPost$ AUC. The 5-node TGN clears this floor by a substantial margin,
-reaching \LatAucTGN{} AUC and \LatApTGN{} AP under strictly benign-only one-class training,
-demonstrating effective relational anomaly detection without relying on artificial
-shortcuts. Fig.~\ref{fig:perf_bars} reports the per-class AUC, Average Precision, and operating
+floor of $\FloorLatPost$ AUC. The 5-node TGN exceeds this floor, achieving \LatAucTGN{}
+lateral AUC and \LatApTGN{} AP under benign-only one-class training.
+Fig.~\ref{fig:perf_bars} reports the per-class AUC, Average Precision, and operating
 recall of the 5-node TGN on the same stream.
 
 \begin{figure}[ht!]
@@ -168,11 +165,11 @@ stream (\PanelBsettings).}
 \end{table}
 
 Table~\ref{tab:panelb} isolates the configuration node by ablating it on the same
-stream under routed evaluation. The introduction of the configuration node yields consistent
-improvements across ranking and detection metrics: aggregate AUC improves by \BaggAucD{}
-(reaching \BaggAucIV), lateral AUC increases by \BlatAucD{} (from \BlatAucIII{} to \BlatAucIV),
-and lateral Average Precision improves by \BlatApD. Operating recall on lateral movement
-reaches \BlatRecIV{} at an operating benign false-positive rate of \BfprIV. In credential
+stream under routed evaluation. Adding the configuration node improves both ranking and
+detection metrics: aggregate AUC increases by \BaggAucD{} (to \BaggAucIV), lateral AUC by
+\BlatAucD{} (from \BlatAucIII{} to \BlatAucIV), and lateral Average Precision by \BlatApD.
+Operating recall on lateral movement reaches \BlatRecIV{} at an operating benign
+false-positive rate of \BfprIV. In credential
 theft scenarios, the configuration node enables credential-reuse detection reaching AUC
 \TheftAucOn{} and recall \TheftRecOn{} ($n=\TheftN$ theft events); ablating the node drops
 performance to AUC \TheftAucOff{} and recall \TheftRecOff{} (\TheftSettings).

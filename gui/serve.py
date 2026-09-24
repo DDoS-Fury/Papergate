@@ -9,7 +9,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=DIRECTORY, **kwargs)
     
-    # Add proper MIME types
+    # Disable browser caching for local development
     def end_headers(self):
         self.send_header('Cache-Control', 'no-store, must-revalidate')
         super().end_headers()

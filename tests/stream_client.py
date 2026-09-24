@@ -23,7 +23,6 @@ async def run_stream_client(host="localhost", port=8888, duration_seconds=120, n
         start_time = time.time()
         
         while time.time() - start_time < duration_seconds:
-            # 1. Generate event
             event = await anext(gen)
             
             label = event.pop("label")
@@ -42,7 +41,6 @@ async def run_stream_client(host="localhost", port=8888, duration_seconds=120, n
                 
             key_actor = event["key_user"]
             
-            # 2. Call /infer
             req_start = time.time()
             try:
                 async with session.post(f"{base_url}/infer", json=event) as resp:
@@ -58,7 +56,7 @@ async def run_stream_client(host="localhost", port=8888, duration_seconds=120, n
             is_anomaly = resp_data.get("is_anomaly", False)
             tracker.record_prediction(is_anomaly, label == 1, etype)
             
-            # 3. Simulate External Policy / Orchestrator decision (anti-poisoning gate)
+            # External Policy / Orchestrator decision (anti-poisoning commit gate)
             # Per protocol, memory commits advance on events admitted by external policy/sensor
             # validation, never on the model's own anomaly verdict.
             user_counts[key_actor] = user_counts.get(key_actor, 0) + 1

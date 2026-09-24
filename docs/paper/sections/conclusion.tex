@@ -1,31 +1,27 @@
 \section{Conclusion and future work}
 \label{sec:conclusion}
 
-Detecting lateral movement via anomalous-edge detection over dynamic authentication graphs
-provides an important foundation for network defense. However, conventional formulations
-operating strictly over host-to-host edges discard the client execution context available
-at Zero Trust policy decision points. By decomposing requests into a 5-node relational chain
-and introducing an explicit client-configuration node, the approach enables detection of
+Dynamic authentication graphs formulated strictly over host-to-host edges omit the client
+execution context available at Zero Trust policy decision points. Decomposing requests into a
+5-node relational chain with an explicit client-configuration node enables detection of
 credential reuse from unfamiliar tools as a structural anomaly.
 
-In addition, the findings emphasize two broader architectural requirements for continuous
-streaming detectors. First, streaming memory updates must be decoupled from the detector's
-own predictions through an external commit gate to prevent runaway baseline drift and
-adversarial poisoning. Second, synthetic security benchmarks require systematic leakage audits
-to prevent models from exploiting unconstrained synthetic artifacts. On the verified benchmark,
-the 5-node TGN clears the single-feature baseline floor on lateral movement by a substantial
-margin under one-class training.
+Two broader deployment principles emerge from the streaming evaluation. First, streaming
+memory updates must be decoupled from the detector's own predictions through an external
+commit gate to prevent runaway baseline drift and adversarial poisoning. Second, synthetic
+security benchmarks require systematic leakage audits to prevent models from exploiting
+unconstrained synthetic artifacts. On the verified benchmark, the 5-node TGN exceeds
+the single-feature baseline floor on lateral movement under one-class training.
 
 \ifpreliminary
 The immediate priority is completing reproduction runs: every quantitative claim in this draft
 predates generator de-leakage and must be reproduced on the verified generator before release.
 \else
-Several directions remain open for future investigation.
+Future work spans three operational directions.
 \fi
 First, evaluating the architecture across multi-source enterprise testbeds such as the AIT
-corpus offers opportunities to test cross-environment generalization with real packet-derived
-TLS fingerprints. Second, evaluating bipartite degradation directly on traditional benchmarks
-like LANL under standardized community splits provides a direct point of comparison for the
-incremental utility of fine-grained contextual nodes. Finally, incorporating hardware-assisted
-trusted execution environments to secure serving state and policy feedback loops represents a
-natural step toward resilient production deployment.
+corpus will test cross-environment generalization with packet-derived TLS fingerprints.
+Second, evaluating bipartite degradation on traditional benchmarks like LANL under standardized
+community splits provides a direct baseline for the incremental utility of fine-grained contextual
+nodes. Finally, evaluating distributed state-eviction schemes for millions of concurrent entities
+remains an immediate step for enterprise-scale serving.

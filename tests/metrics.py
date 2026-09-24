@@ -45,7 +45,7 @@ class MetricsTracker:
             except Exception:
                 pass
                 
-        # Calculate metrics for anomalies (positive class = True)
+        # Anomaly metrics (positive class = True)
         tp = sum(1 for p in self.predictions if p[0] and p[1])
         fp = sum(1 for p in self.predictions if p[0] and not p[1])
         fn = sum(1 for p in self.predictions if not p[0] and p[1])
@@ -68,7 +68,6 @@ class MetricsTracker:
         print(f"Overall Accuracy: {accuracy*100:.2f}%")
         print(f"Anomalies - Precision: {precision:.4f} | Recall: {recall:.4f} | F1 Score: {f1:.4f}")
         
-        # Breakdown by type
         # types: 0=benign, 1=policy, 2=contextual, 3=lateral, 4=cred-theft,
         #        5=exfil, 6=benign human-error denial
         type_names = {0: "Benign", 1: "Policy", 2: "Contextual", 3: "Lateral",
