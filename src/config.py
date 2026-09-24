@@ -206,15 +206,22 @@ class TGNConfig:
     delta_t_cap: float = 604800.0
 
     # Kill-chain precursor prior (serving-time, not trained). Lateral movement follows a
-    # recon alert on the same entity; we multiply an entity's anomaly score by up to
-    # (1 + precursor_max_boost) right after it alerts, decaying with half-life
-    # ``precursor_half_life`` (seconds). See serve_tgn.precursor_boost.
-    # Production timing note: the synthetic clock draws ~300 s exponential gaps, so the
-    # swept optimum (100000 s) maps to ~a day of real traffic — one alert would keep
-    # multiplying a real user's scores toward 1.0 for hours (observed as score==1.0 on
-    # every request after a single cold-start alert). 600 s keeps the kill-chain prior
-    # for recon→lateral bursts without long-lived score poisoning.
+    # recon alert on the same entity; we add up to ``precursor_max_shift`` nats to that
+    # entity's anomaly logit right after it alerts, decaying with half-life
+    # ``precursor_half_life`` (seconds). See serve_tgn.precursor_shift.
+    # The shift is additive on the logit because the prior is a prior on the odds; the
+    # earlier multiplicative form acted on ``1 - sigmoid(logit)`` and was then clipped to
+    # 1.0, so it was a no-op on the saturated events and negligible on the low-scoring
+    # ones. Being bounded by ``precursor_max_shift`` it cannot drive a score to 1.0 on its
+    # own, which is what forced the previous 600 s half-life; the half-life can now be set
+    # from the measured recon->lateral delay instead (median 8.7 h, p90 56.5 h on the
+    # dev stream, see tasks/tmp/lateral_chain_diag.py).
     precursor_half_life: float = 600.0
+    precursor_max_shift: float = 2.0
+    # Multiplicative equivalent, used only by the baselines' causal mirror
+    # (eval_common.causal_precursor_factor): their scores are not probabilities, so an
+    # additive logit shift is not defined on them. Kept so the baselines receive the same
+    # prior with the same half-life.
     precursor_max_boost: float = 2.0
 
     # Optimisation.

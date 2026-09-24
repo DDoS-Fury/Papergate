@@ -6,7 +6,7 @@ Relationship to the offline evaluation: ``train_tgn._replay`` does **not** call 
 primitives — it is an independent vectorised re-implementation that scores a block of
 events against one shared neighbour expansion. What ties the two together is a checked
 equivalence, not shared code: ``tests/verify_replay_batching.py`` replays the same stream
-through ``infer_score`` / ``update_memory`` event by event and asserts agreement with
+through ``infer_logit`` / ``update_memory`` event by event and asserts agreement with
 ``_replay(batch_size=1)`` to 1e-5, on both the v4 five-edge chain and the legacy v3 one.
 Treat that harness as part of the contract: any change to one path must keep it green.
 
@@ -15,7 +15,7 @@ OPA-ALLOW proxy (``not signal_dirty``), whereas :func:`score_event` with ``updat
 commits on the model's own score. See the ``_replay`` docstring for why measuring under
 the OPA-in-the-loop gate is the conservative choice.
 
-- :func:`infer_score` — score one event (read memory, no mutation).
+- :func:`infer_logit` — score one event (read memory, no mutation).
 - :func:`update_memory` — commit one event into the TGN memory.
 - :func:`score_event`  — the high-level online API: map external entity keys
   through a :class:`NodeRegistry`, score, and update memory **only for events that
@@ -36,7 +36,9 @@ import json
 from pathlib import Path
 from typing import Hashable
 
+import numpy as np
 import torch
+from scipy.special import expit
 
 from graphagate.config import TGNConfig
 from graphagate.model.registry import NodeRegistry
@@ -73,7 +75,7 @@ def build_model(hp: dict, device: torch.device) -> ZTATemporalGraphNetwork:
     # Kill-chain precursor prior knobs (serving-time; not in the state_dict).
     # Fallbacks track TGNConfig, not the historical 100000.0 / 3.0 that saturated scores.
     model.precursor_half_life = float(hp.get("precursor_half_life", TGNConfig.precursor_half_life))
-    model.precursor_max_boost = float(hp.get("precursor_max_boost", TGNConfig.precursor_max_boost))
+    model.precursor_max_shift = float(hp.get("precursor_max_shift", TGNConfig.precursor_max_shift))
     # Plain-attribute toggles are not in the state_dict: restore them from hp so the
     # serving path behaves exactly like the training run that produced the checkpoint
     # (before this, use_precursor silently fell back to False after a checkpoint
@@ -108,9 +110,15 @@ def _event_tensors(src_idx: int, dst_idx: int, t_val: int, msg_vec, device):
 
 
 @torch.no_grad()
-def infer_score(model, src_idx: int, dst_idx: int, t_val: int, msg_vec, device,
+def infer_logit(model, src_idx: int, dst_idx: int, t_val: int, msg_vec, device,
                 aux_src_idx: int | None = None) -> float:
-    """Return the anomaly score (1 - P(benign)) for a single edge.
+    """Return the anomaly *logit* (``-logit P(benign)``) for a single edge.
+
+    Logit rather than probability because ``1 - sigmoid(logit)`` saturates to exactly 1.0
+    in float32 for ``logit < -16``, which ties the top of the ranking together and leaves
+    no room above it for the kill-chain prior. ``anomaly_score`` converts to the
+    probability the thresholds are expressed in; both are monotone, so the ordering (and
+    every AUC) is identical.
 
     Does **not** mutate memory or the neighbour loader. The two endpoints are
     expanded to their stored temporal neighbourhood so the embedding reflects each
@@ -139,8 +147,7 @@ def infer_score(model, src_idx: int, dst_idx: int, t_val: int, msg_vec, device,
     out = model(
         n_id, edge_index, hist_t, hist_msg, assoc[b_src], assoc[b_dst], b_msg, delta_t, delta_t_src, hist_feats
     ).squeeze(-1)
-    prob_benign = torch.sigmoid(out).item()
-    return 1.0 - prob_benign
+    return -float(out.item())
 
 
 @torch.no_grad()
@@ -175,8 +182,18 @@ def update_memory(model, src_idx: int, dst_idx: int, t_val: int, msg_vec, device
         model.pair_count[aux_pair] = model.pair_count.get(aux_pair, 0) + 1
 
 
-def precursor_boost(model, src_idx: int, t_val: int) -> float:
-    """Multiplicative anomaly-score factor (>= 1.0) from the kill-chain precursor.
+def anomaly_score(anom_logit) -> float:
+    """Convert an anomaly logit to the ``1 - P(benign)`` probability the thresholds use.
+
+    float64 (``scipy.special.expit``) rather than the float32 ``1 - torch.sigmoid``: the
+    latter returns exactly 1.0 from ``logit < -16`` on, collapsing the whole head of the
+    ranking into one tie. Monotone, so it changes no ordering and no AUC.
+    """
+    return expit(np.asarray(anom_logit, dtype=np.float64))
+
+
+def precursor_shift(model, src_idx: int, t_val: int) -> float:
+    """Additive anomaly-*logit* shift (>= 0.0) from the kill-chain precursor.
 
     Lateral movement is signal-clean and feature-identical to a benign non-habitual
     access; the one tell is that it follows a recon alert (Snort / detected anomaly) on
@@ -185,18 +202,20 @@ def precursor_boost(model, src_idx: int, t_val: int) -> float:
     ``recent_alert`` state and apply it as a SERVING-TIME prior — never a trained input
     (benign-only training would leave it a dead feature).
 
-    Multiplicative (not additive) on purpose: it lifts an already-suspicious score over
-    the threshold without turning near-zero benign scores into false positives. Returns
-    ``1 + max_boost * 0.5**(Δt / half_life)`` while an alert is recent, else ``1.0``.
+    Additive on the logit because a prior belongs on the odds: it moves every event by the
+    same evidence in nats wherever it sits on the curve. The earlier multiplicative form
+    scaled ``1 - sigmoid(logit)`` and then clipped to 1.0, so it did nothing to the
+    saturated head and almost nothing to the tail. Returns
+    ``max_shift * 0.5**(Δt / half_life)`` while an alert is recent, else ``0.0``.
     """
     if not getattr(model, "use_precursor", False):
-        return 1.0
+        return 0.0
     last = getattr(model, "recent_alert", {}).get(src_idx)
     if last is None:
-        return 1.0
+        return 0.0
     dt = max(0.0, float(t_val) - float(last))
     decay = 0.5 ** (dt / model.precursor_half_life)
-    return 1.0 + model.precursor_max_boost * decay
+    return model.precursor_max_shift * decay
 
 
 def record_alert(model, src_idx: int, t_val: int) -> None:
@@ -220,8 +239,8 @@ def apply_feedback(model, user_idx: int, device_idx: int | None, timestamp: int,
 
     Both serving paths must call this. Previously only ``score_event(update=True)`` did,
     so on the documented two-step flow — which is ``score_event(update=False)`` followed
-    by ``commit_event`` — ``recent_alert`` stayed empty, ``precursor_boost`` always
-    returned 1.0 and the trust column stayed frozen at its checkpoint value: two inputs
+    by ``commit_event`` — ``recent_alert`` stayed empty, ``precursor_shift`` always
+    returned 0.0 and the trust column stayed frozen at its checkpoint value: two inputs
     that contribute offline were simply absent in deployment.
     """
     if boost_idx is None:
@@ -406,27 +425,27 @@ def score_event(
     # Causal chain source → config → device → user → resource, plus config → user.
     # The config node is always present; device / source bindings are skipped if absent
     # (config → user then bridges the chain when the device is missing).
-    edge_scores = [
-        infer_score(model, user_idx, dst_idx, timestamp, features, device,
+    edge_logits = [
+        infer_logit(model, user_idx, dst_idx, timestamp, features, device,
                     aux_src_idx=device_idx),
-        infer_score(model, config_idx, user_idx, timestamp, features_bind, device),
+        infer_logit(model, config_idx, user_idx, timestamp, features_bind, device),
     ]
     if device_idx is not None:
-        edge_scores.append(
-            infer_score(model, config_idx, device_idx, timestamp, features_bind, device)
+        edge_logits.append(
+            infer_logit(model, config_idx, device_idx, timestamp, features_bind, device)
         )
-        edge_scores.append(
-            infer_score(model, device_idx, user_idx, timestamp, features_bind, device)
+        edge_logits.append(
+            infer_logit(model, device_idx, user_idx, timestamp, features_bind, device)
         )
     if source_idx is not None:
-        edge_scores.append(
-            infer_score(model, source_idx, config_idx, timestamp, features_bind, device)
+        edge_logits.append(
+            infer_logit(model, source_idx, config_idx, timestamp, features_bind, device)
         )
 
-    raw_score = max(edge_scores)
+    raw_logit = max(edge_logits)
     # Kill-chain precursor prior — keyed on the DEVICE node (if present), else on USER
     boost_idx = device_idx if device_idx is not None else user_idx
-    score = min(1.0, raw_score * precursor_boost(model, boost_idx, timestamp))
+    score = float(anomaly_score(raw_logit + precursor_shift(model, boost_idx, timestamp)))
     eff_threshold = threshold
     if threshold_dirty is not None and signal_dirty(features):
         eff_threshold = threshold_dirty
@@ -478,7 +497,7 @@ def commit_event(
     the neighbour history along the same up-to-5-edge chain (``key_config`` defaults to
     ``"conf:guest"`` when omitted). Use it for the two-step anti-poisoning flow where the
     benign/anomalous decision is made *outside* the model (score with
-    :func:`infer_score` / :func:`score_event` ``update=False`` first, then commit here
+    :func:`infer_logit` / :func:`score_event` ``update=False`` first, then commit here
     only on approval).
 
     ``flagged`` carries back what the scoring step decided: OPA may ALLOW an event the

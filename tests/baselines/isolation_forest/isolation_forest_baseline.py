@@ -23,7 +23,7 @@ Protocol (identical to ``graphagate.train_tgn`` so the numbers sit side by side)
 
 Anomaly score orientation:
   We use ``-score_samples(X)`` so that *higher = more anomalous*, matching the
-  TGN's ``1 - P(benign)`` (see ``graphagate.serve_tgn.infer_score``). Sklearn's
+  TGN's ``1 - P(benign)`` (see ``graphagate.serve_tgn.anomaly_score``). Sklearn's
   ``score_samples`` returns the (signed) average path length where *higher = more
   normal*, so the negation gives the right orientation for calibration and all
   metrics below.

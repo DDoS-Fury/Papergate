@@ -118,9 +118,11 @@ def causal_src_seen(src, y, *, label_horizon: int | None = None, pred=None) -> n
 def causal_precursor_factor(src, t, msg, half_life: float, max_boost: float) -> np.ndarray:
     """Per-event multiplicative score factor (N,) from the kill-chain precursor.
 
-    Mirrors :func:`graphagate.serve_tgn.precursor_boost` causally so the baselines get the
-    SAME prior: ``1 + max_boost * 0.5**(Δt/half_life)`` while a Snort alert on the same src
-    is recent, else ``1.0``. Armed by the observable Snort flag (``msg[:, 1] > 0.5``) — the
+    Mirrors :func:`graphagate.serve_tgn.precursor_shift` causally so the baselines get the
+    SAME prior with the SAME half-life: ``1 + max_boost * 0.5**(Δt/half_life)`` while a
+    Snort alert on the same src is recent, else ``1.0``. Multiplicative where the TGN's is
+    an additive logit shift, because a baseline score is not a probability and an additive
+    shift is not defined on its scale. Armed by the observable Snort flag (``msg[:, 1] > 0.5``) — the
     signal a recon event fires — computed before arming on the current event so an event is
     never boosted by itself.
     """

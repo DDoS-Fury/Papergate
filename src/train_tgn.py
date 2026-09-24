@@ -54,7 +54,8 @@ from graphagate.eval_common import binary_metrics, causal_src_seen
 from graphagate.model.registry import NodeRegistry
 from graphagate.model.tgn import ZTATemporalGraphNetwork, stable_hash
 from graphagate.serve_tgn import (
-    precursor_boost,
+    anomaly_score,
+    precursor_shift,
     record_alert,
     save_model,
     signal_dirty,
@@ -76,9 +77,41 @@ def _pbar(iterable=None, *, total=None, desc=None):
     )
 
 
+def fit_thresholds(scores, labels, v_types, v_msg, cfg):
+    """(threshold_clean, threshold_dirty, threshold_clean_unsup, benign_scores) from one
+    validation replay's scores. Pure in its inputs, so a diagnostic can re-calibrate a
+    trained model under different serving-time priors without re-running the training."""
+    scores = np.asarray(scores)
+    labels = np.asarray(labels)
+    benign = scores[labels == 0]
+    if benign.size == 0:
+        raise RuntimeError("No benign events in the validation slice for calibration.")
+    t_dirty = float(np.quantile(benign, 1.0 - cfg.target_fpr))
+    v_clean = ~_rule_baseline(v_msg).astype(bool)
+    # Label-free clean threshold: the benign-FPR quantile restricted to signal-clean
+    # events. Recorded in the artifact's calibration metadata as the alternative for
+    # deployments without red-team labels; the persisted serving threshold is the
+    # cost-sensitive t_clean below.
+    clean_benign = scores[v_clean & (labels == 0)]
+    t_unsup = float(np.quantile(clean_benign, 1.0 - cfg.target_fpr)) if clean_benign.size \
+        else t_dirty
+    mask = v_clean & ((labels == 0) | (v_types == 3))
+    cal_labels_ = (v_types[mask] == 3).astype(int)
+    if cal_labels_.sum() == 0:
+        # No lateral examples to calibrate against (e.g. a window without red-team
+        # activity): fall back to the conservative FPR threshold.
+        t_clean = t_dirty
+    else:
+        t_clean = cost_sensitive_threshold(
+            scores[mask], cal_labels_, cost_ratio=cfg.cost_ratio,
+            target_fpr_cap=cfg.clean_fpr_cap,
+        )
+    return t_clean, t_dirty, t_unsup, benign
+
+
 def _replay(model, source_nodes, device_nodes, user, dst, t, msg, y, device, *,
-            config_nodes=None, threshold=None, threshold_dirty=None, gate_by_label=False,
-            batch_size=1, desc="replay"):
+            config_nodes=None, threshold=None, threshold_dirty=None, threshold_arm=None,
+            gate_by_label=False, batch_size=1, desc="replay"):
     """Streaming replay matching the serving path (v4: up to 5 edges), optionally batched.
 
     ``source_nodes`` / ``config_nodes`` / ``device_nodes`` may be ``None`` (datasets
@@ -102,6 +135,14 @@ def _replay(model, source_nodes, device_nodes, user, dst, t, msg, y, device, *,
         runs away (the val->test blow-up). Committing on the observable signal keeps benign
         memory fresh; the residual surface — signal-clean laterals OPA would also admit — is
         committed too, so the reported FPR is conservative rather than oracle-optimistic.
+
+    ``threshold_arm`` is the threshold the kill-chain precursor arms on, separate from the
+    decision threshold: recon sits below the decision threshold by construction (if it did
+    not, it would already be an alert), and on the signal-clean stream the cost-sensitive
+    decision threshold is pinned at the "flag nothing" sentinel, so an arming gated on it
+    can only ever fire from the Snort flag. ``None`` falls back to the decision threshold
+    (the old coupled behaviour). Arming only ever feeds the precursor prior; the trust
+    nudge and the reported decision keep using the decision threshold.
 
     Decision threshold mirrors :func:`serve_tgn.score_event`: when ``threshold_dirty`` is
     given, the decision is *signal-routed* — events whose edge signal fires (broken JA3 /
@@ -180,27 +221,33 @@ def _replay(model, source_nodes, device_nodes, user, dst, t, msg, y, device, *,
             nf = model.node_feat[n_id]
             h_idx = model.node_hash[n_id]
 
-            def _grp_anom(s_g, d_g, s_list, d_list, msg_g, aux_list):
-                """Anomaly score (1 - P(benign)) per edge of one group — a vectorised infer_score."""
+            def _grp_logit(s_g, d_g, s_list, d_list, msg_g, aux_list):
+                """Anomaly logit (-logit P(benign)) per edge of one group — vectorised infer_logit.
+
+                Logit space, not ``1 - sigmoid``: the probability saturates to exactly 1.0
+                in float32 below logit -16, which both ties the head of the ranking and
+                leaves the precursor prior nowhere to shift to. ``torch.maximum`` is the
+                same fan-in either way (both are monotone in the logit).
+                """
                 d_pair = model.pair_delta_t(s_list, d_list, ts, device)
                 d_src = model.src_delta_t(s_g, bt, device)
                 hist = model.compute_hist_feats(s_list, d_list, device, aux_src_ids=aux_list)
                 logit = model.score(
                     z, nf, h_idx, assoc[s_g], assoc[d_g], msg_g, d_pair, d_src, hist
                 )
-                return 1.0 - torch.sigmoid(logit)
+                return -logit
 
-            raw = _grp_anom(bu, bd, us, ds, bmsg, devs)  # access edge (aux src = device)
+            raw = _grp_logit(bu, bd, us, ds, bmsg, devs)  # access edge (aux src = device)
             if has_bind:
-                raw = torch.maximum(raw, _grp_anom(bdev, bu, devs, us, zeros_msg, None))  # device→user
+                raw = torch.maximum(raw, _grp_logit(bdev, bu, devs, us, zeros_msg, None))  # device→user
             if has_config:
-                raw = torch.maximum(raw, _grp_anom(bcfg, bu, cfgs, us, zeros_msg, None))  # config→user
+                raw = torch.maximum(raw, _grp_logit(bcfg, bu, cfgs, us, zeros_msg, None))  # config→user
                 if has_bind:
-                    raw = torch.maximum(raw, _grp_anom(bcfg, bdev, cfgs, devs, zeros_msg, None))  # config→device
+                    raw = torch.maximum(raw, _grp_logit(bcfg, bdev, cfgs, devs, zeros_msg, None))  # config→device
                 if has_src:
-                    raw = torch.maximum(raw, _grp_anom(bsrc, bcfg, srcs, cfgs, zeros_msg, None))  # source→config
+                    raw = torch.maximum(raw, _grp_logit(bsrc, bcfg, srcs, cfgs, zeros_msg, None))  # source→config
             if has_src and has_bind and not has_config:
-                raw = torch.maximum(raw, _grp_anom(bsrc, bdev, srcs, devs, zeros_msg, None))  # legacy source→device
+                raw = torch.maximum(raw, _grp_logit(bsrc, bdev, srcs, devs, zeros_msg, None))  # legacy source→device
             raw_np = raw.detach().cpu().numpy()
             bmsg_rows = bmsg.tolist()
 
@@ -212,7 +259,7 @@ def _replay(model, source_nodes, device_nodes, user, dst, t, msg, y, device, *,
                 u = us[j]
                 tv = ts[j]
                 actor = devs[j] if has_bind else u
-                score = min(1.0, float(raw_np[j]) * precursor_boost(model, actor, tv))
+                score = float(anomaly_score(raw_np[j] + precursor_shift(model, actor, tv)))
                 scores[i] = score
 
                 eff_thr = threshold
@@ -228,11 +275,20 @@ def _replay(model, source_nodes, device_nodes, user, dst, t, msg, y, device, *,
                 # sensor alarm arms the precursor / trust feedback. Used by the first of the
                 # two calibration passes (see the CALIBRATION section).
                 if gate_by_label:
-                    is_anomaly = lab == 1
+                    is_anomaly = arms = lab == 1
                 else:
                     is_anomaly = eff_thr is not None and score >= eff_thr
-                if is_anomaly or snort_alert:
+                    # The precursor arms on its OWN, lower threshold: the decision
+                    # threshold on the signal-clean stream is the cost-sensitive one,
+                    # which the prevalence pins at the "flag nothing" sentinel, so an
+                    # arming gated on it can only ever fire from the Snort flag. Recon is
+                    # what has to arm the chain, and recon is by construction below the
+                    # decision threshold — otherwise it would already be an alert.
+                    arm_thr = eff_thr if threshold_arm is None else threshold_arm
+                    arms = arm_thr is not None and score >= arm_thr
+                if arms or snort_alert:
                     record_alert(model, actor, tv)  # arm the precursor (recon → lateral)
+                if is_anomaly or snort_alert:
                     trust[actor] = max(0.0, trust[actor] - 0.5)
                     if actor != u:
                         trust[u] = max(0.0, trust[u] - 0.5)
@@ -519,9 +575,9 @@ def train_tgn(cfg: TGNConfig | None = None, *, dataset: "StreamData | None" = No
     model.use_hash_identity = use_hash_identity
     model.use_hist_feats = use_hist_feats
     model.use_precursor = use_precursor
-    # Kill-chain precursor knobs (serving-time prior; see serve_tgn.precursor_boost).
+    # Kill-chain precursor knobs (serving-time prior; see serve_tgn.precursor_shift).
     model.precursor_half_life = cfg.precursor_half_life
-    model.precursor_max_boost = cfg.precursor_max_boost
+    model.precursor_max_shift = cfg.precursor_max_shift
     if not (use_struct_head and use_hash_identity and use_hist_feats and use_precursor):
         print(f"[ablation] use_struct_head={use_struct_head} use_hash_identity={use_hash_identity} "
               f"use_hist_feats={use_hist_feats} use_precursor={use_precursor}")
@@ -836,49 +892,26 @@ def train_tgn(cfg: TGNConfig | None = None, *, dataset: "StreamData | None" = No
 
     pre_cal_state = _snapshot_runtime()
 
-    def _cal_replay(desc, thr=None, thr_dirty=None):
+    def _cal_replay(desc, thr=None, thr_dirty=None, thr_arm=None):
         _restore_runtime(pre_cal_state)
         return _replay(
             model, _slice(source_arr, train_end, val_end), _slice(device_arr, train_end, val_end),
             user_arr[train_end:val_end], dst[train_end:val_end], t[train_end:val_end],
             msg[train_end:val_end], y[train_end:val_end], device, gate_by_label=False,
-            threshold=thr, threshold_dirty=thr_dirty,
+            threshold=thr, threshold_dirty=thr_dirty, threshold_arm=thr_arm,
             config_nodes=_slice(config_arr, train_end, val_end),
             batch_size=cfg.eval_batch_size, desc=desc,
         )
 
     def _fit_thresholds(scores, labels):
-        """(threshold_clean, threshold_dirty, threshold_clean_unsup) from one replay's scores."""
-        benign = scores[labels == 0]
-        if benign.size == 0:
-            raise RuntimeError("No benign events in the validation slice for calibration.")
-        t_dirty = float(np.quantile(benign, 1.0 - cfg.target_fpr))
-        v_types = types[train_end:val_end].numpy()
-        v_clean = ~_rule_baseline(msg[train_end:val_end].numpy()).astype(bool)
-        # Label-free clean threshold: the benign-FPR quantile restricted to signal-clean
-        # events. Recorded in the artifact's calibration metadata as the alternative for
-        # deployments without red-team labels; the persisted serving threshold is the
-        # cost-sensitive t_clean below.
-        clean_benign = scores[v_clean & (labels == 0)]
-        t_unsup = float(np.quantile(clean_benign, 1.0 - cfg.target_fpr)) if clean_benign.size \
-            else t_dirty
-        mask = v_clean & ((labels == 0) | (v_types == 3))
-        cal_labels_ = (v_types[mask] == 3).astype(int)
-        if cal_labels_.sum() == 0:
-            # No lateral examples to calibrate against (e.g. a window without red-team
-            # activity): fall back to the conservative FPR threshold.
-            t_clean = t_dirty
-        else:
-            t_clean = cost_sensitive_threshold(
-                scores[mask], cal_labels_, cost_ratio=cfg.cost_ratio,
-                target_fpr_cap=cfg.clean_fpr_cap,
-            )
-        return t_clean, t_dirty, t_unsup, benign
+        return fit_thresholds(scores, labels, types[train_end:val_end].numpy(),
+                              msg[train_end:val_end].numpy(), cfg)
 
     scores_a, labels_a = _cal_replay("Calibration pass A (val replay, no threshold)")
-    thr_a, thr_dirty_a, _, _ = _fit_thresholds(scores_a, labels_a)
+    thr_a, thr_dirty_a, thr_arm_a, _ = _fit_thresholds(scores_a, labels_a)
     val_scores, val_labels = _cal_replay(
-        "Calibration pass B (val replay, test gate)", thr=thr_a, thr_dirty=thr_dirty_a
+        "Calibration pass B (val replay, test gate)", thr=thr_a, thr_dirty=thr_dirty_a,
+        thr_arm=thr_arm_a,
     )
     threshold, threshold_dirty, threshold_clean_unsup, benign_val_scores = _fit_thresholds(
         val_scores, val_labels
@@ -928,7 +961,8 @@ def train_tgn(cfg: TGNConfig | None = None, *, dataset: "StreamData | None" = No
         model, _slice(source_arr, val_end, n), _slice(device_arr, val_end, n),
         user_arr[val_end:], dst[val_end:], t[val_end:], msg[val_end:], y[val_end:],
         device, config_nodes=_slice(config_arr, val_end, n),
-        threshold=threshold, threshold_dirty=threshold_dirty, gate_by_label=False,
+        threshold=threshold, threshold_dirty=threshold_dirty,
+        threshold_arm=threshold_clean_unsup, gate_by_label=False,
         batch_size=cfg.eval_batch_size, desc="Inferenza (replay test)",
     )
 
@@ -1137,7 +1171,7 @@ def train_tgn(cfg: TGNConfig | None = None, *, dataset: "StreamData | None" = No
             "cost_ratio": cfg.cost_ratio,
             "clean_fpr_cap": cfg.clean_fpr_cap,
             "precursor_half_life": cfg.precursor_half_life,
-            "precursor_max_boost": cfg.precursor_max_boost,
+            "precursor_max_shift": cfg.precursor_max_shift,
             "use_resource_risk": cfg.use_resource_risk,
             "use_source_internal": cfg.use_source_internal,
             "guest_device_fallback": cfg.guest_device_fallback,

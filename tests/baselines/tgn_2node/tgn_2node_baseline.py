@@ -30,7 +30,7 @@ from graphagate.data.stream_synthetic import generate_streaming_data, stream_kwa
 from graphagate.eval_common import binary_metrics
 from graphagate.model.registry import NodeRegistry
 from graphagate.model.tgn import ZTATemporalGraphNetwork, stable_hash
-from graphagate.serve_tgn import precursor_boost, record_alert
+from graphagate.serve_tgn import anomaly_score, precursor_shift, record_alert
 
 
 def tgn_2node_baseline(cfg: Optional[TGNConfig] = None) -> dict:
@@ -90,7 +90,7 @@ def tgn_2node_baseline(cfg: Optional[TGNConfig] = None) -> dict:
     model.use_hist_feats = True
     model.use_precursor = True
     model.precursor_half_life = cfg.precursor_half_life
-    model.precursor_max_boost = cfg.precursor_max_boost
+    model.precursor_max_shift = cfg.precursor_max_shift
 
     # Chronological split: 70% train / 10% val / 20% test
     n = len(user)
@@ -260,10 +260,10 @@ def tgn_2node_baseline(cfg: Optional[TGNConfig] = None) -> dict:
             hist = model.compute_hist_feats([ui], [di], device)
 
             logit = model.score(z, nf, h_idx, assoc[b_u], assoc[b_d], b_msg, d_pair, d_src, hist)
-            raw_score = 1.0 - torch.sigmoid(logit).item()
+            raw_logit = -logit.item()
 
-            # Precursor boost on the user node
-            score = min(1.0, raw_score * precursor_boost(model, ui, ti))
+            # Precursor prior on the user node (additive on the logit; see serve_tgn)
+            score = float(anomaly_score(raw_logit + precursor_shift(model, ui, ti)))
             test_scores.append(score)
 
             if msgi[1] > 0.5 or score >= threshold:

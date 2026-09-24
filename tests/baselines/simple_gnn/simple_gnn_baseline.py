@@ -78,7 +78,7 @@ class StaticGNN(nn.Module):
 def _score_events(model, z, src, dst, msg, hist, device, precursor_fac=None):
     """Anomaly score for every event (s, d, msg, hist).
 
-    Orientation "higher = more anomalous", consistent with ``serve_tgn.infer_score``
+    Orientation "higher = more anomalous", consistent with ``serve_tgn.anomaly_score``
     (= ``1 - P(benign)``): we use the FIXED post-training embeddings ``z``
     (transductive on the train graph) and compute ``1 - sigmoid(link_pred)``, then
     apply the same multiplicative kill-chain precursor prior as the TGN.

@@ -4,7 +4,7 @@ Two checks, both on CPU for bit-level determinism:
 
   1. PARITY: the new ``_replay(batch_size=1)`` must reproduce the *old* per-event replay
      (kept verbatim below as ``_replay_ref``, which calls the unchanged serving primitives
-     ``serve_tgn.infer_score`` / ``update_memory`` / ``precursor_boost``). This proves the
+     ``serve_tgn.infer_logit`` / ``update_memory`` / ``precursor_shift``). This proves the
      refactor did not change the semantics at batch size 1.
 
   2. DRIFT: ``_replay(batch_size=B)`` vs ``batch_size=1`` on identical warmed state, to
@@ -30,8 +30,9 @@ from graphagate.config import TGNConfig
 from graphagate.model.registry import NodeRegistry
 from graphagate.model.tgn import ZTATemporalGraphNetwork, stable_hash
 from graphagate.serve_tgn import (
-    infer_score,
-    precursor_boost,
+    anomaly_score,
+    infer_logit,
+    precursor_shift,
     record_alert,
     signal_dirty,
     update_memory,
@@ -64,20 +65,20 @@ def _replay_ref(model, source_nodes, device_nodes, user, dst, t, msg, y, device,
         cfg = cfg_l[i] if cfg_l is not None else None
         msg_vec = msg[i]
         features_bind = [0.0] * len(msg_vec)
-        edge_scores = [infer_score(model, u, d, tv, msg_vec, device, aux_src_idx=dev)]
+        edge_logits = [infer_logit(model, u, d, tv, msg_vec, device, aux_src_idx=dev)]
         if dev is not None:
-            edge_scores.append(infer_score(model, dev, u, tv, features_bind, device))
+            edge_logits.append(infer_logit(model, dev, u, tv, features_bind, device))
         if cfg is not None:
-            edge_scores.append(infer_score(model, cfg, u, tv, features_bind, device))
+            edge_logits.append(infer_logit(model, cfg, u, tv, features_bind, device))
             if dev is not None:
-                edge_scores.append(infer_score(model, cfg, dev, tv, features_bind, device))
+                edge_logits.append(infer_logit(model, cfg, dev, tv, features_bind, device))
             if src_ip is not None:
-                edge_scores.append(infer_score(model, src_ip, cfg, tv, features_bind, device))
+                edge_logits.append(infer_logit(model, src_ip, cfg, tv, features_bind, device))
         if src_ip is not None and dev is not None and cfg is None:
-            edge_scores.append(infer_score(model, src_ip, dev, tv, features_bind, device))
-        raw_score = max(edge_scores)
+            edge_logits.append(infer_logit(model, src_ip, dev, tv, features_bind, device))
+        raw_logit = max(edge_logits)
         actor = dev if dev is not None else u
-        score = min(1.0, raw_score * precursor_boost(model, actor, tv))
+        score = float(anomaly_score(raw_logit + precursor_shift(model, actor, tv)))
         scores[i] = score
         labels[i] = lab
 
@@ -136,7 +137,7 @@ def _build_model(data, cfg, device):
     m.init_neighbor_loader(cfg.neighbor_size, device)
     m.use_struct_head = m.use_hash_identity = m.use_hist_feats = m.use_precursor = True
     m.precursor_half_life = cfg.precursor_half_life
-    m.precursor_max_boost = cfg.precursor_max_boost
+    m.precursor_max_shift = cfg.precursor_max_shift
     m.eval()
     return m
 

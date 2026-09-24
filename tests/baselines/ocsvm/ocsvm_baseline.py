@@ -21,7 +21,7 @@ Scalability note:
 
 Anomaly score orientation:
   We use ``-score_samples(X)`` so that higher = more anomalous, matching the TGN's
-  ``1 - P(benign)`` (see ``graphagate.serve_tgn.infer_score``).
+  ``1 - P(benign)`` (see ``graphagate.serve_tgn.anomaly_score``).
 
 Run inside the project's Docker image (torch is required only to import the
 canonical data generator; it is not installed on the host). See README.md.

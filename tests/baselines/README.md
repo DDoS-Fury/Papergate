@@ -28,7 +28,7 @@ All baselines:
      of `TGNConfig` (1%, 99th percentile of the benign scores), identical to the TGN.
 
 The anomaly score is "higher = more anomalous", consistent with
-`graphagate.serve_tgn.infer_score` (which returns `1 - P(benign)`).
+`graphagate.serve_tgn.anomaly_score` (which returns `1 - P(benign)`).
 
 ## Data format
 

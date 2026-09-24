@@ -164,17 +164,17 @@ class ZTATemporalGraphNetwork(nn.Module):
         # detected anomaly). Lateral movement follows a recon alert on the SAME entity,
         # but the predict-then-update gate drops that precursor from the TGN memory — so
         # it is carried here and used as a time-decayed SERVING-TIME prior (see
-        # serve_tgn.precursor_boost). It is NOT a trained input (benign-only training
+        # serve_tgn.precursor_shift). It is NOT a trained input (benign-only training
         # would make it a dead feature). Persisted/purged like last_contact.
         self.recent_alert = {}
         # Single source of truth: graphagate.config.TGNConfig. Importing the defaults
         # here keeps the three copies of this knob (config, model, serve_tgn fallback)
-        # from drifting apart; e.g. a very large half-life/max-boost (100000.0 / 3.0)
-        # would saturate every score to 1.0 after a single cold-start alert.
+        # from drifting apart. The shift is bounded, so a long half-life can no longer
+        # saturate a score to 1.0 after a single cold-start alert.
         from graphagate.config import TGNConfig as _Cfg
 
         self.precursor_half_life = _Cfg.precursor_half_life
-        self.precursor_max_boost = _Cfg.precursor_max_boost
+        self.precursor_max_shift = _Cfg.precursor_max_shift
         # Recency cap / never-seen sentinel for both Δt inputs — see config.delta_t_cap
         # and ``pair_delta_t``. Runtime attribute (not a buffer): it is a decoding
         # convention, and persisting it would let an old checkpoint silently override a
