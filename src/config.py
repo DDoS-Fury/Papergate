@@ -216,8 +216,13 @@ class TGNConfig:
     # own, which is what forced the previous 600 s half-life; the half-life can now be set
     # from the measured recon->lateral delay instead (median 8.7 h, p90 56.5 h on the
     # dev stream, see tasks/tmp/lateral_chain_diag.py).
-    precursor_half_life: float = 600.0
-    precursor_max_shift: float = 2.0
+    # Both set from the sweep in tasks/tmp/precursor_sweep.py (seed 2000, one training run,
+    # paired): 72 h maximises lateral AUC (0.8252 vs 0.7605 with the prior inert) and lateral
+    # recall at 1% FPR (0.0758 vs 0.0569). 6 h would instead maximise credential-theft AUC
+    # (0.7385 vs 0.6741) -- the two phases of the kill chain want different decay constants,
+    # and a single one cannot serve both. Lateral movement is the target, hence 72 h.
+    precursor_half_life: float = 259200.0
+    precursor_max_shift: float = 4.0
     # Multiplicative equivalent, used only by the baselines' causal mirror
     # (eval_common.causal_precursor_factor): their scores are not probabilities, so an
     # additive logit shift is not defined on them. Kept so the baselines receive the same

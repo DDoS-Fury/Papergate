@@ -15,6 +15,23 @@ on host-to-host structure and reports results on both LANL and DARPA OpTC with f
 split conventions (first 41 hours for training on LANL, six days for training and
 three for evaluation on OpTC) that have become a standard benchmark protocol.
 
+Reported performance on LANL is governed by the base rate of that corpus: 518 anomalous
+edges over 58 days of logs carrying $4.6\times10^{7}$ authentication events. \textit{Euler}
+reports an AUC of $0.991$ with an average precision of $0.052$ and a precision of $0.0054$
+at its operating point; the graph foundation model reports an AUC of $0.987$ with an average
+precision of $0.0088$. Both papers state that AUC is uninformative at this imbalance and
+report average precision alongside it. Absolute figures on that corpus are therefore not a
+target to match, and do not transfer to a different prevalence or a different decision unit.
+
+One measurement bounds how far the comparison can be taken. \textit{Euler}~\cite{euler}
+reports that the ``unknown authentication'' rule, which flags any edge absent from the
+training graph, reaches a true positive rate of $72.0\%$ at a false positive rate of $4.4\%$
+on LANL. The same rule under the same protocol reaches $63.0\%$ at $42.7\%$ on the stream
+used here: the true positive rate is comparable, the false positive rate is an order of
+magnitude higher. Benign traffic in this setting also makes non-habitual accesses
+(Section~\ref{sec:setup}), so graph memorisation, which accounts for most of the detectable
+lateral movement on LANL, is not a shortcut here.
+
 These systems take an authentication log as their substrate: nodes are
 hosts (or hosts and users), and edges represent logon events. That formulation fixes what is
 detectable. It also explains why they are directly comparable with each other:

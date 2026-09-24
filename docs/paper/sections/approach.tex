@@ -64,7 +64,7 @@ reuse: a familiar principal under an unfamiliar client fingerprint.}
   {\textbf{structural head}\\ scaled $\cos$ $\rightarrow$ logit$_{s}$};
 
 \node[st, left=8mm of fh, yshift=-5mm] (sc)
-  {$s=1-\sigma(\text{logit}_f{+}\text{logit}_s)$\\[1pt]$\times$ \textbf{precursor}\\$1{+}b\,2^{-\Delta t/\tau}$};
+  {$a=-(\text{logit}_f{+}\text{logit}_s)$\\[1pt]$+$ \textbf{precursor}\\$\beta\,2^{-\Delta t/\tau}$\\[1pt]$s=\sigma(a)$};
 \node[st, left=6mm of sc] (thr)
   {\textbf{threshold}\\[1pt]cost-sensitive\\(clean FPR cap)};
 \node[ext, left=6mm of thr] (pep) {\textbf{policy engine}\\\textit{external}\\\textit{decision}};
@@ -169,9 +169,26 @@ Lateral movement often follows reconnaissance activity that triggers intrusion a
 origin host; however, the commit gate excludes denied precursor events from entity memory.
 To incorporate this temporal context without poisoning graph state, a lightweight
 per-entity alert state is maintained external to the TGN memory, and an exponentially
-decaying multiplicative prior is applied to subsequent event scores from that entity. The multiplicative formulation
-amplifies suspicious scores above the operating threshold while leaving benign scores near 0
-unaffected. This mechanism operates as an inference-time prior outside the trained parameters,
+decaying prior $\beta\,2^{-\Delta t/\tau}$ is added to the anomaly logit of subsequent events
+from that entity. The prior is additive on the logit because it is a prior on the odds: it
+moves every event by the same evidence in nats wherever it sits on the curve, and being
+bounded by $\beta$ it cannot drive a score to saturation on its own. Scoring is carried in
+logit space for the same reason, as the probability $1-\sigma(\cdot)$ saturates to exactly
+$1$ in single precision below a logit of $-16$, which ties the head of the ranking together
+and leaves the prior no room above it.
+
+The prior arms on a threshold of its own, lower than the decision threshold. Reconnaissance
+sits below the decision threshold by construction, since otherwise it would already be an
+alert; arming on the decision threshold would therefore let only the sensor flag arm the
+chain. The arming threshold is the label-free clean-FPR quantile of
+Section~\ref{sec:approach}; arming feeds the prior alone, while the trust feature and the
+reported decision keep using the decision threshold.
+
+The decay constant $\tau$ is set from the measured delay between reconnaissance and the
+first lateral event on the same host. The two transitions of the kill chain do not share a
+timescale: a $\tau$ that maximises lateral-movement detection degrades credential-theft
+detection and the reverse, so a single decay constant is a compromise rather than a tuned
+optimum. This mechanism operates as an inference-time prior outside the trained parameters,
 as benign-only training would treat sensor flags as inactive.
 
 \subsection{Threshold calibration}
