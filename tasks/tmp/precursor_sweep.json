@@ -112,5 +112,24 @@
   "fpr_routed": 0.001392039595792947,
   "agg_recall_global": 0.4718543046357616,
   "seconds": 1139.8
+ },
+ {
+  "name": "hl=24h sh=4 no-arm",
+  "half_life_h": 24.0,
+  "max_shift": 4.0,
+  "arm": false,
+  "threshold_clean": 1.0000000009805898,
+  "threshold_dirty": 0.37973374947724564,
+  "threshold_clean_unsup": 0.25985390598585917,
+  "agg_auc": 0.8875708546276354,
+  "agg_ap": 0.43612005486434496,
+  "lat_auc": 0.7991557110030993,
+  "theft_auc": 0.6289392698158418,
+  "lat_recall_global": 0.05687203791469194,
+  "fpr_global": 0.009718498659517426,
+  "lat_recall_routed": 0.009478672985781991,
+  "fpr_routed": 0.0010311404413281089,
+  "agg_recall_global": 0.45364238410596025,
+  "seconds": 1140.6
  }
 ]
