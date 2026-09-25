@@ -1,0 +1,22 @@
+struct part per edge (test): std / min / max
+  edge 0: std=0.1761 min=-4.576 max=-1.395
+  edge 1: std=0.1803 min=-4.576 max=-1.671
+  edge 2: std=0.1674 min=-4.576 max=-1.610
+  edge 3: std=0.0816 min=-4.576 max=-1.796
+  edge 4: std=0.0582 min=-4.576 max=-1.590
+
+lateral (n=169) vs benigno pulito test (n=37725), caso AP=0.0045
+  attuale: max logit (+precursor)  AUC=0.759 AP=0.0163 rec@FPR1%=0.030 rec@FPR5%=0.249
+  max logit, senza precursor       AUC=0.689 AP=0.0124 rec@FPR1%=0.018 rec@FPR5%=0.243
+  max surprisal per-edge           AUC=0.758 AP=0.0346 rec@FPR1%=0.219 rec@FPR5%=0.379
+  somma surprisal (Fisher)         AUC=0.773 AP=0.0263 rec@FPR1%=0.183 rec@FPR5%=0.320
+  somma surprisal + precursor      AUC=0.818 AP=0.0300 rec@FPR1%=0.195 rec@FPR5%=0.343
+  solo access edge                 AUC=0.579 AP=0.0067 rec@FPR1%=0.024 rec@FPR5%=0.112
+
+theft (n=249) vs benigno pulito test (n=37725), caso AP=0.0066
+  attuale: max logit (+precursor)  AUC=0.572 AP=0.0130 rec@FPR1%=0.076 rec@FPR5%=0.169
+  max logit, senza precursor       AUC=0.571 AP=0.0154 rec@FPR1%=0.080 rec@FPR5%=0.177
+  max surprisal per-edge           AUC=0.700 AP=0.0287 rec@FPR1%=0.124 rec@FPR5%=0.193
+  somma surprisal (Fisher)         AUC=0.680 AP=0.0175 rec@FPR1%=0.104 rec@FPR5%=0.169
+  somma surprisal + precursor      AUC=0.669 AP=0.0144 rec@FPR1%=0.068 rec@FPR5%=0.149
+  solo access edge                 AUC=0.545 AP=0.0077 rec@FPR1%=0.020 rec@FPR5%=0.072

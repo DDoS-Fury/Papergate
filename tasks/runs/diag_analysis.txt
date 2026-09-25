@@ -1,0 +1,95 @@
+test events=40000 clean-benign=37725 lateral=169 (dirty 19) theft=249
+
+=== 1. Percentile dello score nella distribuzione del benigno pulito (test) ===
+  benign clean q0.50 score = 0.0006073
+  benign clean q0.90 score = 0.01698
+  benign clean q0.95 score = 0.04305
+  benign clean q0.99 score = 0.4515
+  lateral  n= 169 percentile: median=85.5 p75=95.0 p90=98.6 | >benign p90: 0.39 >p99: 0.030 | precursor shift>0: 0.95
+  theft    n= 249 percentile: median=58.8 p75=87.3 p90=98.1 | >benign p90: 0.20 >p99: 0.076 | precursor shift>0: 0.52
+
+=== 1b. Sottotipi lateral (dedotti dai contatori storici al momento dell'evento) vs benigno con la stessa novità ===
+  dev>user nuovo   | lateral: 0.17 | theft: 0.11 | benign pulito: 0.146
+  cfg>dev nuovo    | lateral: 0.28 | theft: 0.16 | benign pulito: 0.009
+  user>res nuovo   | lateral: 0.11 | theft: 0.17 | benign pulito: 0.136
+  dev>res nuovo    | lateral: 0.39 | theft: 0.52 | benign pulito: 0.200
+  lateral con dev>user nuovo  n=  29 | AUC vs benigno=0.871 AP=0.0040 (caso 0.0008) | AUC vs benigno con stessa novità (n=5517): 0.749
+  lateral con dev>user visto  n= 140 | AUC vs benigno=0.735 AP=0.0131 (caso 0.0037) | AUC vs benigno con stessa novità (n=32208): 0.766
+  lateral con cfg>dev nuovo   n=  48 | AUC vs benigno=0.895 AP=0.0111 (caso 0.0013) | AUC vs benigno con stessa novità (n=342): 0.601
+  lateral con user>res nuovo  n=  19 | AUC vs benigno=0.893 AP=0.0047 (caso 0.0005) | AUC vs benigno con stessa novità (n=5113): 0.739
+  lateral con user>res visto  n= 150 | AUC vs benigno=0.742 AP=0.0130 (caso 0.0040) | AUC vs benigno con stessa novità (n=32612): 0.784
+
+=== 2. Quale edge dà il max e con quale testa (mediane dei logit di anomalia) ===
+  benign pulito argmax: access=0.84 dev>user=0.13 cfg>user=0.02 cfg>dev=0.01 src>cfg=0.00
+  lateral       argmax: access=0.49 dev>user=0.20 cfg>user=0.05 cfg>dev=0.26 src>cfg=0.00
+  theft         argmax: access=0.82 dev>user=0.04 cfg>user=0.01 cfg>dev=0.10 src>cfg=0.04
+  per edge: logit totale / feature-head / struct-head  [benign | lateral | theft]  + percentile mediano del lateral / theft nel benigno per quell'edge
+  access    -9.63/-5.06/-4.57 | -8.90/-4.33/-4.57 | -8.99/-4.41/-4.57   pct lat=60 theft=59
+  dev>user  -16.17/-11.60/-4.57 | -11.57/-7.00/-4.57 | -15.38/-10.82/-4.57   pct lat=84 theft=69
+  cfg>user  -15.97/-11.40/-4.57 | -10.72/-6.14/-4.57 | -15.29/-10.72/-4.57   pct lat=80 theft=68
+  cfg>dev   -14.17/-9.60/-4.57 | -13.76/-9.19/-4.57 | -14.29/-9.73/-4.57   pct lat=68 theft=43
+  src>cfg   -18.43/-13.86/-4.57 | -17.91/-13.34/-4.57 | -16.37/-11.80/-4.57   pct lat=73 theft=90
+
+=== 2b. AUC per singolo edge / singola testa (benigno pulito vs classe) ===
+  lateral:
+    access: tot=0.58 feat=0.58 struct=0.46
+    dev>user: tot=0.70 feat=0.70 struct=0.53
+    cfg>user: tot=0.75 feat=0.75 struct=0.39
+    cfg>dev: tot=0.64 feat=0.64 struct=0.51
+    src>cfg: tot=0.66 feat=0.66 struct=0.37
+  theft:
+    access: tot=0.54 feat=0.55 struct=0.43
+    dev>user: tot=0.62 feat=0.62 struct=0.63
+    cfg>user: tot=0.59 feat=0.59 struct=0.39
+    cfg>dev: tot=0.47 feat=0.47 struct=0.69
+    src>cfg: tot=0.81 feat=0.81 struct=0.46
+
+=== 3. Input grezzi: mediane [log1p pair_count, log1p src_count, ratio | aux 3 | log1p Δt_pair, log1p Δt_src] ===
+  access    benign     3.04   7.24   0.03   2.30   6.30   0.02  13.29   8.56
+  access    lateral    2.71   7.19   0.01   0.69   5.42   0.00  13.27   8.42
+  access    theft      2.40   6.92   0.02   0.00   4.61   0.00  13.31   6.77
+  dev>user  benign     5.38   6.30   0.73   0.00   0.00   0.00   9.61   8.69
+  dev>user  lateral    1.61   5.42   0.03   0.00   0.00   0.00  11.23   8.87
+  dev>user  theft      1.61   4.61   0.50   0.00   0.00   0.00   6.90   6.73
+  cfg>user  benign     4.84   8.66   0.04   0.00   0.00   0.00  10.36   7.18
+  cfg>user  lateral    0.69   8.63   0.00   0.00   0.00   0.00  13.13   7.68
+  cfg>user  theft      1.39   7.95   0.02   0.00   0.00   0.00   6.91   6.55
+  cfg>dev   benign     5.04   8.66   0.04   0.00   0.00   0.00   9.62   7.18
+  cfg>dev   lateral    3.58   8.63   0.01   0.00   0.00   0.00  11.01   7.68
+  cfg>dev   theft      1.39   7.95   0.01   0.00   0.00   0.00   6.90   6.55
+  src>cfg   benign     4.84   7.30   0.15   0.00   0.00   0.00  10.98   8.59
+  src>cfg   lateral    3.14   7.18   0.03   0.00   0.00   0.00  11.57   8.46
+  src>cfg   theft      1.10   3.81   0.02   0.00   0.00   0.00   6.94   6.86
+
+=== 3b. Probe supervisionato (solo diagnostico), GroupKFold per device su val+test, benigno pulito vs classe ===
+  lateral: n_pos=323 n_benign=56496 (caso AP=0.0057)
+    score modello      AUC=0.793 AP=0.0263 rec@FPR1%=0.065 rec@FPR5%=0.319
+    probe logits       AUC=0.904 AP=0.2236 rec@FPR1%=0.539 rec@FPR5%=0.731
+    probe hand         AUC=0.877 AP=0.2432 rec@FPR1%=0.545 rec@FPR5%=0.724
+    probe hand+z       AUC=0.871 AP=0.1445 rec@FPR1%=0.334 rec@FPR5%=0.542
+  theft: n_pos=362 n_benign=56496 (caso AP=0.0064)
+    score modello      AUC=0.601 AP=0.0139 rec@FPR1%=0.077 rec@FPR5%=0.180
+    probe logits       AUC=0.890 AP=0.1128 rec@FPR1%=0.282 rec@FPR5%=0.522
+    probe hand         AUC=0.956 AP=0.6811 rec@FPR1%=0.845 rec@FPR5%=0.909
+    probe hand+z       AUC=0.919 AP=0.2458 rec@FPR1%=0.486 rec@FPR5%=0.718
+
+=== 4. Negativi strutturali (come in training) vs positivi benigni vs attacchi: logit di anomalia per edge ===
+  access    mediana: benign pos=-9.63 neg=+0.78 lateral=-8.90 theft=-8.99 | AUC benign-vs-neg=0.955 | >benign p99: neg=0.62 lat=0.02 theft=0.02
+  dev>user  mediana: benign pos=-16.17 neg=-7.15 lateral=-11.57 theft=-15.38 | AUC benign-vs-neg=0.928 | >benign p99: neg=0.15 lat=0.01 theft=0.00
+  cfg>user  mediana: benign pos=-15.97 neg=-4.76 lateral=-10.72 theft=-15.29 | AUC benign-vs-neg=0.973 | >benign p99: neg=0.78 lat=0.04 theft=0.01
+  cfg>dev   mediana: benign pos=-14.17 neg=-5.03 lateral=-13.76 theft=-14.29 | AUC benign-vs-neg=0.982 | >benign p99: neg=0.88 lat=0.31 theft=0.14
+  src>cfg   mediana: benign pos=-18.43 neg=-7.43 lateral=-17.91 theft=-16.37 | AUC benign-vs-neg=0.994 | >benign p99: neg=0.96 lat=0.18 theft=0.08
+
+=== 5. Ablation per blocco di input (logit evento, max sugli edge) ===
+  lateral: completo AUC=0.694 AP=0.284 (su campione benigno n=1101)
+    no_hist   Δlogit mediano lateral=-0.47 benign=+1.40 | AUC=0.412 AP=0.124
+    no_hash   Δlogit mediano lateral=-0.03 benign=+0.10 | AUC=0.684 AP=0.274
+    no_struct Δlogit mediano lateral=+4.57 benign=+4.57 | AUC=0.694 AP=0.285
+    zero_msg  Δlogit mediano lateral=+14.49 benign=+12.67 | AUC=0.572 AP=0.183
+    zero_z    Δlogit mediano lateral=+14.87 benign=+13.56 | AUC=0.585 AP=0.183
+  theft: completo AUC=0.578 AP=0.294 (su campione benigno n=1101)
+    no_hist   Δlogit mediano theft=+0.18 benign=+1.40 | AUC=0.409 AP=0.224
+    no_hash   Δlogit mediano theft=+0.08 benign=+0.10 | AUC=0.578 AP=0.297
+    no_struct Δlogit mediano theft=+4.57 benign=+4.57 | AUC=0.578 AP=0.293
+    zero_msg  Δlogit mediano theft=+12.90 benign=+12.67 | AUC=0.530 AP=0.204
+    zero_z    Δlogit mediano theft=+17.53 benign=+13.56 | AUC=0.634 AP=0.268
