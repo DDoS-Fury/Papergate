@@ -1,0 +1,27 @@
+ Container papergate-test-ablation-run-7ab13c908573 Creating 
+ Container papergate-test-ablation-run-7ab13c908573 Created 
+[codecarbon INFO @ 17:00:35] offline tracker init
+[codecarbon WARNING @ 17:00:35] Multiple instances of codecarbon are allowed to run at the same time.
+Starting test client for 120 seconds against http://serve-tgn:8088 (no_device=False)...
+[Generator] Resuming at t=26407092 (after 200000 warmup steps)
+Test finished. Generating report...
+==================================================
+TEST CLIENT REPORT
+==================================================
+Total Events Processed: 10134
+Power Consumed: 0.004849 kWh (0.001604 kg CO2)
+RAM Usage: 22.2%
+VRAM Usage: 2874.0 MB / 16303.0 MB
+Latency (ms) - P50: 7.53 | P90: 8.44 | P99: 9.07
+Overall Accuracy: 97.67%
+Anomalies - Precision: 0.7733 | Recall: 0.4030 | F1 Score: 0.5299
+
+Accuracy by Event Type (Recall for anomalies, Specificity for benign):
+ - Benign: 9765/9804 (99.60%)
+ - Policy: 2/5 (40.00%)
+ - Contextual: 14/30 (46.67%)
+ - Lateral: 0/66 (0.00%)
+ - CredTheft: 0/63 (0.00%)
+ - Exfil: 17/17 (100.00%)
+ - BenignDenied: 100/149 (67.11%)
+==================================================

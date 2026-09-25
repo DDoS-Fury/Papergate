@@ -21,11 +21,12 @@ async def event_generator(seed=None, warmup_steps=None, cfg: TGNConfig | None = 
         cfg = TGNConfig()
     # All generator parameters come from cfg via the shared mapping, so the live stream
     # is guaranteed to live in the same entity space as the trained checkpoint.
-    sim = ZTAStreamSimulator(
-        **stream_kwargs_from_cfg(cfg),
-        admission_horizon=warmup_steps if warmup_steps else None,
-        seed=seed,
-    )
+    # The mapping targets generate_streaming_data: drop ``num_events`` (a stream length, not
+    # a simulator argument) and let ``seed`` override the configured one.
+    kw = stream_kwargs_from_cfg(cfg)
+    kw.pop("num_events")
+    kw.update(admission_horizon=warmup_steps if warmup_steps else None, seed=seed)
+    sim = ZTAStreamSimulator(**kw)
     if warmup_steps is None:
         warmup_steps = cfg.num_events if seed == cfg.seed else 0
     for _ in range(warmup_steps):
