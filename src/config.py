@@ -260,6 +260,16 @@ class TGNConfig:
     # recall to an absurd FPR; the cap fixes the operating point at the max recall achievable
     # while no more than this fraction of benign clean events are re-challenged by the orchestrator.
     clean_fpr_cap: float = 0.05
+    # Per-edge benign calibration of the event score (serve_tgn.calibrated_edge_logit): each
+    # edge's anomaly logit is mapped onto the upper-tail p-value of its own benign reference
+    # (signal-clean benign validation events, no attack label) before the max over edges.
+    # The raw logits of the five edges live on different scales, so the uncalibrated max is
+    # decided by the access edge and the binding-edge signal of lateral movement / credential
+    # theft is drowned (lateral recall at 1% clean FPR 0.02 -> 0.20 on seed 42, see
+    # tasks/todo.md). ``edge_calib_tail_q``: the quantile above which the reference is
+    # extrapolated by an exponential tail, so scores keep ranking past the benign maximum.
+    edge_calibration: bool = True
+    edge_calib_tail_q: float = 0.99
 
     seed: int = 42
 

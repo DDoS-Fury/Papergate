@@ -17,7 +17,9 @@ commits on the model's own score. See the ``_replay`` docstring for why measurin
 the OPA-in-the-loop gate is the conservative choice.
 
 - :func:`infer_logit` — score one edge (read memory, no mutation); the per-edge reference.
-- :func:`chain_logits` — score all edges of a block of events from one shared expansion.
+- :func:`chain_logits` — score all edges of a block of events from one shared expansion
+  (:func:`chain_edge_logits`) and combine them (:func:`combine_edge_logits`: max of the
+  per-edge logits, each calibrated on its own benign reference when the artifact has one).
 - :func:`update_memory` — commit one event into the TGN memory.
 - :func:`score_event`  — the high-level online API: map external entity keys
   through a :class:`NodeRegistry`, score, and update memory **only for events that
@@ -152,15 +154,84 @@ def infer_logit(model, src_idx: int, dst_idx: int, t_val: int, msg_vec, device,
     return -float(out.item())
 
 
+# Edge kinds of the causal chain. Every edge group carries its kind explicitly: the
+# serving and replay paths list the groups in different orders, and the per-edge benign
+# calibration below is keyed by kind, not by position.
+EDGE_ACCESS = "user>res"
+EDGE_DEV_USER = "dev>user"
+EDGE_CFG_USER = "cfg>user"
+EDGE_CFG_DEV = "cfg>dev"
+EDGE_SRC_CFG = "src>cfg"
+EDGE_SRC_DEV = "src>dev"  # legacy v3 chain (config-node ablation)
+
+
+def fit_edge_calibration(benign_logits, *, tail_q: float) -> dict:
+    """Benign reference distribution of one edge kind's anomaly logits.
+
+    A quantile grid up to ``tail_q`` plus an exponential tail fitted on the exceedances
+    above it (so the calibrated score keeps ranking beyond the largest benign value seen,
+    instead of tying there). Plain floats / lists: persisted in the checkpoint as is.
+    """
+    x = np.sort(np.asarray(benign_logits, dtype=np.float64))
+    if x.size < 2:
+        raise ValueError("edge calibration needs at least two benign logits")
+    probs = np.linspace(0.0, tail_q, 513)
+    q = np.quantile(x, probs)
+    exc = x[x > q[-1]] - q[-1]
+    scale = float(exc.mean()) if exc.size else float(x.std() or 1.0)
+    return {"probs": probs.tolist(), "q": q.tolist(), "tail_q": float(tail_q),
+            "tail_scale": max(scale, 1e-6), "n": int(x.size)}
+
+
+def calibrated_edge_logit(model, kind: str, logit: torch.Tensor) -> torch.Tensor:
+    """Map raw anomaly logits of edge ``kind`` onto ``log((1-p)/p)``, ``p`` their upper-tail
+    p-value under the benign reference of that kind (float64).
+
+    The raw logits of the five edges live on different scales (benign access ≈ -10, benign
+    bindings ≈ -15), so a max over them is decided by the access edge almost always and
+    the binding edges, where lateral movement and credential theft show, are drowned.
+    On the p-value scale every edge is equally surprising at the same benign quantile.
+    ``p`` is floored at ``1/(n+1)`` below the grid and extrapolated in log space above it,
+    so the map is monotone and finite everywhere; a kind without a reference (or a model
+    without ``edge_calib``) passes through unchanged.
+    """
+    spec = (getattr(model, "edge_calib", None) or {}).get(kind)
+    if spec is None:
+        return logit
+    cache = model.__dict__.setdefault("_edge_calib_t", {})
+    key = (kind, logit.device)
+    if key not in cache:
+        cache[key] = (torch.tensor(spec["q"], dtype=torch.float64, device=logit.device),
+                      torch.tensor(spec["probs"], dtype=torch.float64, device=logit.device))
+    q, probs = cache[key]
+    x = logit.to(torch.float64)
+    i = torch.searchsorted(q, x.contiguous(), right=True).clamp(1, q.numel() - 1)
+    q0, q1, p0, p1 = q[i - 1], q[i], probs[i - 1], probs[i]
+    cdf = p0 + (x - q0).clamp(min=0) / (q1 - q0).clamp(min=1e-12) * (p1 - p0)
+    cdf = torch.minimum(cdf, p1).clamp(min=1.0 / (spec["n"] + 1))
+    log_p = torch.log1p(-cdf)
+    tail = x > q[-1]
+    log_p_tail = np.log1p(-spec["tail_q"]) - (x - q[-1]) / spec["tail_scale"]
+    log_p = torch.where(tail, log_p_tail, log_p)
+    return torch.log(-torch.expm1(log_p)) - log_p
+
+
+def set_edge_calibration(model, calib: dict | None) -> None:
+    """Install (or clear, with ``None``) the per-edge benign references on ``model``."""
+    model.edge_calib = calib
+    model.__dict__.pop("_edge_calib_t", None)
+
+
 @torch.no_grad()
-def chain_logits(model, groups, t, device) -> torch.Tensor:
-    """Per-event anomaly logit: the max over the event's edges, from one shared expansion.
+def chain_edge_logits(model, groups, t, device) -> dict:
+    """Raw per-edge anomaly logits of a block of events, from one shared expansion.
 
     ``groups`` lists the edge groups of a block of ``B`` events, one row per event, as
-    ``(src, dst, msg, aux_src)``: global node-id tensors ``[B]``, the ``[B, msg_dim]`` edge
-    messages, and the ``aux_src`` ids for the second history triplet (``None`` zero-pads it,
-    see ``compute_hist_feats``). ``t`` holds the ``[B]`` event times. Returns ``[B]``
-    anomaly logits (``-logit P(benign)``, see :func:`infer_logit`).
+    ``(kind, src, dst, msg, aux_src)``: the edge kind (``EDGE_*``), global node-id tensors
+    ``[B]``, the ``[B, msg_dim]`` edge messages, and the ``aux_src`` ids for the second
+    history triplet (``None`` zero-pads it, see ``compute_hist_feats``). ``t`` holds the
+    ``[B]`` event times. Returns ``{kind: [B] anomaly logits}`` (``-logit P(benign)``, see
+    :func:`infer_logit`).
 
     One neighbour expansion over all endpoints and one GNN forward replace one of each per
     edge. Exact: an endpoint's embedding depends only on its own k-hop neighbourhood, which
@@ -174,24 +245,43 @@ def chain_logits(model, groups, t, device) -> torch.Tensor:
     ``Δt = delta_t_cap`` the argument of the cosine reaches ~1e5 rad, where one float32 ulp
     is ~0.06 rad, so the logit moved by ~1e-4 against the per-edge reference.
     """
-    srcs = torch.cat([g[0] for g in groups])
-    dsts = torch.cat([g[1] for g in groups])
+    srcs = torch.cat([g[1] for g in groups])
+    dsts = torch.cat([g[2] for g in groups])
     n_id, edge_index, hist_t, hist_msg = model.neighbor_loader(torch.cat([srcs, dsts]).unique())
     z = model.embed(n_id, edge_index, hist_t, hist_msg)
     assoc = model.neighbor_loader._assoc
     nf, h_idx = model.node_feat[n_id], model.node_hash[n_id]
     t_list = t.tolist()
-    out = None
-    for src, dst, msg, aux in groups:
+    out = {}
+    for kind, src, dst, msg, aux in groups:
         s_list, d_list = src.tolist(), dst.tolist()
         d_pair = model.pair_delta_t(s_list, d_list, t_list, device)
         d_src = model.src_delta_t(src, t, device)
         hist = model.compute_hist_feats(
             s_list, d_list, device, aux_src_ids=None if aux is None else aux.tolist()
         )
-        logit = -model.score(z, nf, h_idx, assoc[src], assoc[dst], msg, d_pair, d_src, hist)
-        out = logit if out is None else torch.maximum(out, logit)
+        out[kind] = -model.score(z, nf, h_idx, assoc[src], assoc[dst], msg, d_pair, d_src, hist)
     return out
+
+
+def combine_edge_logits(model, edge_logits: dict) -> torch.Tensor:
+    """Event anomaly logit: the max over its edges of the (benign-calibrated) edge logits.
+
+    Without ``model.edge_calib`` (artifacts trained before the calibration, or
+    ``edge_calibration=False``) this is the plain max of the raw logits.
+    """
+    out = None
+    for kind, logit in edge_logits.items():
+        c = calibrated_edge_logit(model, kind, logit)
+        out = c if out is None else torch.maximum(out, c)
+    return out
+
+
+@torch.no_grad()
+def chain_logits(model, groups, t, device) -> torch.Tensor:
+    """Per-event anomaly logit of a block of events: :func:`chain_edge_logits` combined by
+    :func:`combine_edge_logits`."""
+    return combine_edge_logits(model, chain_edge_logits(model, groups, t, device))
 
 
 @torch.no_grad()
@@ -232,6 +322,9 @@ def anomaly_score(anom_logit) -> float:
     float64 (``scipy.special.expit``) rather than the float32 ``1 - torch.sigmoid``: the
     latter returns exactly 1.0 from ``logit < -16`` on, collapsing the whole head of the
     ranking into one tie. Monotone, so it changes no ordering and no AUC.
+
+    With a per-edge benign calibration the logit is ``log((1-p)/p)`` of the most surprising
+    edge's benign p-value, so the score reads ``1 - p`` (before the precursor prior).
     """
     return expit(np.asarray(anom_logit, dtype=np.float64))
 
@@ -420,7 +513,8 @@ def score_event(
     Maps the (possibly unseen) entity keys through ``registry`` and scores the causal
     chain ``key_source -> key_config -> key_device -> key_user -> key_dst`` plus the
     ``key_config -> key_user`` binding: the four binding edges carry zero messages, the
-    access edge carries ``features``; the anomaly score is the max over the edges.
+    access edge carries ``features``; the anomaly score is the max over the edges of
+    their benign-calibrated logits (see :func:`combine_edge_logits`).
     ``key_source`` (the client IP) and ``key_device`` are optional — a missing one skips
     only its own binding edges (a key is never aliased onto two roles). ``key_config``
     (the client's TLS/JA3 fingerprint) defaults to the generic ``"conf:guest"`` when the
@@ -476,11 +570,13 @@ def score_event(
     zeros = torch.zeros_like(msg)
     b_user, b_cfg = _ids(user_idx), _ids(config_idx)
     b_dev = None if device_idx is None else _ids(device_idx)
-    groups = [(b_user, _ids(dst_idx), msg, b_dev), (b_cfg, b_user, zeros, None)]
+    groups = [(EDGE_ACCESS, b_user, _ids(dst_idx), msg, b_dev),
+              (EDGE_CFG_USER, b_cfg, b_user, zeros, None)]
     if b_dev is not None:
-        groups += [(b_cfg, b_dev, zeros, None), (b_dev, b_user, zeros, None)]
+        groups += [(EDGE_CFG_DEV, b_cfg, b_dev, zeros, None),
+                   (EDGE_DEV_USER, b_dev, b_user, zeros, None)]
     if source_idx is not None:
-        groups.append((_ids(source_idx), b_cfg, zeros, None))
+        groups.append((EDGE_SRC_CFG, _ids(source_idx), b_cfg, zeros, None))
 
     raw_logit = float(chain_logits(model, groups, _ids(int(timestamp)), device))
     # Kill-chain precursor prior — keyed on the DEVICE node (if present), else on USER
@@ -607,6 +703,7 @@ def save_model(model, registry: NodeRegistry, threshold: float, hp: dict,
             "src_count": getattr(model, "src_count", {}),
             "recent_alert": getattr(model, "recent_alert", {}),
             "neighbor_loader": model.neighbor_loader.state(),
+            "edge_calib": getattr(model, "edge_calib", None),
             "hyperparams": hp,
         },
         tmp_checkpoint,
@@ -650,6 +747,8 @@ def load_model(checkpoint_path, stats_path, device):
     model.pair_count = ckpt.get("pair_count", {})
     model.src_count = ckpt.get("src_count", {})
     model.recent_alert = ckpt.get("recent_alert", {})
+    # Per-edge benign references; absent in older artifacts -> plain max of raw logits.
+    set_edge_calibration(model, ckpt.get("edge_calib"))
     # Restore the temporal neighbour buffers (map_location already placed the saved
     # tensors on ``device``); build_model created an empty loader of the right shape.
     if "neighbor_loader" in ckpt:

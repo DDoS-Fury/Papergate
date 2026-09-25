@@ -6,7 +6,8 @@
   against ``lin1`` on the concatenated input: same logits and gradients, in train mode.
 * ``score_event`` (one expansion + embed for the whole chain, via ``chain_logits``) against
   the max of the per-edge ``infer_logit`` reference, on a stream committed through the
-  serving API: full chain, missing device, missing source, guest-device fallback.
+  serving API: full chain, missing device, missing source, guest-device fallback — with the
+  plain max and with the per-edge benign calibration (each edge mapped by its own kind).
 
 The offline replay counterpart is ``tests/verify_replay_batching.py``.
 
@@ -15,6 +16,7 @@ The offline replay counterpart is ``tests/verify_replay_batching.py``.
 
 import random
 
+import numpy as np
 import pytest
 import torch
 
@@ -22,12 +24,20 @@ from graphagate.model.registry import NodeRegistry
 from graphagate.model.tgn import LinkPredictor
 from graphagate.netclass import to_guest_device
 from graphagate.serve_tgn import (
+    EDGE_ACCESS,
+    EDGE_CFG_DEV,
+    EDGE_CFG_USER,
+    EDGE_DEV_USER,
+    EDGE_SRC_CFG,
     anomaly_score,
     build_model,
+    calibrated_edge_logit,
     commit_event,
+    fit_edge_calibration,
     infer_logit,
     precursor_shift,
     score_event,
+    set_edge_calibration,
 )
 
 DEVICE = torch.device("cpu")
@@ -157,9 +167,27 @@ def _variant(ev, variant, i):
     return ev
 
 
+def _calibrate(model):
+    """Distinct benign references per kind, so a kind mix-up changes the score."""
+    rng = np.random.default_rng(0)
+    set_edge_calibration(model, {
+        kind: fit_edge_calibration(rng.normal(mu, 0.5 + 0.1 * i, 300), tail_q=0.9)
+        for i, (kind, mu) in enumerate(((EDGE_ACCESS, 0.0), (EDGE_CFG_USER, -0.3),
+                                        (EDGE_CFG_DEV, 0.4), (EDGE_DEV_USER, -0.6),
+                                        (EDGE_SRC_CFG, 0.2)))
+    })
+
+
+def _cal(model, kind, logit):
+    return float(calibrated_edge_logit(model, kind, torch.tensor([logit], dtype=torch.float64)))
+
+
+@pytest.mark.parametrize("calibrated", [False, True])
 @pytest.mark.parametrize("variant", ["full", "no_device", "no_source", "guest"])
-def test_score_event_equals_per_edge_reference(variant):
+def test_score_event_equals_per_edge_reference(variant, calibrated):
     model, reg = _warmed()
+    if calibrated:
+        _calibrate(model)
     zeros = [0.0] * MSG_DIM
     guest = variant == "guest"
     for i, ev in enumerate(_stream(40, seed=1)):
@@ -172,15 +200,34 @@ def test_score_event_equals_per_edge_reference(variant):
         u, r, c = (reg.get(ev[k]) for k in ("key_user", "key_dst", "key_config"))
         t = ev["timestamp"]
         per_edge = [
-            infer_logit(model, u, r, t, ev["features"], DEVICE, aux_src_idx=d),
-            infer_logit(model, c, u, t, zeros, DEVICE),
+            (EDGE_ACCESS, infer_logit(model, u, r, t, ev["features"], DEVICE, aux_src_idx=d)),
+            (EDGE_CFG_USER, infer_logit(model, c, u, t, zeros, DEVICE)),
         ]
         if d is not None:
-            per_edge += [infer_logit(model, c, d, t, zeros, DEVICE),
-                         infer_logit(model, d, u, t, zeros, DEVICE)]
+            per_edge += [(EDGE_CFG_DEV, infer_logit(model, c, d, t, zeros, DEVICE)),
+                         (EDGE_DEV_USER, infer_logit(model, d, u, t, zeros, DEVICE))]
         if s is not None:
-            per_edge.append(infer_logit(model, s, c, t, zeros, DEVICE))
+            per_edge.append((EDGE_SRC_CFG, infer_logit(model, s, c, t, zeros, DEVICE)))
+        per_edge = [_cal(model, k, v) for k, v in per_edge]
         boost = d if d is not None else u
         ref = float(anomaly_score(max(per_edge) + precursor_shift(model, boost, t)))
         assert abs(fused - ref) <= 1e-6, (i, fused, ref)
         commit_event(model, reg, device=DEVICE, guest_device_fallback=guest, **ev)
+
+
+def test_edge_calibration_map():
+    """p-value semantics, monotone and finite everywhere; pass-through without a reference."""
+    ref = np.random.default_rng(1).normal(-10.0, 2.0, 5000)
+    model = build_model(dict(HP), DEVICE)
+    x = torch.tensor([-1e4, -30.0, np.median(ref), np.quantile(ref, 0.9), np.quantile(ref, 0.99),
+                      ref.max(), 40.0, 1e4], dtype=torch.float64)
+    assert torch.equal(calibrated_edge_logit(model, EDGE_ACCESS, x), x)  # no reference
+    set_edge_calibration(model, {EDGE_ACCESS: fit_edge_calibration(ref, tail_q=0.99)})
+    y = calibrated_edge_logit(model, EDGE_ACCESS, x)
+    assert torch.isfinite(y).all()
+    assert (y[1:] >= y[:-1]).all() and y[-1] > y[-2] > y[-3]  # keeps ranking past the grid
+    assert abs(float(y[2])) < 0.05                             # median -> p = 0.5
+    assert abs(float(y[3]) - np.log(0.9 / 0.1)) < 0.05         # q0.9 -> p = 0.1
+    assert abs(float(y[4]) - np.log(0.99 / 0.01)) < 1e-6       # tail anchor
+    assert float(y[0]) == pytest.approx(-np.log(5000), abs=1e-6)  # cdf floored at 1/(n+1)
+    assert torch.equal(calibrated_edge_logit(model, EDGE_SRC_CFG, x), x)  # other kind untouched

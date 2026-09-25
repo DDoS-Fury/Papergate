@@ -54,11 +54,20 @@ from graphagate.eval_common import binary_metrics, causal_src_seen
 from graphagate.model.registry import NodeRegistry
 from graphagate.model.tgn import ZTATemporalGraphNetwork, stable_hash
 from graphagate.serve_tgn import (
+    EDGE_ACCESS,
+    EDGE_CFG_DEV,
+    EDGE_CFG_USER,
+    EDGE_DEV_USER,
+    EDGE_SRC_CFG,
+    EDGE_SRC_DEV,
     anomaly_score,
-    chain_logits,
+    chain_edge_logits,
+    combine_edge_logits,
+    fit_edge_calibration,
     precursor_shift,
     record_alert,
     save_model,
+    set_edge_calibration,
     signal_dirty,
 )
 
@@ -112,7 +121,7 @@ def fit_thresholds(scores, labels, v_types, v_msg, cfg):
 
 def _replay(model, source_nodes, device_nodes, user, dst, t, msg, y, device, *,
             config_nodes=None, threshold=None, threshold_dirty=None, threshold_arm=None,
-            gate_by_label=False, batch_size=1, desc="replay"):
+            gate_by_label=False, batch_size=1, desc="replay", return_edge_logits=False):
     """Streaming replay matching the serving path (v4: up to 5 edges), optionally batched.
 
     ``source_nodes`` / ``config_nodes`` / ``device_nodes`` may be ``None`` (datasets
@@ -160,6 +169,10 @@ def _replay(model, source_nodes, device_nodes, user, dst, t, msg, y, device, *,
     decision) stays strictly sequential, so the lateral-movement precursor keeps its exact
     within-batch ordering. This is the OFFLINE eval/calibration path only — the online
     server (:mod:`serve_tgn`) is untouched and remains strictly sequential.
+
+    ``return_edge_logits=True`` appends a third element ``{"edge_logits": {kind: [N]},
+    "shift": [N]}``: the raw per-edge anomaly logits and the precursor shift of every event,
+    from which the per-edge benign calibration is fitted (see the CALIBRATION section).
     """
     model.eval()
     N = int(user.shape[0])
@@ -188,6 +201,9 @@ def _replay(model, source_nodes, device_nodes, user, dst, t, msg, y, device, *,
         model.pair_count[(a, b)] = model.pair_count.get((a, b), 0) + 1
         model.src_count[a] = model.src_count.get(a, 0) + 1
 
+    edge_rec = {} if return_edge_logits else None
+    shift_rec = np.empty(N, dtype=np.float64) if return_edge_logits else None
+
     pbar = _pbar(total=N, desc=desc)
     for start in range(0, N, batch_size):
         end = min(start + batch_size, N)
@@ -208,19 +224,26 @@ def _replay(model, source_nodes, device_nodes, user, dst, t, msg, y, device, *,
             cfgs = cfg_l[start:end] if has_config else None
 
             # --- Phase 1: one neighbour expansion + GNN forward for the whole block, scored per
-            # edge group; the event's anomaly logit is the max over its edges (chain_logits).
-            groups = [(bu, bd, bmsg, bdev)]  # access edge (aux src = device)
+            # edge group; the event's anomaly logit is the max over its (benign-calibrated) edge
+            # logits (serve_tgn.combine_edge_logits).
+            groups = [(EDGE_ACCESS, bu, bd, bmsg, bdev)]  # access edge (aux src = device)
             if has_bind:
-                groups.append((bdev, bu, zeros_msg, None))  # device→user
+                groups.append((EDGE_DEV_USER, bdev, bu, zeros_msg, None))
             if has_config:
-                groups.append((bcfg, bu, zeros_msg, None))  # config→user
+                groups.append((EDGE_CFG_USER, bcfg, bu, zeros_msg, None))
                 if has_bind:
-                    groups.append((bcfg, bdev, zeros_msg, None))  # config→device
+                    groups.append((EDGE_CFG_DEV, bcfg, bdev, zeros_msg, None))
                 if has_src:
-                    groups.append((bsrc, bcfg, zeros_msg, None))  # source→config
+                    groups.append((EDGE_SRC_CFG, bsrc, bcfg, zeros_msg, None))
             if has_src and has_bind and not has_config:
-                groups.append((bsrc, bdev, zeros_msg, None))  # legacy source→device
-            raw = chain_logits(model, groups, bt, device)
+                groups.append((EDGE_SRC_DEV, bsrc, bdev, zeros_msg, None))  # legacy chain
+            edge_logits = chain_edge_logits(model, groups, bt, device)
+            if edge_rec is not None:
+                for kind, v in edge_logits.items():
+                    edge_rec.setdefault(kind, np.empty(N, dtype=np.float64))[start:end] = (
+                        v.detach().cpu().numpy()
+                    )
+            raw = combine_edge_logits(model, edge_logits)
             raw_np = raw.detach().cpu().numpy()
             bmsg_rows = bmsg.tolist()
 
@@ -232,7 +255,10 @@ def _replay(model, source_nodes, device_nodes, user, dst, t, msg, y, device, *,
                 u = us[j]
                 tv = ts[j]
                 actor = devs[j] if has_bind else u
-                score = float(anomaly_score(raw_np[j] + precursor_shift(model, actor, tv)))
+                shift = precursor_shift(model, actor, tv)
+                if shift_rec is not None:
+                    shift_rec[i] = shift
+                score = float(anomaly_score(raw_np[j] + shift))
                 scores[i] = score
 
                 eff_thr = threshold
@@ -318,6 +344,8 @@ def _replay(model, source_nodes, device_nodes, user, dst, t, msg, y, device, *,
             )
         pbar.update(B)
     pbar.close()
+    if return_edge_logits:
+        return scores, labels, {"edge_logits": edge_rec, "shift": shift_rec}
     return scores, labels
 
 
@@ -864,7 +892,7 @@ def train_tgn(cfg: TGNConfig | None = None, *, dataset: "StreamData | None" = No
 
     pre_cal_state = _snapshot_runtime()
 
-    def _cal_replay(desc, thr=None, thr_dirty=None, thr_arm=None):
+    def _cal_replay(desc, thr=None, thr_dirty=None, thr_arm=None, **kw):
         _restore_runtime(pre_cal_state)
         return _replay(
             model, _slice(source_arr, train_end, val_end), _slice(device_arr, train_end, val_end),
@@ -872,14 +900,39 @@ def train_tgn(cfg: TGNConfig | None = None, *, dataset: "StreamData | None" = No
             msg[train_end:val_end], y[train_end:val_end], device, gate_by_label=False,
             threshold=thr, threshold_dirty=thr_dirty, threshold_arm=thr_arm,
             config_nodes=_slice(config_arr, train_end, val_end),
-            batch_size=cfg.eval_batch_size, desc=desc,
+            batch_size=cfg.eval_batch_size, desc=desc, **kw,
         )
 
     def _fit_thresholds(scores, labels):
         return fit_thresholds(scores, labels, types[train_end:val_end].numpy(),
                               msg[train_end:val_end].numpy(), cfg)
 
-    scores_a, labels_a = _cal_replay("Calibration pass A (val replay, no threshold)")
+    scores_a, labels_a, extra_a = _cal_replay(
+        "Calibration pass A (val replay, no threshold)", return_edge_logits=True
+    )
+    # Per-edge benign calibration of the score aggregation. The event score is a max over
+    # its edges, whose raw logits live on different scales (benign access ≈ -10, bindings
+    # ≈ -15): the access edge decides the max almost always and the binding edges, where
+    # lateral movement and credential theft show, are drowned. Each edge kind is mapped onto
+    # the upper-tail p-value of its own benign reference (signal-clean benign events of pass
+    # A — no attack label) before the max; see serve_tgn.calibrated_edge_logit.
+    # Fitting on pass A is exact: with no score threshold yet, pass A's trust / precursor
+    # feedback is driven by the sensor alarm alone, so its per-edge logits and precursor
+    # shifts do not depend on the aggregation, and its calibrated scores are recomputed
+    # below instead of replaying the slice again.
+    set_edge_calibration(model, None)
+    if cfg.edge_calibration:
+        ref = (labels_a == 0) & ~_rule_baseline(msg[train_end:val_end].numpy()).astype(bool)
+        set_edge_calibration(model, {
+            kind: fit_edge_calibration(v[ref], tail_q=cfg.edge_calib_tail_q)
+            for kind, v in extra_a["edge_logits"].items()
+        })
+        comb = combine_edge_logits(model, {
+            kind: torch.as_tensor(v) for kind, v in extra_a["edge_logits"].items()
+        }).numpy()
+        scores_a = anomaly_score(comb + extra_a["shift"])
+        print(f"Per-edge benign calibration fitted on {int(ref.sum())} clean benign val events "
+              f"({', '.join(extra_a['edge_logits'])})")
     thr_a, thr_dirty_a, thr_arm_a, _ = _fit_thresholds(scores_a, labels_a)
     val_scores, val_labels = _cal_replay(
         "Calibration pass B (val replay, test gate)", thr=thr_a, thr_dirty=thr_dirty_a,
@@ -1148,6 +1201,7 @@ def train_tgn(cfg: TGNConfig | None = None, *, dataset: "StreamData | None" = No
             "use_source_internal": cfg.use_source_internal,
             "guest_device_fallback": cfg.guest_device_fallback,
             "use_precursor": use_precursor,
+            "edge_calibration": cfg.edge_calibration,
         }
         op_new = operating_point(test_scores, test_labels, test_types, threshold)
         save_model(

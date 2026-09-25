@@ -127,12 +127,29 @@ letteratura: il >90% che circola è l'**AUC**.
 | Argus | LANL (no dup) | 0.9821 | **0.0056** | — | Rec@10 = 0.1126 |
 | UltraLMD++ (ANSSI'25) | LANL (no dup) | 0.9868 | **0.0088** | — | Rec@10 = 0.1788 |
 | UltraLMD++ | OpTC | 0.9909 | 0.1510 | — | Rec@10 = 0.0623 |
+| CyberGFM (arXiv 2601.05988, gen. 2026) | LANL (split casuale) | 0.9994 | **0.7600** | — | n.d. |
+| CyberGFM | OpTC (split casuale) | 0.9739 | 0.8981 | — | n.d. |
 
 Sono i numeri **auto-dichiarati**. La rivalutazione indipendente a livello di evento
 (Larroche, ANUBIS'26, [2607.29390](https://arxiv.org/abs/2607.29390); 702 eventi malevoli su
 369,6 M) dà su LANL: Euler AUC 0.980 / AP **0.0002** (riportato 0.0523), Argus 0.984 / **0.0009**,
 Pikachu 0.783 / 0.0000. Su OpTC, solo movimento laterale, tutti al caso (AUC 0.43–0.53).
 Nel paper è in `related.tex` con le macro `\LitRe*` di `results.tex`.
+
+**CyberGFM** (King, Trindade, Bowman, Huang; letto il 2026-09-25): encoder BERT (2.57 M parametri)
+preaddestrato a predire token mascherati su cammini casuali del grafo degli host, poi fine-tuning
+di link prediction con negativi casuali, senza label di attacco. Nel loro protocollo Argus fa AP
+0.2279 ed Euler 0.0627 su LANL. Perché lo 0.76 non è confrontabile con noi:
+- split **casuale** 80/10/10 degli edge benigni, non temporale ("This split was infeasible in this
+  case"): una coppia benigna di test può essere già vista in training;
+- nessuna baseline "edge mai visto" sotto quello split: la quota dovuta alla novità non è misurata;
+- **non induttivo** ("a major limitation of our approach is that it is non-inductive"): non valuta
+  host nuovi; in una ZTA device / IP / config nuovi compaiono di continuo;
+- solo AUC e AP, nessun punto operativo; non è spiegato come 1 G di eventi LANL diventino 3 M edge
+  (filtro NTLM "as in prior works").
+Test decisivo non ancora fatto: regola "mai visto" sul loro protocollo LANL, per vedere quanta AP
+fa da sola. Idea utile per l'obiettivo di training: anche loro usano negativi casuali, il guadagno
+viene dal contesto del cammino. Nel paper: `related.tex`, macro `\LitCgfm*` in `results.tex`.
 
 Setup LANL di Euler: 17.685 nodi, 45.871.390 eventi, **518 archi anomali**, 58 giorni,
 snapshot δ = 1800 s, archi (src, dst) deduplicati nella finestra. Prevalenza ~3.6e-5 contro

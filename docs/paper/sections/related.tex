@@ -30,6 +30,16 @@ re-evaluated detector near chance on the lateral-movement events of OpTC. Absolu
 these corpora are therefore not a target to match, and do not transfer to a different
 prevalence or a different decision unit.
 
+\textit{CyberGFM}~\cite{cybergfm} pretrains a transformer encoder on random walks over the
+host graph with a masked-token objective and fine-tunes it for link prediction. It reports an
+average precision of \LitCgfmLanlAp{} on LANL (AUC \LitCgfmLanlAuc{}), against
+\LitCgfmArgusLanlAp{} for \textit{Argus} under the same protocol, and \LitCgfmOptcAp{} on
+OpTC. The protocol departs from the ones above: the benign edges are split at random rather
+than chronologically, a temporal split being infeasible on its corpora according to the
+authors, and the model is non-inductive, so a host unseen in training cannot be scored. No
+unknown-edge baseline is reported under that split, so the share of the figure attributable to
+edge novelty is not measured.
+
 One measurement bounds how far the comparison can be taken. \textit{Euler}~\cite{euler}
 reports that the ``unknown authentication'' rule, which flags any edge absent from the
 training graph, reaches a true positive rate of $72.0\%$ at a false positive rate of $4.4\%$

@@ -1,0 +1,74 @@
+reference = val benign (all), n=19327
+
+attuale (max logit + prec): aggregate AUC=0.843 AP=0.488 rec@FPR1%=0.426 | ties sopra max benigno-val: 1
+   policy        n=  15 AUC=0.922 AP=0.4063 rec@FPR1%=0.733
+   contextual    n=  62 AUC=0.970 AP=0.3761 rec@FPR1%=0.726
+   lateral       n= 169 AUC=0.748 AP=0.0138 rec@FPR1%=0.018
+   theft         n= 249 AUC=0.562 AP=0.0116 rec@FPR1%=0.064
+   exfil         n=  39 AUC=1.000 AP=1.0000 rec@FPR1%=1.000
+   benign-denied n= 622 AUC=0.957 AP=0.6212 rec@FPR1%=0.608
+
+max surprisal emp + prec: aggregate AUC=0.832 AP=0.388 rec@FPR1%=0.348 | ties sopra max benigno-val: 1
+   policy        n=  15 AUC=0.883 AP=0.3041 rec@FPR1%=0.733
+   contextual    n=  62 AUC=0.955 AP=0.2642 rec@FPR1%=0.581
+   lateral       n= 169 AUC=0.824 AP=0.0341 rec@FPR1%=0.166
+   theft         n= 249 AUC=0.638 AP=0.0137 rec@FPR1%=0.032
+   exfil         n=  39 AUC=0.998 AP=0.3750 rec@FPR1%=1.000
+   benign-denied n= 622 AUC=0.888 AP=0.4300 rec@FPR1%=0.450
+
+max surprisal emp+coda + prec: aggregate AUC=0.833 AP=0.423 rec@FPR1%=0.362 | ties sopra max benigno-val: 1
+   policy        n=  15 AUC=0.884 AP=0.3766 rec@FPR1%=0.733
+   contextual    n=  62 AUC=0.956 AP=0.3093 rec@FPR1%=0.597
+   lateral       n= 169 AUC=0.824 AP=0.0377 rec@FPR1%=0.183
+   theft         n= 249 AUC=0.639 AP=0.0169 rec@FPR1%=0.072
+   exfil         n=  39 AUC=1.000 AP=1.0000 rec@FPR1%=1.000
+   benign-denied n= 622 AUC=0.889 AP=0.4732 rec@FPR1%=0.453
+
+max robust-z + prec: aggregate AUC=0.743 AP=0.133 rec@FPR1%=0.144 | ties sopra max benigno-val: 1
+   policy        n=  15 AUC=0.777 AP=0.0026 rec@FPR1%=0.200
+   contextual    n=  62 AUC=0.798 AP=0.0043 rec@FPR1%=0.032
+   lateral       n= 169 AUC=0.831 AP=0.0282 rec@FPR1%=0.166
+   theft         n= 249 AUC=0.668 AP=0.0369 rec@FPR1%=0.124
+   exfil         n=  39 AUC=1.000 AP=1.0000 rec@FPR1%=1.000
+   benign-denied n= 622 AUC=0.726 AP=0.0411 rec@FPR1%=0.101
+reference = val benign (clean), n=18771
+
+attuale (max logit + prec): aggregate AUC=0.843 AP=0.488 rec@FPR1%=0.426 | ties sopra max benigno-val: 1
+   policy        n=  15 AUC=0.922 AP=0.4063 rec@FPR1%=0.733
+   contextual    n=  62 AUC=0.970 AP=0.3761 rec@FPR1%=0.726
+   lateral       n= 169 AUC=0.748 AP=0.0138 rec@FPR1%=0.018
+   theft         n= 249 AUC=0.562 AP=0.0116 rec@FPR1%=0.064
+   exfil         n=  39 AUC=1.000 AP=1.0000 rec@FPR1%=1.000
+   benign-denied n= 622 AUC=0.957 AP=0.6212 rec@FPR1%=0.608
+
+max surprisal emp + prec: aggregate AUC=0.839 AP=0.396 rec@FPR1%=0.356 | ties sopra max benigno-val: 1
+   policy        n=  15 AUC=0.887 AP=0.3095 rec@FPR1%=0.800
+   contextual    n=  62 AUC=0.961 AP=0.2736 rec@FPR1%=0.597
+   lateral       n= 169 AUC=0.823 AP=0.0335 rec@FPR1%=0.166
+   theft         n= 249 AUC=0.636 AP=0.0133 rec@FPR1%=0.036
+   exfil         n=  39 AUC=0.998 AP=0.3545 rec@FPR1%=1.000
+   benign-denied n= 622 AUC=0.901 AP=0.4408 rec@FPR1%=0.461
+
+max surprisal emp+coda + prec: aggregate AUC=0.839 AP=0.435 rec@FPR1%=0.378 | ties sopra max benigno-val: 1
+   policy        n=  15 AUC=0.887 AP=0.3922 rec@FPR1%=0.800
+   contextual    n=  62 AUC=0.961 AP=0.3278 rec@FPR1%=0.613
+   lateral       n= 169 AUC=0.823 AP=0.0370 rec@FPR1%=0.183
+   theft         n= 249 AUC=0.637 AP=0.0163 rec@FPR1%=0.076
+   exfil         n=  39 AUC=1.000 AP=1.0000 rec@FPR1%=1.000
+   benign-denied n= 622 AUC=0.901 AP=0.4916 rec@FPR1%=0.479
+
+max robust-z + prec: aggregate AUC=0.748 AP=0.137 rec@FPR1%=0.152 | ties sopra max benigno-val: 1
+   policy        n=  15 AUC=0.784 AP=0.0027 rec@FPR1%=0.267
+   contextual    n=  62 AUC=0.806 AP=0.0047 rec@FPR1%=0.032
+   lateral       n= 169 AUC=0.831 AP=0.0281 rec@FPR1%=0.166
+   theft         n= 249 AUC=0.667 AP=0.0368 rec@FPR1%=0.124
+   exfil         n=  39 AUC=1.000 AP=1.0000 rec@FPR1%=1.000
+   benign-denied n= 622 AUC=0.736 AP=0.0449 rec@FPR1%=0.116
+
+attuale (max logit + prec)
+  CLEAN (benign n=37725): policy(n=15) AP=0.418 rec@1%=0.733 | lateral(n=150) AP=0.013 rec@1%=0.020 | theft(n=240) AP=0.012 rec@1%=0.075 | exfil(n=37) AP=1.000 rec@1%=1.000 | benign-denied(n=603) AP=0.630 rec@1%=0.665
+  DIRTY (benign n=1119): contextual(n=60) AP=0.664 rec@1%=0.500 | lateral(n=19) AP=0.026 rec@1%=0.000 | theft(n=9) AP=0.011 rec@1%=0.000 | benign-denied(n=19) AP=0.777 rec@1%=0.737
+
+max surprisal emp+coda + prec
+  CLEAN (benign n=37725): policy(n=15) AP=0.405 rec@1%=0.800 | lateral(n=150) AP=0.039 rec@1%=0.200 | theft(n=240) AP=0.017 rec@1%=0.079 | exfil(n=37) AP=1.000 rec@1%=1.000 | benign-denied(n=603) AP=0.488 rec@1%=0.471
+  DIRTY (benign n=1119): contextual(n=60) AP=0.628 rec@1%=0.467 | lateral(n=19) AP=0.041 rec@1%=0.053 | theft(n=9) AP=0.011 rec@1%=0.000 | benign-denied(n=19) AP=0.726 rec@1%=0.684

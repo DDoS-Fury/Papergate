@@ -173,6 +173,12 @@
 \newcommand{\LitEulerPrec}{0.0054}    % precision at the paper's operating point
 \newcommand{\LitGfmAuc}{0.987}        % graph foundation model (UltraLMD++), dedup. LANL
 \newcommand{\LitGfmAp}{0.0088}
+% CyberGFM (arXiv 2601.05988), random (non-temporal) 80/10/10 split of the benign edges,
+% link-prediction fine-tuning, static walks (Table 5 of the paper).
+\newcommand{\LitCgfmLanlAuc}{0.999}
+\newcommand{\LitCgfmLanlAp}{0.760}
+\newcommand{\LitCgfmOptcAp}{0.898}
+\newcommand{\LitCgfmArgusLanlAp}{0.228}  % Argus under the CyberGFM protocol
 % Independent event-level re-evaluation, Larroche (ANUBIS'26), LANL, same detectors.
 \newcommand{\LitReEulerAp}{$2\times10^{-4}$}
 \newcommand{\LitReArgusAp}{$9\times10^{-4}$}
