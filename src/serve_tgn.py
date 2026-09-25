@@ -2,20 +2,22 @@
 
 This module is the single source of truth for the *real-time* code path.
 
-Relationship to the offline evaluation: ``train_tgn._replay`` does **not** call these
-primitives — it is an independent vectorised re-implementation that scores a block of
-events against one shared neighbour expansion. What ties the two together is a checked
-equivalence, not shared code: ``tests/verify_replay_batching.py`` replays the same stream
-through ``infer_logit`` / ``update_memory`` event by event and asserts agreement with
-``_replay(batch_size=1)`` to 1e-5, on both the v4 five-edge chain and the legacy v3 one.
-Treat that harness as part of the contract: any change to one path must keep it green.
+Relationship to the offline evaluation: ``train_tgn._replay`` and :func:`score_event` share
+the fused scorer :func:`chain_logits` (one neighbour expansion + GNN forward for all edges
+of a block of events, scored per edge group); ``_replay`` re-implements the commits in batch.
+:func:`infer_logit` / :func:`update_memory` stay as the independent per-edge reference:
+``tests/verify_replay_batching.py`` replays the same stream through them event by event and
+asserts agreement with ``_replay(batch_size=1)`` to 1e-5, on both the v4 five-edge chain and
+the legacy v3 one, and ``tests/test_fusion_parity.py`` does the same for ``score_event``.
+Treat both harnesses as part of the contract: any change to one path must keep them green.
 
 One divergence is deliberate and is *not* a bug: the offline replay commits on the
 OPA-ALLOW proxy (``not signal_dirty``), whereas :func:`score_event` with ``update=True``
 commits on the model's own score. See the ``_replay`` docstring for why measuring under
 the OPA-in-the-loop gate is the conservative choice.
 
-- :func:`infer_logit` — score one event (read memory, no mutation).
+- :func:`infer_logit` — score one edge (read memory, no mutation); the per-edge reference.
+- :func:`chain_logits` — score all edges of a block of events from one shared expansion.
 - :func:`update_memory` — commit one event into the TGN memory.
 - :func:`score_event`  — the high-level online API: map external entity keys
   through a :class:`NodeRegistry`, score, and update memory **only for events that
@@ -148,6 +150,48 @@ def infer_logit(model, src_idx: int, dst_idx: int, t_val: int, msg_vec, device,
         n_id, edge_index, hist_t, hist_msg, assoc[b_src], assoc[b_dst], b_msg, delta_t, delta_t_src, hist_feats
     ).squeeze(-1)
     return -float(out.item())
+
+
+@torch.no_grad()
+def chain_logits(model, groups, t, device) -> torch.Tensor:
+    """Per-event anomaly logit: the max over the event's edges, from one shared expansion.
+
+    ``groups`` lists the edge groups of a block of ``B`` events, one row per event, as
+    ``(src, dst, msg, aux_src)``: global node-id tensors ``[B]``, the ``[B, msg_dim]`` edge
+    messages, and the ``aux_src`` ids for the second history triplet (``None`` zero-pads it,
+    see ``compute_hist_feats``). ``t`` holds the ``[B]`` event times. Returns ``[B]``
+    anomaly logits (``-logit P(benign)``, see :func:`infer_logit`).
+
+    One neighbour expansion over all endpoints and one GNN forward replace one of each per
+    edge. Exact: an endpoint's embedding depends only on its own k-hop neighbourhood, which
+    the shared expansion contains in full. Equality with per-edge :func:`infer_logit` is
+    checked by ``tests/verify_replay_batching.py`` (offline replay) and
+    ``tests/test_fusion_parity.py`` (``score_event``).
+
+    Each group is still scored in its own ``model.score`` call. Concatenating them is the
+    same maths, but it changes the row count of the time encoder's ``Linear(1, T)``, whose
+    kernel path (FMA or not) then rounds ``w·Δt`` differently; at the never-seen sentinel
+    ``Δt = delta_t_cap`` the argument of the cosine reaches ~1e5 rad, where one float32 ulp
+    is ~0.06 rad, so the logit moved by ~1e-4 against the per-edge reference.
+    """
+    srcs = torch.cat([g[0] for g in groups])
+    dsts = torch.cat([g[1] for g in groups])
+    n_id, edge_index, hist_t, hist_msg = model.neighbor_loader(torch.cat([srcs, dsts]).unique())
+    z = model.embed(n_id, edge_index, hist_t, hist_msg)
+    assoc = model.neighbor_loader._assoc
+    nf, h_idx = model.node_feat[n_id], model.node_hash[n_id]
+    t_list = t.tolist()
+    out = None
+    for src, dst, msg, aux in groups:
+        s_list, d_list = src.tolist(), dst.tolist()
+        d_pair = model.pair_delta_t(s_list, d_list, t_list, device)
+        d_src = model.src_delta_t(src, t, device)
+        hist = model.compute_hist_feats(
+            s_list, d_list, device, aux_src_ids=None if aux is None else aux.tolist()
+        )
+        logit = -model.score(z, nf, h_idx, assoc[src], assoc[dst], msg, d_pair, d_src, hist)
+        out = logit if out is None else torch.maximum(out, logit)
+    return out
 
 
 @torch.no_grad()
@@ -425,24 +469,20 @@ def score_event(
     # Causal chain source → config → device → user → resource, plus config → user.
     # The config node is always present; device / source bindings are skipped if absent
     # (config → user then bridges the chain when the device is missing).
-    edge_logits = [
-        infer_logit(model, user_idx, dst_idx, timestamp, features, device,
-                    aux_src_idx=device_idx),
-        infer_logit(model, config_idx, user_idx, timestamp, features_bind, device),
-    ]
-    if device_idx is not None:
-        edge_logits.append(
-            infer_logit(model, config_idx, device_idx, timestamp, features_bind, device)
-        )
-        edge_logits.append(
-            infer_logit(model, device_idx, user_idx, timestamp, features_bind, device)
-        )
-    if source_idx is not None:
-        edge_logits.append(
-            infer_logit(model, source_idx, config_idx, timestamp, features_bind, device)
-        )
+    def _ids(idx):
+        return torch.tensor([idx], dtype=torch.long, device=device)
 
-    raw_logit = max(edge_logits)
+    msg = torch.as_tensor(features, dtype=torch.float, device=device).reshape(1, -1)
+    zeros = torch.zeros_like(msg)
+    b_user, b_cfg = _ids(user_idx), _ids(config_idx)
+    b_dev = None if device_idx is None else _ids(device_idx)
+    groups = [(b_user, _ids(dst_idx), msg, b_dev), (b_cfg, b_user, zeros, None)]
+    if b_dev is not None:
+        groups += [(b_cfg, b_dev, zeros, None), (b_dev, b_user, zeros, None)]
+    if source_idx is not None:
+        groups.append((_ids(source_idx), b_cfg, zeros, None))
+
+    raw_logit = float(chain_logits(model, groups, _ids(int(timestamp)), device))
     # Kill-chain precursor prior — keyed on the DEVICE node (if present), else on USER
     boost_idx = device_idx if device_idx is not None else user_idx
     score = float(anomaly_score(raw_logit + precursor_shift(model, boost_idx, timestamp)))

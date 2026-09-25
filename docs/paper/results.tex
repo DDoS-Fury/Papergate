@@ -162,3 +162,17 @@
 \newcommand{\PicoModelCtxAuc}{0.681}
 \newcommand{\PicoModelCtxAp}{0.073}
 \newcommand{\PicoModelCtxN}{397}  % test-split-only count; 15 of \PicoNctx fall in val
+
+% -------------------------------------------------------------------------------------
+% BLOCK 4 — LITERATURE (not measured here). Values as printed in the cited papers; kept
+% here so that no literal figure lives in sections/ (see `make check`).
+% -------------------------------------------------------------------------------------
+% Self-reported on LANL.
+\newcommand{\LitEulerAuc}{0.991}      % Euler (NDSS'22), GCN+GRU
+\newcommand{\LitEulerAp}{0.052}
+\newcommand{\LitEulerPrec}{0.0054}    % precision at the paper's operating point
+\newcommand{\LitGfmAuc}{0.987}        % graph foundation model (UltraLMD++), dedup. LANL
+\newcommand{\LitGfmAp}{0.0088}
+% Independent event-level re-evaluation, Larroche (ANUBIS'26), LANL, same detectors.
+\newcommand{\LitReEulerAp}{$2\times10^{-4}$}
+\newcommand{\LitReArgusAp}{$9\times10^{-4}$}

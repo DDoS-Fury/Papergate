@@ -8,7 +8,10 @@ authentication events is an established approach. \textit{Euler}~\cite{euler} co
 a graph neural network with a recurrent encoder over discrete snapshots of a
 host-to-host authentication graph and detects red-team activity on LANL~\cite{lanl}.
 \textit{Argus}~\cite{argus} reports comparable performance on the same corpus and is
-treated as a standard baseline in subsequent literature. \textit{LMDetect}~\cite{lmdetect}
+treated as a standard baseline in subsequent literature. \textit{Jbeil}~\cite{jbeil} replaces
+snapshots with a continuous-time encoder over the LANL authentication events, targets
+inductive link prediction on unseen nodes, and augments training with synthetic threat
+samples. \textit{LMDetect}~\cite{lmdetect}
 classifies time-aware subgraphs extracted around each authentication event over a
 heterogeneous multigraph. A recent \textit{graph foundation model}~\cite{gfm} pretrains
 on host-to-host structure and reports results on both LANL and DARPA OpTC with fixed
@@ -17,11 +20,15 @@ three for evaluation on OpTC) that have become a standard benchmark protocol.
 
 Reported performance on LANL is governed by the base rate of that corpus: 518 anomalous
 edges over 58 days of logs carrying $4.6\times10^{7}$ authentication events. \textit{Euler}
-reports an AUC of $0.991$ with an average precision of $0.052$ and a precision of $0.0054$
-at its operating point; the graph foundation model reports an AUC of $0.987$ with an average
-precision of $0.0088$. Both papers state that AUC is uninformative at this imbalance and
-report average precision alongside it. Absolute figures on that corpus are therefore not a
-target to match, and do not transfer to a different prevalence or a different decision unit.
+reports an AUC of \LitEulerAuc{} with an average precision of \LitEulerAp{} and a precision of
+\LitEulerPrec{} at its operating point; the graph foundation model reports an AUC of \LitGfmAuc{}
+with an average precision of \LitGfmAp{}. Both papers state that AUC is uninformative at this
+imbalance and report average precision alongside it. An independent re-evaluation at the level
+of individual authentication events~\cite{larroche26} lowers the average precision on LANL to
+\LitReEulerAp{} for \textit{Euler} and \LitReArgusAp{} for \textit{Argus}, and places every
+re-evaluated detector near chance on the lateral-movement events of OpTC. Absolute figures on
+these corpora are therefore not a target to match, and do not transfer to a different
+prevalence or a different decision unit.
 
 One measurement bounds how far the comparison can be taken. \textit{Euler}~\cite{euler}
 reports that the ``unknown authentication'' rule, which flags any edge absent from the
@@ -48,9 +55,22 @@ against the snapshot systems above is temporal granularity. \textit{Euler} and s
 a TGN consumes events continuously and updates only the participating entities.
 For a PDP that evaluates per request, the continuous formulation directly satisfies
 real-time operational constraints, as decisions cannot await window closure. Related continuous
-formulations include TGAT~\cite{tgat} and JODIE~\cite{jodie}. TGNs have also
-been applied to anomaly detection over dynamic and provenance graphs, though not
-over a ZTA request stream with an explicit client-configuration node.
+formulations include TGAT~\cite{tgat} and JODIE~\cite{jodie}.
+
+Continuous-time detectors of this family already exist outside the ZTA setting.
+\textit{Kairos}~\cite{kairos} scores the individual events of a provenance stream with a
+temporal graph encoder--decoder and periodically correlates the highly anomalous ones into
+compact attack summary graphs. The system
+closest to the present one is a self-supervised TGN over AWS CloudTrail logs~\cite{cloudtrailtgn}.
+It scores every API event on an account-to-resource graph with a single edge type, carries the
+client user agent as an edge attribute rather than as an entity, and updates its memory with
+the events it observes at inference time; no gating of those updates is described. Its
+evaluation covers five organizations over 60 days without injected attacks, so false negatives
+are not measured. Per-event, self-supervised TGN scoring is therefore not a contribution of this
+work. What differs is the substrate (a 5-node request chain in which the client configuration
+is an entity of its own), the party that decides what enters memory (the external policy
+engine rather than the detector or the raw stream), and an evaluation with ground truth for
+every anomaly class.
 
 \subsection{Zero Trust and policy-driven authorization}
 
@@ -87,7 +107,8 @@ does not replicate the legitimate client TLS parameters.
 
 \subsection{System positioning}
 
-In contrast to prior temporal-graph detectors that consume host-to-host authentication
-snapshots without client context, the present system couples a 5-node request chain with
-an external commit gate, preserving inductive expressiveness on client configurations while
-preventing adversarial drift under streaming execution.
+None of the temporal-graph detectors above represents the client configuration as an
+entity, and none places an external policy engine in the loop that commits events to memory.
+The present system couples a 5-node request chain, inductive on unseen client
+configurations, with an external commit gate designed to keep denied requests out of the
+detector's baseline under streaming execution.

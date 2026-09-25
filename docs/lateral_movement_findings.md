@@ -128,6 +128,12 @@ letteratura: il >90% che circola è l'**AUC**.
 | UltraLMD++ (ANSSI'25) | LANL (no dup) | 0.9868 | **0.0088** | — | Rec@10 = 0.1788 |
 | UltraLMD++ | OpTC | 0.9909 | 0.1510 | — | Rec@10 = 0.0623 |
 
+Sono i numeri **auto-dichiarati**. La rivalutazione indipendente a livello di evento
+(Larroche, ANUBIS'26, [2607.29390](https://arxiv.org/abs/2607.29390); 702 eventi malevoli su
+369,6 M) dà su LANL: Euler AUC 0.980 / AP **0.0002** (riportato 0.0523), Argus 0.984 / **0.0009**,
+Pikachu 0.783 / 0.0000. Su OpTC, solo movimento laterale, tutti al caso (AUC 0.43–0.53).
+Nel paper è in `related.tex` con le macro `\LitRe*` di `results.tex`.
+
 Setup LANL di Euler: 17.685 nodi, 45.871.390 eventi, **518 archi anomali**, 58 giorni,
 snapshot δ = 1800 s, archi (src, dst) deduplicati nella finestra. Prevalenza ~3.6e-5 contro
 la nostra 5.4e-3: **150×**.
@@ -176,10 +182,17 @@ memorizzazione del grafo; `benign_explore_prob` quella scorciatoia l'ha rimossa.
 - [ ] Abbandonare il target ">90% precision e recall". I target realistici sono AP e
       precision a FPR fissato; lo stato dell'arte sta a AP 0.006–0.15.
 - [ ] Riportare sempre AUC **e** AP **e** la prevalenza insieme.
-- [ ] Rivendicare ciò che nessuno di loro riporta: scoring per richiesta in tempo reale,
-      training solo benigno, **tempo alla rilevazione** (mediana 4 eventi / 39 h) e
-      **campagne fermate prima dell'esfiltrazione** (8/29). Metriche native dello streaming,
-      non producibili da una valutazione retrospettiva.
+- [ ] Rivendicare ciò che nessuno di loro riporta: **tempo alla rilevazione** (mediana 4
+      eventi / 39 h) e **campagne fermate prima dell'esfiltrazione** (8/29). Metriche native
+      dello streaming, non producibili da una valutazione retrospettiva. Scoring per evento
+      in tempo reale e training self-supervised **non** sono più rivendicabili: li fa già il
+      TGN su CloudTrail (Nandan et al., WoRMA'26, [2606.28923](https://arxiv.org/abs/2606.28923)),
+      che però aggiorna la memoria con tutti gli eventi e non misura i falsi negativi.
+- [x] Citare Larroche 2026, Jbeil, Kairos e il TGN su CloudTrail; correggere la voce `argus`
+      di `refs.bib` (puntava a Bowman et al., RAID'20); togliere "and measured" dalla riga
+      del gate nella tabella qualitativa. Fatto il 2026-09-25, il documento compila.
+- [ ] Misurare il gate: TGN con commit-all (regime CloudTrail TGN) contro gate OPA e
+      quarantena, stessi pesi, seed di sviluppo. Oggi il paper non quantifica il gate.
 - [ ] Dichiarare le tre differenze che rendono incomparabili i valori assoluti: unità
       (richiesta contro arco deduplicato), prevalenza (150×), difficoltà della discriminante
       banale (11×).
@@ -200,4 +213,5 @@ memorizzazione del grafo; `benign_explore_prob` quella scorciatoia l'ha rimossa.
 
 Fonti: [Euler, NDSS 2022](https://www.ndss-symposium.org/wp-content/uploads/2022-107A-paper.pdf) ·
 [Larroche, ANSSI 2025](https://arxiv.org/abs/2504.13527) ·
+[Larroche, ANUBIS 2026](https://arxiv.org/abs/2607.29390) ·
 [PIKACHU, NOMS 2022](https://ieeexplore.ieee.org/document/9789921/)

@@ -78,11 +78,23 @@ class LinkPredictor(nn.Module):
         )
         self.lin2 = nn.Linear(in_channels, 1)
 
-    def forward(self, z_src, z_dst, msg, feat_src, feat_dst, recency_enc, src_recency_enc, hist_feats):
-        h = torch.cat(
-            [z_src, z_dst, msg, feat_src, feat_dst, recency_enc, src_recency_enc, hist_feats], dim=-1
+    def forward(self, z, feat, src, dst, msg, recency_enc, src_recency_enc, hist_feats):
+        """Logit of each ``src[i] -> dst[i]`` pair; ``z`` / ``feat`` hold one row per endpoint node.
+
+        ``lin1`` is applied by column blocks of its input layout ``[z_src, z_dst, msg, feat_src,
+        feat_dst, recency_enc, src_recency_enc, hist_feats]`` (the state_dict layout, unchanged):
+        the endpoint blocks are projected once per node row and gathered per pair, instead of
+        once per (pair × negative) row. Same value up to float summation order.
+        """
+        c, f, m = z.size(-1), feat.size(-1), msg.size(-1)
+        w_zs, w_zd, w_msg, w_fs, w_fd, w_rest = self.lin1.weight.split(
+            [c, c, m, f, f, self.lin1.in_features - 2 * c - m - 2 * f], dim=1
         )
-        h = self.lin1(h).relu()
+        node_w = torch.cat([torch.cat([w_zs, w_fs], 1), torch.cat([w_zd, w_fd], 1)], 0)
+        h_src, h_dst = F.linear(torch.cat([z, feat], dim=-1), node_w).chunk(2, dim=-1)
+        edge = torch.cat([msg, recency_enc, src_recency_enc, hist_feats], dim=-1)
+        h = F.linear(edge, torch.cat([w_msg, w_rest], 1), self.lin1.bias)
+        h = (h + h_src[src] + h_dst[dst]).relu()
         h = self.lin_mid(h).relu()
         for layer in self.lin_extra:
             h = layer(h).relu()
@@ -319,22 +331,31 @@ class ZTATemporalGraphNetwork(nn.Module):
           * structural head — scaled cosine compatibility of the projected embeddings
             (catches lateral movement: a valid-but-non-habitual src/dst pairing).
         """
-        he = self.hash_emb(h_idx)
+        # Per-node work runs once per distinct endpoint; ``src`` / ``dst`` index those rows.
+        uniq, inv = torch.unique(torch.cat([src_local, dst_local]), return_inverse=True)
+        src, dst = inv[: src_local.numel()], inv[src_local.numel():]
+        z_u = z[uniq]
+        he = self.hash_emb(h_idx[uniq])
         if not self.use_hash_identity:
             he = torch.zeros_like(he)  # ablation: drop the hashed-identity signal
-        feat_with_hash = torch.cat([nf, he], dim=-1)
+        feat_with_hash = torch.cat([nf[uniq], he], dim=-1)
         recency_enc = self.memory.time_enc(delta_t)
         src_recency_enc = self.memory.time_enc(delta_t_src)
         if not self.use_hist_feats:
             hist_feats = torch.zeros_like(hist_feats)  # ablation: drop history features
         feat = self.link_pred(
-            z[src_local], z[dst_local], cur_msg, feat_with_hash[src_local], feat_with_hash[dst_local],
-            recency_enc, src_recency_enc, hist_feats,
+            z_u, feat_with_hash, src, dst, cur_msg, recency_enc, src_recency_enc, hist_feats,
         ).squeeze(-1)
         if not self.use_struct_head:
             return feat  # ablation: feature head only (no structural compatibility head)
-        hs = F.normalize(self.struct_proj(z[src_local]), dim=-1)
-        hd = F.normalize(self.struct_proj(z[dst_local]), dim=-1)
+        if self.training:
+            # struct_proj has Dropout: keep one independent draw per scored row.
+            hs = F.normalize(self.struct_proj(z_u[src]), dim=-1)
+            hd = F.normalize(self.struct_proj(z_u[dst]), dim=-1)
+        else:
+            # Dropout is the identity in eval, so projecting each node once is exact.
+            proj = F.normalize(self.struct_proj(z_u), dim=-1)
+            hs, hd = proj[src], proj[dst]
         struct = self.struct_scale * (hs * hd).sum(-1)
         return feat + struct
 

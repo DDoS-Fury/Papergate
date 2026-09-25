@@ -55,6 +55,7 @@ from graphagate.model.registry import NodeRegistry
 from graphagate.model.tgn import ZTATemporalGraphNetwork, stable_hash
 from graphagate.serve_tgn import (
     anomaly_score,
+    chain_logits,
     precursor_shift,
     record_alert,
     save_model,
@@ -206,48 +207,20 @@ def _replay(model, source_nodes, device_nodes, user, dst, t, msg, y, device, *,
             srcs = src_l[start:end] if has_src else None
             cfgs = cfg_l[start:end] if has_config else None
 
-            # --- Phase 1: one shared neighbour expansion + GNN forward for the whole block.
-            node_parts = [bu, bd]
+            # --- Phase 1: one neighbour expansion + GNN forward for the whole block, scored per
+            # edge group; the event's anomaly logit is the max over its edges (chain_logits).
+            groups = [(bu, bd, bmsg, bdev)]  # access edge (aux src = device)
             if has_bind:
-                node_parts.append(bdev)
-            if has_src:
-                node_parts.append(bsrc)
+                groups.append((bdev, bu, zeros_msg, None))  # device→user
             if has_config:
-                node_parts.append(bcfg)
-            nodes = torch.cat(node_parts).unique()
-            n_id, edge_index, hist_t, hist_msg = model.neighbor_loader(nodes)
-            z = model.embed(n_id, edge_index, hist_t, hist_msg)
-            assoc = model.neighbor_loader._assoc
-            nf = model.node_feat[n_id]
-            h_idx = model.node_hash[n_id]
-
-            def _grp_logit(s_g, d_g, s_list, d_list, msg_g, aux_list):
-                """Anomaly logit (-logit P(benign)) per edge of one group — vectorised infer_logit.
-
-                Logit space, not ``1 - sigmoid``: the probability saturates to exactly 1.0
-                in float32 below logit -16, which both ties the head of the ranking and
-                leaves the precursor prior nowhere to shift to. ``torch.maximum`` is the
-                same fan-in either way (both are monotone in the logit).
-                """
-                d_pair = model.pair_delta_t(s_list, d_list, ts, device)
-                d_src = model.src_delta_t(s_g, bt, device)
-                hist = model.compute_hist_feats(s_list, d_list, device, aux_src_ids=aux_list)
-                logit = model.score(
-                    z, nf, h_idx, assoc[s_g], assoc[d_g], msg_g, d_pair, d_src, hist
-                )
-                return -logit
-
-            raw = _grp_logit(bu, bd, us, ds, bmsg, devs)  # access edge (aux src = device)
-            if has_bind:
-                raw = torch.maximum(raw, _grp_logit(bdev, bu, devs, us, zeros_msg, None))  # device→user
-            if has_config:
-                raw = torch.maximum(raw, _grp_logit(bcfg, bu, cfgs, us, zeros_msg, None))  # config→user
+                groups.append((bcfg, bu, zeros_msg, None))  # config→user
                 if has_bind:
-                    raw = torch.maximum(raw, _grp_logit(bcfg, bdev, cfgs, devs, zeros_msg, None))  # config→device
+                    groups.append((bcfg, bdev, zeros_msg, None))  # config→device
                 if has_src:
-                    raw = torch.maximum(raw, _grp_logit(bsrc, bcfg, srcs, cfgs, zeros_msg, None))  # source→config
+                    groups.append((bsrc, bcfg, zeros_msg, None))  # source→config
             if has_src and has_bind and not has_config:
-                raw = torch.maximum(raw, _grp_logit(bsrc, bdev, srcs, devs, zeros_msg, None))  # legacy source→device
+                groups.append((bsrc, bdev, zeros_msg, None))  # legacy source→device
+            raw = chain_logits(model, groups, bt, device)
             raw_np = raw.detach().cpu().numpy()
             bmsg_rows = bmsg.tolist()
 

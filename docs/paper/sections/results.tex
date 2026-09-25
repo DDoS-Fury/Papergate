@@ -20,41 +20,48 @@ preliminarytrue}; at time of writing that flag is false and it is not shown.
 \centering
 \renewcommand{\arraystretch}{1.5}
 \footnotesize
-\setlength{\tabcolsep}{3pt}
-\begin{tabular}{lccccccc}
+\setlength{\tabcolsep}{2.5pt}
+\begin{tabular}{lcccccccc}
 \toprule
-& \textit{Euler}~\cite{euler} & \textit{Argus}~\cite{argus} & \textit{LMDetect}~\cite{lmdetect} & GFM~\cite{gfm} & Static GNN & IF / OC-SVM & \textit{This work} \\
+& \textit{Euler}~\cite{euler} & \textit{Argus}~\cite{argus} & \textit{LMDetect}~\cite{lmdetect} & GFM~\cite{gfm} & CloudTrail~\cite{cloudtrailtgn} & Static GNN & IF / OC-SVM & \textit{This work} \\
 \midrule
-Substrate            & auth log & auth log & auth log & auth log & ZTA stream & ZTA stream & \textit{ZTA request stream} \\
-Node types           & host & host & host, user & host, user & 5 & --- (tabular) & \textit{5, incl.\ client config} \\
-Client fingerprint node & no & no & no & no & yes & --- & \textit{yes (JA3)} \\
-Temporal granularity & snapshots & snapshots & subgraphs & snapshots & none & none & \textit{continuous, per event} \\
-Recurrent entity memory & via RNN & yes & no & no & no & no & \textit{yes (GRU)} \\
-Inductive on unseen entities & partial & partial & partial & yes & yes & yes & \textit{yes (hashed id.)} \\
-Learning regime      & one-class & one-class & supervised & pretrained & one-class & one-class & \textit{one-class} \\
-Policy engine in the commit loop & no & no & no & no & n/a & n/a & \textit{yes, and measured} \\
-Credential-reuse class evaluable & no & no & no & no & yes & yes & \textit{yes} \\
-Deployable serving artifact & --- & --- & --- & --- & --- & --- & \textit{yes (HTTP)} \\
-Primary evaluation corpus & LANL, OpTC & LANL, OpTC & LANL, OpTC & LANL, OpTC & \multicolumn{3}{c}{synthetic ZTA stream $+$ PicoDomain} \\
+Substrate            & auth log & auth log & auth log & auth log & cloud log & ZTA stream & ZTA stream & \textit{ZTA requests} \\
+Node types           & host & host & host, user & host, user & acct., res. & 5 & tabular & \textit{5, incl.\ config} \\
+Client fingerprint node & no & no & no & no & no & yes & --- & \textit{yes (JA3)} \\
+Temporal granularity & snapshots & snapshots & subgraphs & snapshots & per event & none & none & \textit{per event} \\
+Recurrent entity memory & via RNN & yes & no & no & yes & no & no & \textit{yes (GRU)} \\
+Inductive on new entities & partial & partial & partial & yes & yes & yes & yes & \textit{yes (hashed id.)} \\
+Learning regime      & one-class & one-class & supervised & pretrained & self-sup. & one-class & one-class & \textit{one-class} \\
+Policy-gated memory commit & no & no & no & no & no & n/a & n/a & \textit{yes} \\
+Credential reuse evaluable & no & no & no & no & no & yes & yes & \textit{yes} \\
+Serving artifact & --- & --- & --- & --- & --- & --- & --- & \textit{yes (HTTP)} \\
+Evaluation corpus & LANL, OpTC & LANL, OpTC & LANL, OpTC & LANL, OpTC & private & \multicolumn{3}{c}{synthetic ZTA stream $+$ PicoDomain} \\
 \bottomrule
 \end{tabular}
-\caption{Positioning relative to the temporal-graph lateral-movement literature.
-``Continuous'' denotes events processed sequentially upon arrival rather than aggregated
-into windowed snapshots.}
+\caption{Positioning relative to the temporal-graph detection literature.
+``Per event'' denotes events scored sequentially upon arrival rather than aggregated
+into windowed snapshots; ``config'' is the client TLS configuration (JA3). CloudTrail: the self-supervised TGN over AWS CloudTrail
+logs~\cite{cloudtrailtgn}, evaluated on five private organizations.}
 \label{tab:qualitative}
 \end{table*}
 
 Table~\ref{tab:qualitative} summarizes the positioning against existing systems.
-Reference architectures in the literature operate over host-to-host authentication logs.
-Consequently, they cannot capture adversaries replaying valid credentials from novel
-client configurations, as client fingerprints are omitted from their graph schema.
+Reference architectures in the literature operate over host-to-host authentication logs
+or, in the cloud case, over a single account-to-resource relation. Consequently, they cannot
+capture adversaries replaying valid credentials from novel client configurations as a
+structural anomaly, as client fingerprints are omitted from their graph schema.
 Benchmark corpora like LANL also omit client fingerprints entirely; evaluating the
 architecture on such data requires ablating the configuration node (Section~\ref{sec:external}).
 
-Two operational distinctions separate this protocol from prior work: snapshot models discretize
-streams into fixed time windows, whereas an authorization PDP must evaluate requests
-synchronously upon arrival; and static offline evaluations ignore commit gating, leaving streaming
-models vulnerable to baseline poisoning.
+Per-event streaming scoring does not by itself separate this protocol from prior work: a
+continuous-time TGN already scores each cloud API event on arrival~\cite{cloudtrailtgn}, whereas
+the snapshot models discretize the stream into fixed windows that a PDP cannot wait for. The
+operational distinction is the commit gate. The CloudTrail TGN updates its memory with the
+events it observes at inference time, with no gating of those updates described, and snapshot
+evaluations do not model a commit decision at all; here the external policy engine decides
+which requests enter the detector's baseline. Every TGN result in this paper runs under that
+gate; the effect of the gate against an ungated, commit-everything baseline is not yet
+quantified.
 
 \subsection{Against non-temporal and non-relational baselines}
 

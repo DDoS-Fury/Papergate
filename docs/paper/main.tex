@@ -95,9 +95,9 @@ chronological scoring, and a memory-commit gate driven by an \emph{external} pol
 engine rather than by the model's own verdict. The extra nodes make credential reuse
 from an unfamiliar client tool expressible as an anomalous
 configuration-to-principal binding, a class not representable on a host-to-host
-graph. Complementing the graph schema, the anti-poisoning commit gate prevents
-adversarial baseline drift by advancing entity memory strictly on events admitted by
-external policy. An automated label-leakage audit for the synthetic generator is reported alongside
+graph. Complementing the graph schema, the anti-poisoning commit gate advances entity
+memory strictly on events admitted by external policy, so that denied requests never
+enter the detector's baseline. An automated label-leakage audit for the synthetic generator is reported alongside
 an empirical case study on PicoDomain, where all 5 nodes are grounded in real
 enterprise telemetry, providing JA3 fingerprints alongside Kerberos principals.
 \end{abstract}

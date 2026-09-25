@@ -91,9 +91,18 @@ class MessageNeighborLoader(LastNeighborLoader):
             msg_cat, 1, perm.unsqueeze(-1).expand(-1, -1, self.msg_dim))
 
     def __call__(self, n_id):
+        """k-hop expansion: every node within ``k_hops - 1`` hops contributes its stored edges once.
+
+        The frontier excludes nodes already expanded. Re-expanding them (the pre-2026-09-25
+        behaviour) emitted each of their edges once per visit: the same edge *set* with a uniform
+        per-node multiplicity, which leaves the attention softmax and therefore every embedding
+        unchanged in eval, at up to ``k_hops``× the edge count. In training only the number of
+        attention-dropout draws changes.
+        """
         nodes_list, neighbors_list, hist_t_list, hist_msg_list = [], [], [], []
         current_n_id = n_id
-        
+        expanded = n_id
+
         for _ in range(self.k_hops):
             neighbors = self.neighbors[current_n_id]
             e_id = self.e_id[current_n_id]
@@ -111,8 +120,10 @@ class MessageNeighborLoader(LastNeighborLoader):
             hist_msg_list.append(hist_msg)
             
             current_n_id = neighbors.unique()
+            current_n_id = current_n_id[~torch.isin(current_n_id, expanded)]
             if current_n_id.numel() == 0:
                 break
+            expanded = torch.cat([expanded, current_n_id])
                 
         all_nodes = torch.cat(nodes_list) if nodes_list else torch.empty(0, dtype=torch.long, device=n_id.device)
         all_neighbors = torch.cat(neighbors_list) if neighbors_list else torch.empty(0, dtype=torch.long, device=n_id.device)
