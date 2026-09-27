@@ -39,6 +39,37 @@ mechanisms require buffer scanning for invalidation. While measured serving late
 operational limits ($P_{50} \approx \LatencyPFifty$\,ms, $P_{99} \approx \LatencyPNinetyNine$\,ms),
 deployments serving millions of concurrent entities require distributed cache eviction strategies.
 
+\subsection{Structural head dynamics and cosine collapse}
+\label{sec:limits-struct}
+
+Diagnostic probes on the dual-head architecture reveal that the unconstrained cosine similarity
+structural head ($\gamma \cdot \cos(h_u, h_v)$) converges rapidly during initial training epochs
+toward a stationary alignment state, where normalized projection vectors align closely ($R \approx 0.99$).
+Because the derivative of cosine similarity approaches zero near unity, gradients through the
+projection layer vanish, leaving subsequent parameter updates driven almost entirely by the feature
+head. While the feature head and per-edge calibration provide effective discriminative capacity,
+preventing structural head collapse (e.g., via non-parametric batch normalization or hyperspherical
+uniformity regularization) remains an architectural objective.
+
+\subsection{Per-edge calibration trade-offs}
+
+Calibrating edge anomaly logits against benign empirical quantiles prevents the feature-rich access
+edge from drowning out subtle binding-edge anomalies, substantially improving lateral movement and
+credential reuse detection on binding edges. However, equalizing empirical surprise across heterogeneous
+edge types shifts relative operating sensitivity: classes characterized by massive tabular anomalies on
+the access edge (such as contextual anomalies with invalid TLS ciphers) yield lower relative ranking
+priority compared to uncalibrated scoring. Calibrating per-edge distributions represents a targeted
+design trade-off prioritizing relational attacks over trivially detectable tabular violations.
+
+\subsection{Benign novelty and threshold boundaries}
+
+In open-world environments with active client releases, dynamic IP roaming, and employee onboarding,
+benign non-habitual events account for a substantial share of total traffic. Consequently, false positives
+at stringent operating thresholds (e.g., $1\%$ FPR) are overwhelmingly composed of legitimate novelty
+(such as unfamiliar client fingerprints or first-time device-to-user associations) rather than model
+instabilities. Differentiating authorized exploratory behavior from malicious lateral progression remains
+constrained by the statistical overlap between legitimate novelty and stealthy adversary operations.
+
 \subsection{Commit gate boundary conditions}
 
 As detailed in Section~\ref{sec:problem}, external commit gating admits authorized

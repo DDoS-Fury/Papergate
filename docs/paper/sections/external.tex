@@ -113,10 +113,14 @@ this degradation provides a useful structural ablation, comparing LANL numbers d
 against systems designed exclusively for host authentication logs would evaluate the architecture
 with its core contextual components disabled.
 
-\subsection{Future corpus directions}
+\subsection{Multi-source enterprise datasets: AIT LDS}
 
-Future empirical validation on enterprise-scale data can build upon corpora such as the AIT
-Log Data Set~\cite{ait}, which features multiple testbeds with real network boundaries, diverse
-authentication mechanisms, and packet captures from which TLS fingerprints can be derived.
-Equipping multi-source corpora like AIT with explicit lateral-movement labels is necessary
-to benchmark fine-grained Zero Trust graph architectures at scale.
+Beyond PicoDomain, enterprise validation requires testbeds that capture multi-host enterprise
+topologies, diverse authentication mechanisms, and concurrent packet captures. The AIT Log Data
+Set~\cite{ait} provides multi-host attack scenarios spanning Linux and Windows systems with packet
+captures and system audit logs. In this work, an ingestion pipeline and 5-node schema adapter for
+AIT LDS were developed and released with the codebase (\texttt{tests/datasets/ait\_lds.py} and
+\texttt{tests/eval\_ait\_lds.py}). The adapter extracts packet-level TLS client fingerprints (JA3)
+from Zeek/Suricata logs and pairs them temporally with authentication principals and host attestation
+records. Grounding the 5-node architecture across diverse multi-source telemetry corpora establishes
+that fine-grained Zero Trust graph schemas map directly to heterogeneous production data.

@@ -13,17 +13,36 @@ validated, to eliminate trivial separability shortcuts.
 
 \subsection{The generator}
 
-The generator simulates the chain \textit{ip} $\rightarrow$ \textit{config (JA3)}
+The generator simulates the 5-node request chain \textit{source} $\rightarrow$ \textit{config}
 $\rightarrow$ \textit{device} $\rightarrow$ \textit{user} $\rightarrow$ \textit{resource}
-over a population of users, devices, sources, client configurations, and procedurally
-generated resources, with circadian arrival rates, roaming and NAT, shared devices,
-cookie wipes, periodic service account batch traffic, and benign human error.
-It emits binary anomaly labels, per-class type vectors, and a benign-context bitmask.
-
-Benign principals perform legitimate non-habitual accesses with non-zero
-probability. Without exploratory benign traffic, lateral movement would trivially coincide
-with destination novelty. Introducing legitimate non-habitual access forces the detector
-to discriminate based on relational history and temporal sequences rather than target novelty alone.
+over a dynamic population under open-world conditions (generator v5). Rather than a closed-world
+simulation where entities remain static after an initial warm-up, the generator introduces continuous
+operational churn:
+\begin{itemize}
+  \item \textit{Network origin churn}: A pool of 6\,000 fresh IP addresses is shared identically
+  between legitimate roaming traffic (such as CGNAT and mobile connections) and external adversary
+  egress, preventing IP novelty from acting as an artificial attack indicator.
+  \item \textit{Client fingerprint evolution}: Client application updates periodically release new
+  TLS/JA3 fingerprints that are progressively adopted across the fleet, alongside occasional one-off
+  client tools.
+  \item \textit{Benign hot-desking and shared devices}: Legitimate principals occasionally authenticate
+  from colleague workstations or shared control-room terminals ($20\%$ shared devices, $2\%$ hot-desking),
+  producing legitimate novel device-to-user bindings.
+  \item \textit{Continuous employee onboarding}: New user principals are provisioned continuously
+  mid-stream across both training and testing windows, alongside a steady intake of anonymous visitor
+  entities, requiring continuous inductive generalization.
+  \item \textit{Mimetic credential theft}: Rather than presenting trivial synthetic outliers, adversaries
+  selectively mimic habitual client configurations ($70\%$), egress from known roaming address blocks
+  ($70\%$), and replay active session identifiers ($50\%$).
+  \item \textit{Device tier heterogeneity}: Unmanaged BYOD machines, certificate-enrolled laptops,
+  and TPM-attested workstations are distributed ($35\%$, $40\%$, and $25\%$) so that posture tier
+  alone does not separate attack origins.
+  \item \textit{Benign exploratory access}: Legitimate principals perform authorized but non-habitual
+  accesses with non-zero probability ($15\%$). Without exploratory benign traffic, lateral movement
+  would trivially coincide with destination novelty; legitimate exploration forces the detector to
+  discriminate relational histories and temporal sequences rather than target novelty alone.
+\end{itemize}
+The stream emits binary anomaly labels, per-class type vectors, and a benign-context bitmask.
 
 \subsection{The leakage audit}
 
@@ -83,17 +102,29 @@ per-seed differences is additionally reported, and significance is not claimed f
 
 \subsection{Baselines}
 
-Five baselines are evaluated alongside the model: Isolation Forest, One-Class SVM,
-XGBoost, a static graph neural network (identical graph structure without temporal memory),
-and a standard two-node bipartite TGN (\textit{user} $\rightarrow$ \textit{resource}).
-All baselines receive the same per-event tabular signals as the TGN: the edge message
-features, the static attributes of both endpoints, causal benign-gated interaction
-counters, and the identical precursor prior. The baselines consume these as a flat
-per-event vector for the device actor, so the comparison isolates the specific
-contribution of temporal graph modeling.
-The static GNN isolates the role of recurrent temporal state, while the two-node TGN isolates
-the effect of the 5-node decomposition against conventional bipartite link prediction.
-XGBoost is fully supervised (trained on ground-truth labels) and is included solely as an
-empirical upper-bound reference. For the one-class Isolation Forest, hyperparameters are
-selected on the validation slice by validation AUC (a standard compromise of the one-class
-setting, in which no labels enter the training fit itself).
+The evaluation compares the model against tabular detectors, structural graph baselines, and
+exact stateful rules:
+\begin{itemize}
+  \item \textit{Stateful lookup rules}: A causal rule engine that tracks habitual binding sets
+  ($u \rightarrow r$, $d \rightarrow u$, $c \rightarrow u$, etc.) across the stream. To enforce
+  a fair one-class comparison, the primary rule baseline memorizes ground-truth bindings strictly
+  through the training split; during validation and test replays, its state advances strictly on
+  events admitted by the external policy filter (\texttt{not signal\_dirty}), without access to
+  attack labels. Sensitivity variants include an oracle that memorizes bindings through validation
+  (\texttt{lookup\_rules\_val}) and an unconstrained variant that memorizes all traffic indiscriminately
+  (\texttt{lookup\_rules\_all}).
+  \item \textit{Isolation Forest and One-Class SVM}: Tabular one-class baselines. For Isolation
+  Forest, hyperparameter selection and training strictly enforce a label horizon at validation end
+  to prevent lookahead leakage.
+  \item \textit{Relational and structural baselines}: A static graph neural network (identical 5-node
+  graph topology and features without temporal recurrent memory) isolates the effect of continuous
+  temporal states. A bipartite two-node TGN (\textit{user} $\rightarrow$ \textit{resource}) isolates
+  the 5-node decomposition against conventional bipartite link prediction.
+  \item \textit{Supervised reference}: A fully supervised XGBoost model trained with ground-truth
+  labels serves as an empirical upper bound.
+\end{itemize}
+All baselines receive the same per-event tabular signals as the TGN: edge message features,
+endpoint static attributes, causal benign-gated interaction history counters, and the identical
+precursor prior. The non-graph baselines consume these as a flat per-event vector for the device actor,
+ensuring that performance differences reflect temporal graph representation rather than disparate
+feature inputs.

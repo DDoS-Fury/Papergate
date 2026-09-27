@@ -24,8 +24,10 @@
 \draw[acc]  (u) -- node[below, font=\sffamily\tiny] {access} (r);
 \end{tikzpicture}
 \caption{A single request, 5 edges. Dashed binding edges carry an all-zero message; only the
-access edge carries the event features. The event score is the maximum over its edges.
-The \textit{config}\,$\rightarrow$\,\textit{user} binding is what exposes credential
+access edge carries the event features. Because the access edge and the binding edges operate on
+different logit scales, each edge's raw anomaly logit is calibrated against its benign empirical
+reference before aggregation; the request anomaly score is the maximum over calibrated edge logits.
+The \textit{config}\,$\rightarrow$\,\textit{user} binding exposes credential
 reuse: a familiar principal under an unfamiliar client fingerprint.}
 \label{fig:chain}
 \end{figure}
@@ -40,7 +42,7 @@ reuse: a familiar principal under an unfamiliar client fingerprint.}
   head/.style={draw, rounded corners=2pt, align=center, inner sep=3pt,
                text width=24mm, minimum height=6mm, fill=orange!12},
   ext/.style={draw, rounded corners=2pt, align=center, inner sep=4pt,
-              text width=22mm, minimum height=9mm, fill=red!7},
+               text width=22mm, minimum height=9mm, fill=red!7},
   f/.style={->, >=Stealth, semithick},
   gate/.style={->, >=Stealth, semithick, densely dashed, gray!60!black},
   lbl/.style={font=\sffamily\tiny, align=center}
@@ -63,11 +65,11 @@ reuse: a familiar principal under an unfamiliar client fingerprint.}
 \node[head, below=16mm of enc, xshift=0mm, yshift=-6mm] (sh)
   {\textbf{structural head}\\ scaled $\cos$ $\rightarrow$ logit$_{s}$};
 
-\node[st, left=8mm of fh, yshift=-5mm] (sc)
-  {$a=-(\text{logit}_f{+}\text{logit}_s)$\\[1pt]$+$ \textbf{precursor}\\$\beta\,2^{-\Delta t/\tau}$\\[1pt]$s=\sigma(a)$};
-\node[st, left=6mm of sc] (thr)
+\node[st, text width=26mm, left=6mm of fh, yshift=-5mm] (sc)
+  {$a_e=-(\text{logit}_f{+}\text{logit}_s)$\\[1pt]calib: $\log\frac{1-p_e}{p_e}$\\[1pt]$a=\max_e a_e^{\text{cal}}+\beta\,2^{-\frac{\Delta t}{\tau}}$\\[1pt]$s=\sigma(a)$};
+\node[st, left=5mm of sc] (thr)
   {\textbf{threshold}\\[1pt]cost-sensitive\\(clean FPR cap)};
-\node[ext, left=6mm of thr] (pep) {\textbf{policy engine}\\\textit{external}\\\textit{decision}};
+\node[ext, left=5mm of thr] (pep) {\textbf{policy engine}\\\textit{external}\\\textit{decision}};
 
 \foreach \a/\b in {req/dec, dec/mm, mm/cat, cat/enc, sc/thr}
   \draw[f] (\a) -- (\b);
@@ -89,14 +91,15 @@ reuse: a familiar principal under an unfamiliar client fingerprint.}
 \end{scope}
 
 \end{tikzpicture}
-\caption{Model architecture. The 5 edges of a single request are scored independently and
-the event takes the maximum. Each entity carries a GRU memory that is concatenated with a
-deterministic hashed identity and a static attribute vector, encoded over the last $K$
-temporal neighbours, and scored by two additive heads. The dashed path maintains the
-one-class anti-poisoning protocol: the verdict leaves the model, and the memory
-advances only on events admitted by the external policy engine, rather than relying on
-internal model classifications. Entity slots are allocated on first sight, allowing unseen
-principals, devices, or fingerprints to be scored inductively without retraining.}
+\caption{Model architecture. The 5 edges of a single request are scored over a shared
+temporal neighbour expansion and node embeddings. Each entity carries a GRU memory concatenated
+with a deterministic hashed identity and static attributes, encoded over temporal neighbours by
+a 3-hop graph attention encoder. Edge logits from additive feature and structural heads are
+calibrated against per-edge benign empirical references into log-odds, combined via maximum, shifted
+by the kill-chain precursor prior, and mapped to the anomaly score. The dashed path maintains the
+one-class anti-poisoning protocol: the verdict leaves the model, and the memory advances only on
+events admitted by the external policy engine. Unseen principals, devices, or fingerprints are
+admitted inductively into dynamic memory slots without retraining.}
 \label{fig:arch}
 \end{figure*}
 
@@ -112,8 +115,14 @@ training, offline replay, and serving. When a key is absent, the corresponding e
 skipped and its neighbours bridge: a device-less dataset degrades to
 \textit{config}\,$\rightarrow$\,\textit{user}, and a dataset without client fingerprints
 and device attestation (such as the LANL auth log) degrades to the single
-\textit{user}\,$\rightarrow$\,\textit{resource} access edge. The event score is the maximum over the edges present, so a single anomalous binding
-suffices to flag the request.
+\textit{user}\,$\rightarrow$\,\textit{resource} access edge.
+
+Because the access edge carries 10 dynamic event features while binding edges carry all-zero
+messages, raw anomaly logits across edge types operate on disparate numerical scales. A naive
+maximum would be permanently dominated by the access edge, drowning out anomalies on binding
+edges where lateral movement and credential theft emerge. Instead, edge logits are calibrated
+against benign empirical references (Section~\ref{sec:edge-calib}) before aggregation, ensuring
+that a statistically surprising binding edge reliably flags the request.
 
 The \textit{config} node specifically targets credential theft. An attacker replaying stolen
 credentials issues a request where the principal and target resource may be habitual, but
@@ -127,41 +136,81 @@ Fig.~\ref{fig:arch} illustrates the embedding and scoring pipeline. Each entity 
 recurrent memory vector, updated by a GRU from the messages of the events it participates in
 (memory dimension 256). At scoring time, the memory is concatenated with two additional signals.
 The first is a \textit{hashed identity}: a deterministic BLAKE2b hash of the external entity
-key into a learned embedding table. Determinism is essential to ensure reproducibility across
-process restarts (unlike salted runtime hashing), and hashing preserves inductive capability:
-an entity unseen during training receives a coherent embedding immediately, without retraining
-or vocabulary expansion. The second signal is a static attribute vector (device tier, resource
-sensitivity, network origin, and trust score).
+key into a learned embedding table (dimension 16, 100\,000 buckets). Determinism is essential to ensure
+reproducibility across process restarts (unlike salted runtime hashing), and hashing preserves
+inductive capability: an entity unseen during training receives a coherent embedding immediately,
+without retraining or vocabulary expansion. The second signal is a static attribute vector (device tier,
+resource sensitivity, network origin, and trust score).
 
 The concatenation is passed through a 3-hop graph attention encoder over the entity's
 recent temporal neighbours, with edge attributes formed by concatenating a time encoding
 of $\Delta t$ with historical edge messages. Neighbours are retrieved from a pre-allocated
 in-memory ring buffer storing the last $K{=}30$ temporal neighbours per node, avoiding
-external database queries during streaming inference.
+external database queries during streaming inference. During $k$-hop expansion, the expansion
+frontier excludes nodes already visited, preventing redundant duplicate edges while preserving
+the exact attention softmax.
 
 \subsection{Scoring}
 
-The logit is the sum of the two heads. A \textit{feature head}, parameterized as an MLP over both
-endpoint embeddings, the current message, static attributes, recency encodings, and history
-counters, captures tabular signals and temporal novelty for lateral movement. A \textit{structural head},
-implemented as a scaled cosine similarity between non-linear projections of endpoint embeddings,
-provides a complementary structural affinity signal. The anomaly score is $1 - \sigma(\text{logit})$.
+For each edge, the raw score combines two heads: a \textit{feature head} and a \textit{structural head}.
+The feature head is parameterized as an MLP over both endpoint embeddings, the current message,
+static attributes, recency encodings, and history counters. To minimize inference computation,
+its input linear projection is factorized across distinct endpoint nodes: endpoint representations
+are projected once per unique entity and gathered per edge, rather than recomputed across all edge
+instances. The structural head computes a scaled cosine similarity between non-linear projections
+of the endpoint embeddings ($\gamma \cdot \cos(h_u, h_v)$). During evaluation, structural projections
+are likewise evaluated once per unique entity. The raw anomaly logit for an edge is defined as the
+negative benign logit: $a_e = -(\text{logit}_f + \text{logit}_s)$.
 
 Edge history counters capture interaction frequencies while preventing temporal leakage.
 For each edge, the counters $[\log(1{+}n_{\text{pair}}), \log(1{+}n_{\text{src}}),
 n_{\text{pair}}/(n_{\text{src}}{+}1)]$ are computed, reflecting historical occurrences of the exact pair,
-source activity volume, and their relative ratio. These counters are causal (computed strictly
-from past events) and benign-gated (updated only on admitted requests), ensuring they are
-computable at serving time without target leakage. All baseline models in Section~\ref{sec:results}
-receive the same counter statistics (consumed as a flat per-event vector for the device
-actor) to isolate the contribution of temporal graph modeling from tabular feature
-engineering.
+source activity volume, and their relative ratio. An auxiliary history triplet for the device-resource
+pair is included on the access edge. These counters are causal (computed strictly from past events)
+and benign-gated (updated only on admitted requests), ensuring they are computable at serving time
+without target leakage. All baseline models in Section~\ref{sec:results} receive the same counter
+statistics (consumed as a flat per-event vector for the device actor) to isolate the contribution
+of temporal graph modeling from tabular feature engineering.
 
-Relative time is capped and carries an explicit sentinel for unseen pairs. Without this cap,
-unseen pairs would encode the raw stream timestamp, which monotonically increases over time;
-this would cause representation drift between splits and allow models to exploit temporal
-offsets as a trivial shortcut. The same sentinel logic is shared across training, evaluation,
-and serving.
+Relative time is capped at a maximum horizon ($\Delta t_{\text{cap}} = 7$\,days) and carries an
+explicit sentinel for unseen pairs. Without this cap, unseen pairs would encode the raw stream
+timestamp, which monotonically increases over time; this would cause representation drift between
+splits and allow models to exploit temporal offsets as an artificial shortcut. The same sentinel
+logic is shared across training, evaluation, and serving.
+
+\subsection{Per-edge benign calibration}
+\label{sec:edge-calib}
+
+Raw anomaly logits from different edge types reside on fundamentally distinct baselines: benign access
+edges produce typical anomaly logits around $-10$ ($P(\text{benign}) > 1 - 10^{-4}$), whereas binding
+edges produce baseline logits around $-15$. If an uncalibrated maximum were applied across edges, an
+anomalous binding edge reaching a logit of $-12$ (anomalous relative to its $-15$ baseline) would be
+completely masked by a routine access edge at $-10$.
+
+To align edge distributions without introducing label leakage, each edge type $k \in \{\text{access},
+\text{dev}\rightarrow\text{user}, \text{cfg}\rightarrow\text{user}, \text{cfg}\rightarrow\text{dev},
+\text{src}\rightarrow\text{cfg}\}$ is calibrated against an empirical reference distribution of its
+own benign traffic. During validation calibration (Pass~A), the empirical distribution of raw logits
+is recorded on signal-clean benign events (excluding all attack labels). The reference consists of
+512 quantiles spanning up to quantile $q_{\text{tail}} = 0.99$, extended by an exponential tail fitted
+to exceedances above $q_{\text{tail}}$ to preserve ranking beyond the largest observed benign logit:
+\begin{equation}
+\log p(x) = \log(1 - q_{\text{tail}}) - \frac{x - q_{\text{tail}}}{\lambda}, \quad x > q_{\text{tail}}
+\end{equation}
+where $\lambda$ is the mean exceedance. At evaluation time, each raw logit $x$ is mapped to its
+upper-tail empirical $p$-value $p_k(x) \in (0, 1]$ under its benign reference and converted to
+calibrated log-odds:
+\begin{equation}
+a_k^{\text{cal}} = \log \frac{1 - p_k(x)}{p_k(x)}
+\end{equation}
+The request anomaly logit is the maximum over active calibrated edges:
+\begin{equation}
+a = \max_{k} a_k^{\text{cal}}
+\end{equation}
+On the $p$-value scale, an anomaly across any edge represents equivalent statistical surprise relative
+to its own benign baseline. The event anomaly score is computed as $s = \sigma(a + \Delta a_{\text{prec}})$
+using double-precision logistic evaluation ($\texttt{expit}$) to avoid single-precision saturation
+ties. In the absence of a precursor shift, $s = \sigma(\log\frac{1-p}{p}) = 1 - p$.
 
 \subsection{Kill-chain precursor}
 
@@ -169,38 +218,40 @@ Lateral movement often follows reconnaissance activity that triggers intrusion a
 origin host; however, the commit gate excludes denied precursor events from entity memory.
 To incorporate this temporal context without poisoning graph state, a lightweight
 per-entity alert state is maintained external to the TGN memory, and an exponentially
-decaying prior $\beta\,2^{-\Delta t/\tau}$ is added to the anomaly logit of subsequent events
-from that entity. The prior is additive on the logit because it is a prior on the odds: it
-moves every event by the same evidence in nats wherever it sits on the curve, and being
-bounded by $\beta$ it cannot drive a score to saturation on its own. Scoring is carried in
-logit space for the same reason, as the probability $1-\sigma(\cdot)$ saturates to exactly
-$1$ in single precision below a logit of $-16$, which ties the head of the ranking together
-and leaves the prior no room above it.
+decaying prior is added to the event anomaly logit:
+\begin{equation}
+\Delta a_{\text{prec}} = \beta \cdot 2^{-\Delta t / \tau}
+\end{equation}
+The prior is additive on the logit because it represents a prior on the log-odds: it moves every
+event by the identical evidence in nats across the distribution, and being bounded by $\beta$
+cannot saturate scores on its own. The maximum shift is set to $\beta = 4.0$\,nats, and the half-life
+$\tau$ is set to 72\,hours ($\tau = 259\,200$\,s), matching the empirically measured median
+interval between reconnaissance bursts and lateral movement. The prior is keyed on the originating
+device hardware entity, falling back to the user principal when device attestation is unavailable.
 
-The prior arms on a threshold of its own, lower than the decision threshold. Reconnaissance
-sits below the decision threshold by construction, since otherwise it would already be an
-alert; arming on the decision threshold would therefore let only the sensor flag arm the
-chain. The arming threshold is set to the label-free clean-FPR quantile
-(Section~\ref{sec:calib}); arming feeds the prior alone, while the trust feature and the
-reported decision keep using the decision threshold.
-
-The decay constant $\tau$ is set from the measured delay between reconnaissance and the
-first lateral event on the same host. The two transitions of the kill chain do not share a
-timescale: a $\tau$ that maximises lateral-movement detection degrades credential-theft
-detection and the reverse, so a single decay constant is a compromise rather than a tuned
-optimum. This mechanism operates as an inference-time prior outside the trained parameters,
-as benign-only training would treat sensor flags as inactive.
+The prior arms on a dedicated arming threshold $\theta_{\text{arm}}$, separate from and lower than
+the primary alert threshold. Reconnaissance events frequently present subtle anomalies that lie below
+the decision threshold; arming strictly on the decision threshold would prevent non-alerting
+precursor signals from priming the chain. The arming threshold is set to the label-free clean-FPR
+quantile (Section~\ref{sec:calib}); arming feeds the precursor tracker alone, while external
+authorization and alert reporting retain the calibrated decision threshold.
 
 \subsection{Threshold calibration}
 \label{sec:calib}
 
-The primary threshold (persisted with the model and used by serving) is the
-cost-sensitive threshold, which calibrates operating recall against labeled lateral events in
-the validation window. A label-free variant, a quantile of the signal-clean benign score
-distribution at a target FPR, is recorded in the calibration metadata for deployments without
-red-team labels. Both are computed on a validation replay using the identical commit gate
-protocol as testing, via a two-pass fixed point with runtime snapshot and restoration between
-passes, preventing memory state contamination during threshold estimation.
+Operational thresholds are established via a two-pass validation replay:
+\begin{itemize}
+  \item \textit{Pass A (unthresholded replay)}: The validation stream is replayed with external
+  commit filtering but without score thresholds. Raw edge logits and precursor shifts are recorded
+  on clean benign events to fit the per-edge calibration quantiles and tail models.
+  \item \textit{Pass B (decision threshold calibration)}: The validation stream is replayed with
+  active per-edge calibration under the test commit gate. Thresholds are calibrated using a routed
+  strategy: signal-dirty events (flagged by deterministic rule probes or broken TLS posture) are
+  assigned a conservative FPR threshold, whereas signal-clean events (where lateral movement is
+  distinguishable only through temporal patterns) receive the cost-sensitive recall threshold.
+\end{itemize}
+Runtime state is snapshotted before Pass~A and restored before Pass~B, guaranteeing zero state
+leakage across calibration passes.
 
 \subsection{Serving}
 
@@ -247,10 +298,11 @@ passes, preventing memory state contamination during threshold estimation.
 Inference is exposed as an HTTP service. Per request the flow is: map the 5 keys to
 memory slots, admitting unseen entities dynamically; expand temporal neighbourhoods;
 embed; score; return the verdict to the orchestrator, which consults the policy engine
-and calls back to commit or not. Measured end-to-end latency is
-$P_{50} \approx \LatencyPFifty$\,ms and $P_{99} \approx \LatencyPNinetyNine$\,ms
-(\prelimnote, Fig.~\ref{fig:latency_cdf}), each request performing 5 neighbourhood expansions and 5 encoder
-forward passes.
+and calls back to commit or not. In the initial prototype, each request executed 5 sequential
+neighbour expansions and GNN passes, achieving $P_{50} \approx \LatencyPFifty$\,ms and
+$P_{99} \approx \LatencyPNinetyNine$\,ms (\prelimnote, Fig.~\ref{fig:latency_cdf}). In the
+optimized runtime, endpoint expansions and GNN embeddings are fused into a single pass over
+the request's unique entities, followed by factorized edge scoring and per-edge calibration.
 
 Offline evaluation employs a vectorized implementation that scores batches against
 start-of-batch memory snapshots for computational efficiency. Parity between the offline

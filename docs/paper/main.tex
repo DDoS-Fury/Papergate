@@ -88,9 +88,9 @@ substrate, not the task, is where the remaining headroom lies. A Zero Trust poli
 decision point observes strictly more than a host-to-host authentication log: for
 every request it sees the client network origin, the client's TLS configuration
 fingerprint, the device posture identity, the authenticated principal, and the
-requested asset. The substrate is modelled as a 5-node causal chain per request, and
-a Temporal Graph Network is evaluated over it under an operational streaming
-protocol: one-class training on benign traffic only, event-by-event
+requested asset. The substrate is modelled as a 5-node causal chain per request with per-edge benign
+calibration to normalize heterogeneous edge baselines, and a Temporal Graph Network is evaluated
+over it under an operational streaming protocol: one-class training on benign traffic only, event-by-event
 chronological scoring, and a memory-commit gate driven by an \emph{external} policy
 engine rather than by the model's own verdict. The extra nodes make credential reuse
 from an unfamiliar client tool expressible as an anomalous

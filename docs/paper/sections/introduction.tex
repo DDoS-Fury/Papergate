@@ -31,12 +31,13 @@ no node to capture that discrepancy.
 \subsection*{Contributions}
 
 \begin{enumerate}
-  \item \textit{A 5-node causal chain per request.} Each ZTA access is decomposed
-  into \textit{source} $\rightarrow$ \textit{config} $\rightarrow$ \textit{device}
+  \item \textit{A 5-node causal chain per request with per-edge calibration.} Each ZTA access
+  is decomposed into \textit{source} $\rightarrow$ \textit{config} $\rightarrow$ \textit{device}
   $\rightarrow$ \textit{user} $\rightarrow$ \textit{resource}, with an explicit
-  \textit{config}\,$\rightarrow$\,\textit{user} binding edge. The \textit{config}
-  node, keyed by the client TLS fingerprint (JA3), enables detection of credential reuse
-  from an unfamiliar tool as a structural anomaly (Section~\ref{sec:approach}).
+  \textit{config}\,$\rightarrow$\,\textit{user} binding edge. Heterogeneous edge anomaly logits
+  are calibrated against benign empirical references before aggregation, enabling detection of
+  credential reuse from an unfamiliar tool as a structural anomaly without being drowned out by
+  access traffic (Section~\ref{sec:approach}).
 
   \item \textit{An external policy-driven commit gate.} To mitigate self-poisoning
   in streaming settings, entity memory and temporal neighbourhoods advance only on
@@ -51,9 +52,10 @@ no node to capture that discrepancy.
 
   \item \textit{An external-validity study on real enterprise telemetry.} A survey of
   public cybersecurity datasets identifies the absence of corpora uniting user identity
-  and TLS fingerprints. On PicoDomain~\cite{picodomain}, the only corpus providing both,
-  the schema adapter is implemented, session-binding coverage is quantified, and
-  transferability is evaluated (Section~\ref{sec:external}).
+  and TLS fingerprints. On PicoDomain~\cite{picodomain}, the schema adapter is implemented,
+  session-binding coverage is quantified, and transferability is evaluated; an adapter for
+  multi-host enterprise telemetry from the AIT Log Data Set~\cite{ait} is released alongside
+  (Section~\ref{sec:external}).
 \end{enumerate}
 
 Section~\ref{sec:related} positions the work against the temporal-graph lateral

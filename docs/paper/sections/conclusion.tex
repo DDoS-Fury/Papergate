@@ -6,12 +6,14 @@ execution context available at Zero Trust policy decision points. Decomposing re
 5-node relational chain with an explicit client-configuration node enables detection of
 credential reuse from unfamiliar tools as a structural anomaly.
 
-Two broader deployment principles emerge from the streaming evaluation. First, streaming
+Three broader deployment principles emerge from the streaming evaluation. First, streaming
 memory updates must be decoupled from the detector's own predictions through an external
-commit gate to prevent runaway baseline drift and adversarial poisoning. Second, synthetic
-security benchmarks require systematic leakage audits to prevent models from exploiting
-unconstrained synthetic artifacts. On the verified benchmark, the 5-node TGN exceeds
-the single-feature baseline floor on lateral movement under one-class training.
+commit gate to prevent runaway baseline drift and adversarial poisoning. Second, heterogeneous
+edge representations require per-edge benign calibration before aggregation to prevent feature-rich
+access edges from drowning out stealthy binding-edge anomalies. Third, synthetic security benchmarks
+require systematic leakage audits to prevent models from exploiting unconstrained synthetic artifacts.
+On the verified benchmark, the 5-node TGN exceeds the single-feature baseline floor on lateral
+movement under one-class training.
 
 \ifpreliminary
 The immediate priority is completing reproduction runs: every quantitative claim in this draft
@@ -19,9 +21,9 @@ predates generator de-leakage and must be reproduced on the verified generator b
 \else
 Future work spans three operational directions.
 \fi
-First, evaluating the architecture across multi-source enterprise testbeds such as the AIT
-corpus will test cross-environment generalization with packet-derived TLS fingerprints.
-Second, evaluating bipartite degradation on traditional benchmarks like LANL under standardized
-community splits provides a direct baseline for the incremental utility of fine-grained contextual
-nodes. Finally, evaluating distributed state-eviction schemes for millions of concurrent entities
-remains an immediate step for enterprise-scale serving.
+First, validating the architecture across multi-source enterprise testbeds using the released AIT LDS
+adapter will test cross-environment generalization with packet-derived TLS fingerprints under varied
+attack scenarios. Second, evaluating bipartite degradation on traditional benchmarks like LANL under
+standardized community splits provides a direct baseline for the incremental utility of fine-grained
+contextual nodes. Finally, evaluating distributed state-eviction schemes for millions of concurrent
+entities remains an immediate step for enterprise-scale serving.
