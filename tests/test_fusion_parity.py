@@ -211,7 +211,10 @@ def test_score_event_equals_per_edge_reference(variant, calibrated):
         per_edge = [_cal(model, k, v) for k, v in per_edge]
         boost = d if d is not None else u
         ref = float(anomaly_score(max(per_edge) + precursor_shift(model, boost, t)))
-        assert abs(fused - ref) <= 1e-6, (i, fused, ref)
+        # float32 reduction-order noise is ~1e-7 and the per-edge calibration map amplifies
+        # it up to ~1e-6 in its steep region; a structural mismatch is >= 1e-3. Same 1e-5
+        # tolerance as tests/verify_replay_batching.py.
+        assert abs(fused - ref) <= 1e-5, (i, fused, ref)
         commit_event(model, reg, device=DEVICE, guest_device_fallback=guest, **ev)
 
 

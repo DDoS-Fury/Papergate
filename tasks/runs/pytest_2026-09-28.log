@@ -1,0 +1,30 @@
+            per_edge = [
+                (EDGE_ACCESS, infer_logit(model, u, r, t, ev["features"], DEVICE, aux_src_idx=d)),
+                (EDGE_CFG_USER, infer_logit(model, c, u, t, zeros, DEVICE)),
+            ]
+            if d is not None:
+                per_edge += [(EDGE_CFG_DEV, infer_logit(model, c, d, t, zeros, DEVICE)),
+                             (EDGE_DEV_USER, infer_logit(model, d, u, t, zeros, DEVICE))]
+            if s is not None:
+                per_edge.append((EDGE_SRC_CFG, infer_logit(model, s, c, t, zeros, DEVICE)))
+            per_edge = [_cal(model, k, v) for k, v in per_edge]
+            boost = d if d is not None else u
+            ref = float(anomaly_score(max(per_edge) + precursor_shift(model, boost, t)))
+>           assert abs(fused - ref) <= 1e-6, (i, fused, ref)
+E           AssertionError: (34, 0.37074787512942403, 0.3707467761665761)
+E           assert 1.0989628479451952e-06 <= 1e-06
+E            +  where 1.0989628479451952e-06 = abs((0.37074787512942403 - 0.3707467761665761))
+
+tests\test_fusion_parity.py:214: AssertionError
+=========================== short test summary info ===========================
+SKIPPED [1] tests\test_picodomain_mapping.py:43: PicoDomain not present; set PICO_LOGS / PICO_REDLOG (see module docstring)
+SKIPPED [1] tests\test_picodomain_mapping.py:54: PicoDomain not present; set PICO_LOGS / PICO_REDLOG (see module docstring)
+SKIPPED [1] tests\test_picodomain_mapping.py:60: PicoDomain not present; set PICO_LOGS / PICO_REDLOG (see module docstring)
+SKIPPED [1] tests\test_picodomain_mapping.py:78: PicoDomain not present; set PICO_LOGS / PICO_REDLOG (see module docstring)
+SKIPPED [1] tests\test_picodomain_mapping.py:84: PicoDomain not present; set PICO_LOGS / PICO_REDLOG (see module docstring)
+SKIPPED [1] tests\test_picodomain_mapping.py:94: PicoDomain not present; set PICO_LOGS / PICO_REDLOG (see module docstring)
+SKIPPED [1] tests\test_picodomain_mapping.py:105: PicoDomain not present; set PICO_LOGS / PICO_REDLOG (see module docstring)
+SKIPPED [1] tests\test_picodomain_mapping.py:117: PicoDomain not present; set PICO_LOGS / PICO_REDLOG (see module docstring)
+SKIPPED [1] tests\test_picodomain_mapping.py:122: PicoDomain not present; set PICO_LOGS / PICO_REDLOG (see module docstring)
+FAILED tests/test_fusion_parity.py::test_score_event_equals_per_edge_reference[full-True]
+1 failed, 147 passed, 9 skipped in 64.08s (0:01:04)
