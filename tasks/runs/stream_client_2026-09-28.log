@@ -1,0 +1,29 @@
+ Container graphagate-serve-tgn Running 
+ Container graphagate-serve-tgn Waiting 
+ Container graphagate-serve-tgn Healthy 
+ Container papergate-test-ablation-run-c2682b8bdfcb Creating 
+ Container papergate-test-ablation-run-c2682b8bdfcb Created 
+[codecarbon INFO @ 19:11:36] offline tracker init
+[codecarbon WARNING @ 19:11:36] Multiple instances of codecarbon are allowed to run at the same time.
+Starting test client for 120 seconds against http://serve-tgn:8088 (no_device=False)...
+[Generator] Resuming at t=26370514 (after 200000 warmup steps)
+Test finished. Generating report...
+==================================================
+TEST CLIENT REPORT
+==================================================
+Total Events Processed: 9886
+Power Consumed: 0.004666 kWh (0.001543 kg CO2)
+RAM Usage: 16.2%
+VRAM Usage: 2447.2 MB / 16303.0 MB
+Latency (ms) - P50: 7.96 | P90: 9.00 | P99: 9.66
+Overall Accuracy: 96.87%
+Anomalies - Precision: 0.5862 | Recall: 0.1574 | F1 Score: 0.2482
+
+Accuracy by Event Type (Recall for anomalies, Specificity for benign):
+ - Benign: 9526/9562 (99.62%)
+ - Policy: 2/5 (40.00%)
+ - Contextual: 3/18 (16.67%)
+ - Lateral: 1/66 (1.52%)
+ - CredTheft: 1/81 (1.23%)
+ - BenignDenied: 44/154 (28.57%)
+==================================================
