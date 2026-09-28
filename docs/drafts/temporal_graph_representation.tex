@@ -1,0 +1,253 @@
+% =====================================================================================
+% Section: Temporal Graph Representation (standalone)
+%
+% Required in the preamble:
+%   \usepackage{amsmath,amssymb,booktabs,tikz}
+%   \usetikzlibrary{arrows.meta,positioning}
+%
+% Citation keys used (entries in docs/paper/refs.bib, to copy into the paper's .bib):
+%   nist800207, jodie, tgat, tgn, euler, lanl, cloudtrailtgn, ja3
+%
+% Labels defined: sec:tgr, sec:tgr-nodes, sec:tgr-unroll, sec:tgr-attr, sec:tgr-state,
+%   fig:tgr-chain, tab:tgr-nodes, eq:tgr-event, eq:tgr-graph, eq:tgr-unroll,
+%   eq:tgr-recency, eq:tgr-memory
+% =====================================================================================
+
+\section{Temporal Graph Representation}
+\label{sec:tgr}
+
+A Zero Trust policy decision point (PDP)~\cite{nist800207} evaluates every access
+request in its full context: the network the request comes from, the client software
+that issues it, the device it runs on, the identity it presents and the asset it
+targets. We represent the stream of requests as a continuous-time dynamic
+graph~\cite{jodie,tgn}, in which each entity is a node whose state evolves over time and
+each request adds a small set of timestamped edges. Existing temporal graph detectors
+model either host-to-host authentication events, as Euler does on the LANL
+data~\cite{euler,lanl}, or account-to-resource interactions in cloud
+logs~\cite{cloudtrailtgn}. Both reduce the request context to two endpoints. Our representation keeps the five entities observed by the
+PDP as distinct typed nodes. Relations such as ``this principal has never been used
+from this client'' thus become edges of the graph instead of being lost inside a
+feature vector.
+
+\subsection{Access requests as a dynamic graph}
+
+The PDP receives requests in arrival order. Request $i$ is the tuple
+\begin{equation}
+  e_i = \left(t_i,\; s_i,\; c_i,\; d_i,\; u_i,\; r_i,\; \mathbf{m}_i\right),
+  \label{eq:tgr-event}
+\end{equation}
+where $t_i$ is the arrival time, $s_i$ the client network source, $c_i$ the client TLS
+configuration, $d_i$ the device, $u_i$ the authenticated principal, $r_i$ the requested
+resource and $\mathbf{m}_i \in \mathbb{R}^{7}$ a vector of request attributes
+(Section~\ref{sec:tgr-attr}). The graph is heterogeneous. Its node set
+$V = \bigcup_{\kappa \in \mathcal{T}} V_\kappa$ is partitioned by a type map
+$\tau : V \to \mathcal{T}$, with
+$\mathcal{T} = \{\mathrm{src}, \mathrm{cfg}, \mathrm{dev}, \mathrm{usr}, \mathrm{res}\}$.
+Edges are directed, timestamped and attributed tuples $(v, w, t, \mathbf{x})$.
+
+Each request is unrolled into a set $E_i$ of edges that share the timestamp $t_i$
+(Section~\ref{sec:tgr-unroll}). The graph against which request $i$ is evaluated is the
+union of the edge sets of the earlier requests admitted to the model state:
+\begin{equation}
+  \mathcal{G}(t_i^-) = \bigcup_{j < i,\; j \in \mathcal{A}} E_j ,
+  \label{eq:tgr-graph}
+\end{equation}
+where $\mathcal{A}$ is the set of requests allowed by the external policy engine. Two
+properties follow from this definition. First, the representation is causal: $e_i$ is
+scored against $\mathcal{G}(t_i^-)$, and its edges are inserted only afterwards, and
+only if the request is admitted. Second, the content of the graph is decided outside
+the detector. A request denied by the policy engine never enters the behavioural
+baseline against which later requests are compared.
+
+\subsection{Typed entities}
+\label{sec:tgr-nodes}
+
+\begin{table}[t]
+\centering
+\caption{Node types of the access graph. The keys of the context entities (source,
+configuration, device) are namespaced by type, so equal raw identifiers of different
+types never share a node.}
+\label{tab:tgr-nodes}
+\footnotesize
+\setlength{\tabcolsep}{3pt}
+\begin{tabular}{@{}l l p{0.36\columnwidth} l@{}}
+\toprule
+Type & Key & Observed as & Static attr. \\
+\midrule
+Source   & \texttt{src:}\textit{ip}    & client IP address                                  & --- \\
+Config   & \texttt{conf:}\textit{ja3}  & TLS client fingerprint (JA3~\cite{ja3});
+                                         \texttt{conf:guest} if none                        & --- \\
+Device   & \texttt{tpm:}\,/\,\texttt{ck:}\textit{id}
+                                       & TPM-attested identity or persistent device cookie  & posture tier \\
+User     & principal id                & authenticated principal or anonymous visitor       & --- \\
+Resource & route URI                   & normalised request path                            & sensitivity \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Table~\ref{tab:tgr-nodes} lists the five node types. The configuration node is the
+software identity of the client. Its key is the JA3 fingerprint of the TLS
+ClientHello~\cite{ja3}, which changes when the tool changes, not when the network
+changes. The device node is keyed by a hardware-attested identity when a TPM is
+available and by a persistent device cookie otherwise.
+
+Each node $v$ carries a static attribute vector $\mathbf{f}_v \in \mathbb{R}^{16}$,
+which is sparse and depends on the type. Devices expose their posture tier (no
+certificate, certificate, certificate with TPM). Resources expose a sensitivity score
+derived from their classification level in the reference access-control model. The role
+and clearance of the principal are not node attributes. They are claims presented with
+each request, so they are carried on the access edge (Section~\ref{sec:tgr-attr}).
+
+The node set is open. A registry maps each external key to a slot of a pre-allocated
+state table: an unseen key is admitted when it first appears, and the least recently
+used slot is evicted when capacity runs out. A newly admitted node has no history, so
+every node also carries a \emph{hashed identity}. Its key is hashed with BLAKE2b into
+one of $B = 10^5$ buckets of a learned embedding table, giving
+$\mathbf{h}_v \in \mathbb{R}^{16}$. The hash is deterministic across processes and
+restarts, so a node receives the same identity at training and at serving time. An
+entity that never appeared during training receives an embedding at once, without
+retraining and without growing a vocabulary.
+
+\subsection{Per-request unrolling into a causal chain}
+\label{sec:tgr-unroll}
+
+\begin{figure}[t]
+\centering
+\begin{tikzpicture}[
+  font=\sffamily\scriptsize,
+  n/.style={draw, rounded corners=2pt, align=center, inner sep=3pt, minimum height=5.5mm},
+  acc/.style={->, >=Stealth, semithick},
+  bind/.style={->, >=Stealth, semithick, densely dashed, gray!70!black},
+  lbl/.style={font=\sffamily\tiny, inner sep=1.5pt}
+]
+\node[n, fill=blue!8]                     (s) {source \\ \textit{ip}};
+\node[n, fill=purple!10, right=9mm of s]  (c) {config \\ \textit{ja3}};
+\node[n, fill=teal!10,   right=9mm of c]  (d) {device \\ \textit{tpm / cookie}};
+\node[n, fill=orange!12, below=9mm of c]  (u) {user \\ \textit{principal}};
+\node[n, fill=red!8,     right=9mm of u]  (r) {resource \\ \textit{route}};
+\draw[bind] (s) -- (c);
+\draw[bind] (c) -- (d);
+\draw[bind] (c) -- (u);
+\draw[bind] (d) -- (u);
+\draw[acc]  (u) -- node[lbl, below] {access, $\mathbf{m}_i$} (r);
+\end{tikzpicture}
+\caption{Unrolling of a single request $e_i$ into five directed edges with timestamp
+$t_i$. The dashed binding edges carry an all-zero attribute vector and encode only
+whether, and how recently, two entities have appeared together. The access edge carries
+the request attributes $\mathbf{m}_i$. The \textit{config}\,$\rightarrow$\,\textit{user}
+binding links a principal to the client software that presents it.}
+\label{fig:tgr-chain}
+\end{figure}
+
+Each request produces five directed edges (Fig.~\ref{fig:tgr-chain}):
+\begin{equation}
+  E_i = \left\{
+  \begin{aligned}
+    &(s_i, c_i, t_i, \mathbf{0}),\; (c_i, d_i, t_i, \mathbf{0}),\; (c_i, u_i, t_i, \mathbf{0}),\\
+    &(d_i, u_i, t_i, \mathbf{0}),\; (u_i, r_i, t_i, \mathbf{m}_i)
+  \end{aligned}
+  \right\}.
+  \label{eq:tgr-unroll}
+\end{equation}
+The first four are \emph{binding} edges. They record which network carried which
+client, which client ran on which device, and which principal was used from which
+client and from which device. Their attribute vector is zero, so what they encode is
+purely structural and temporal: whether the pair has been seen before, and when. The
+last edge is the \emph{access} edge and carries the request attributes. The chain follows
+the order in which the context of a request is established: network, client software,
+hardware, identity, asset. The edges of a request are inserted in this fixed order in
+training, in offline replay and in serving.
+
+The binding edges make visible some request patterns that a two-endpoint graph cannot
+express. A principal used from a client never associated with it before appears as a
+novel \textit{config}\,$\rightarrow$\,\textit{user} edge, even when the principal and
+the resource are both habitual, which is the signature of credential reuse from a
+different tool. A pivot with a harvested credential appears as a
+\textit{device}\,$\rightarrow$\,\textit{user} binding, and possibly an access edge, that
+is unusual for the entities involved. The configuration node also complements the TLS
+trust bit carried in $\mathbf{m}_i$: the bit states whether the fingerprint is trusted,
+while the node states \emph{which} client is in use.
+
+The source and device keys are optional. When one of them is missing, only its own
+binding edges are dropped. Without a device identity, the
+\textit{config}\,$\rightarrow$\,\textit{device} and
+\textit{device}\,$\rightarrow$\,\textit{user} edges disappear, while
+\textit{config}\,$\rightarrow$\,\textit{user} still links the client to the principal.
+Without a source address, the \textit{source}\,$\rightarrow$\,\textit{config} edge is
+dropped. The configuration node is always present: when the fingerprint cannot be
+resolved, the request is attached to the generic \texttt{conf:guest} node. The same
+representation therefore accepts telemetry of different richness without changes to the
+model.
+
+\subsection{Edge attributes and time}
+\label{sec:tgr-attr}
+
+The access-edge attributes $\mathbf{m}_i$ contain the TLS fingerprint trust bit, the
+outputs of three intrusion-detection sensor probes, the HTTP method, and the role and
+clearance of the presented identity (normalised to $[0,1]$).
+All of them are known to the PDP when it authorises the request. Response-side fields,
+such as the status code or the response volume, are excluded because they become
+available only after the decision.
+
+Elapsed times are mapped to a vector by a learnable harmonic encoding
+$\phi(\Delta t) = \cos(\boldsymbol{\omega}\,\Delta t + \mathbf{b}) \in
+\mathbb{R}^{32}$~\cite{tgat,tgn}. For each edge $(v, w)$ scored at time $t$, the recency
+of the pair is
+\begin{equation}
+  \delta_{vw}(t) =
+  \begin{cases}
+    \min\!\left(t - t^{\mathrm{last}}_{vw},\; \Delta_{\max}\right) & \text{if } (v,w) \text{ was seen,}\\
+    \Delta_{\max} & \text{otherwise,}
+  \end{cases}
+  \label{eq:tgr-recency}
+\end{equation}
+with $\Delta_{\max} = 7$\,days, and the recency $\delta_v(t)$ of the source entity is
+defined in the same way. On the access edge the source is the principal, so its request
+cadence enters the model through $\delta_{u_i}(t)$, which advances with every admitted
+request, rather than as an edge attribute. The cap works as a sentinel for unseen pairs.
+Encoding them with the absolute clock would produce a value that grows along the stream,
+so training, validation and serving would see different encodings of the same state.
+Beyond one week, a silent pair is treated as never seen.
+
+Each edge is also described by causal interaction counters. With $n_{vw}$ the number of
+admitted occurrences of the pair and $n_v$ those of the source entity, the edge carries
+$\left[\log(1 + n_{vw}),\; \log(1 + n_v),\; n_{vw} / (n_v + 1)\right]$. The access edge
+additionally carries the same triplet for the (device, resource) pair, which records how
+habitual the resource is for the device without adding a sixth temporal edge. All counters
+are updated only on admitted requests, so they can be computed at serving time without
+labels.
+
+\subsection{Temporal state}
+\label{sec:tgr-state}
+
+The graph is not stored as an edge list. Its history is summarised in two bounded
+per-node structures. The first is a recurrent memory
+$\mathbf{s}_v \in \mathbb{R}^{256}$, following the Temporal Graph
+Network~\cite{tgn}. When $v$ takes part in an admitted edge $(v, w, t, \mathbf{x})$, a
+message is formed and the memory is updated by a GRU:
+\begin{equation}
+  \begin{aligned}
+    \boldsymbol{\mu}_v &= \left[\,\mathbf{s}_v \,\|\, \mathbf{s}_w \,\|\, \mathbf{x}
+                          \,\|\, \phi(t - t_v^{-})\,\right],\\
+    \mathbf{s}_v &\leftarrow \mathrm{GRU}\!\left(\overline{\boldsymbol{\mu}}_v,\; \mathbf{s}_v\right),
+  \end{aligned}
+  \label{eq:tgr-memory}
+\end{equation}
+where $t_v^{-}$ is the time of the last update of $v$ and $\overline{\boldsymbol{\mu}}_v$
+is the mean of the messages that $v$ receives within an update batch.
+
+The second structure is a temporal neighbour store. For every node it holds the last
+$K = 30$ incident edges, each as a (neighbour, timestamp, attributes) triple, in a
+fixed-size ring buffer. Every edge is written at both endpoints, so the neighbourhood is
+symmetric although the edges are directed. The store occupies
+$O(|V| \cdot K \cdot d_m)$ memory, with $d_m$ the attribute size, independently of the
+length of the stream, and no external graph database is needed.
+
+When a request is scored, the temporal neighbourhood of its endpoints is expanded for up
+to three hops from the store. Each node enters the encoder with the input
+$\left[\mathbf{s}_v \,\|\, \mathbf{f}_v \,\|\, \mathbf{h}_v\right] \in \mathbb{R}^{288}$,
+and each stored edge $e$ from a neighbour $w$ with the attribute
+$\left[\phi(t_w^{-} - t_e) \,\|\, \mathbf{x}_e\right]$, where $t_e$ is the timestamp of the
+edge. Both structures advance only for
+admitted requests. They are therefore a bounded summary of $\mathcal{G}(t_i^-)$ in
+Eq.~\eqref{eq:tgr-graph}.

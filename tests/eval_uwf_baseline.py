@@ -5,8 +5,8 @@ on the UWF-ZeekData24 dataset.
 
 Protocol (mirrors ``graphagate.train_tgn`` & ``tests/eval_uwf_zeekdata.py``):
   1. Same UWF-ZeekData24 stream and chronological split (70% train / 10% val / 20% test).
-  2. Per-event static feature vector (45 dims):
-     - 10-dim edge message (service method, volumes, timing recency)
+  2. Per-event static feature vector (42 dims):
+     - 7-dim edge message (service method)
      - 16-dim source node features
      - 16-dim destination node features
      - 3-dim causal interaction history counters (per-pair / per-src counts), benign-gated on the
@@ -49,7 +49,7 @@ from graphagate.eval_common import binary_metrics, causal_hist_features  # noqa:
 
 
 def _build_features(msg, src, dst, node_features, y, label_horizon: int) -> np.ndarray:
-    """Build the 45-dim tabular feature matrix for each event.
+    """Build the 42-dim tabular feature matrix for each event.
 
     ``label_horizon`` (= ``val_end``) is where ground-truth labels stop being available to the
     system: the history counters are benign-gated before it and commit-everything after, the
@@ -257,7 +257,7 @@ def main() -> int:
         val_frac=args.val_frac,
     )
 
-    print("\n--- EXTRACTING 45-DIMENSIONAL PER-EVENT FEATURES ---")
+    print("\n--- EXTRACTING 42-DIMENSIONAL PER-EVENT FEATURES ---")
     y = data.y.numpy()
     types = data.types.numpy()
 

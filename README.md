@@ -202,7 +202,7 @@ evaluation and a `scenario` bitmask (roaming / wiped / shared) for per-scenario 
 | 2 | contextual | broken JA3 / Snort alert / sensors | **trivial**: caught ~97% by the rule baseline |
 | 3 | lateral | authorized but **non-habitual** | **genuine ML target**: history + temporal memory + kill-chain precursor |
 | 4 | credential theft | A different client/tool (config/JA3) than the habitual one reusing the credentials of a known user | **genuine ML target (schema v4)**: visible in particular on the `config → user` binding (policy-clean, signal-clean) |
-| 5 | data exfiltration | Massive transfer (high bytes_out) to a sensitive resource | easy and declared signal (by design, continuous); own class to avoid polluting the lateral |
+| 5 | *(reserved)* | Data exfiltration: **not generated** (out of scope; kept only for external datasets with real exfiltration labels) | — |
 | 6 | benign OPA denial | Human error: access refused by OPA (e.g. write-down) | `label=1` (OPA blocks it) but it is not an attack; the test-client OPA proxy treats it as DENY |
 
 > **De-degeneration.** The benign traffic now sometimes performs *legitimate*

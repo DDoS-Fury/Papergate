@@ -1,7 +1,7 @@
 # Baseline: Isolation Forest
 
 A classic, **non-relational** anomaly detector. Every ZTA access event
-is described by a 45-dim static vector: edge features `msg` (10) ⊕
+is described by a 42-dim static vector: edge features `msg` (7) ⊕
 static features of the device node (16) ⊕ static features of the resource node (16) ⊕
 causal benign-gated history counters (3; the same *family* of statistics the TGN
 maintains online, consumed here as a flat tabular vector by the device actor). No

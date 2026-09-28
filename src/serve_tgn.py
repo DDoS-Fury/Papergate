@@ -394,8 +394,8 @@ def event_alarm(score: float, *, flagged: bool, threshold_arm: float | None, fea
 def signal_dirty(features) -> bool:
     """Whether an event's edge signal already fires (the observable, class-free split).
 
-    ``features`` is the 10-dim message vector ``[ja3, s1, s2, s3, method, role,
-    clearance, bytes_in, bytes_out, log1p(user Δt)/10]``: the signal is "dirty" when TLS
+    ``features`` is the 7-dim message vector ``[ja3, s1, s2, s3, method, role,
+    clearance]``: the signal is "dirty" when TLS
     trust is broken (``ja3==0``) or any Snort/sensor probe fires — the same condition as
     the rule baseline. (``features[4]`` is the HTTP method, NOT a sensor: including it —
     as an earlier revision did — silently routed every non-GET request to the

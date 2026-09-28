@@ -47,10 +47,10 @@ from graphagate.eval_common import binary_metrics, causal_hist_features, causal_
 def _build_features(msg, src, dst, node_features, y, *, label_horizon: int):
     """Per-event feature matrix for the Isolation Forest.
 
-    The 10-dim edge feature ``msg[i]`` concatenated with the 16-dim static attributes of
-    both endpoints (device, destination resource) — 42 dims — PLUS the 3-dim causal
+    The 7-dim edge feature ``msg[i]`` concatenated with the 16-dim static attributes of
+    both endpoints (device, destination resource) — 39 dims — PLUS the 3-dim causal
     interaction-history features (per-pair / per-src benign access counts; see
-    ``graphagate.eval_common``), giving a 45-dim vector. The history columns are the same
+    ``graphagate.eval_common``), giving a 42-dim vector. The history columns are the same
     *family* of counters the TGN maintains online, but the vector is strictly poorer than
     the TGN's signals: device actor only — no user / source / config identity and none of
     the binding counters — so this baseline measures what a flat per-event detector gets

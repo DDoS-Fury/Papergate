@@ -31,7 +31,7 @@ L'audit gira sullo stream di training (200k eventi, 3 seed). Impone sei invarian
 1.  **Nessuna scorciatoia su feature singola ($\text{AUC} \le 0.75$):**
     nessuna colonna scalare in ingresso, cioè il messaggio o le feature statiche di tutti e
     cinque i nodi, separa da sola una classe oltre la soglia. Fanno eccezione i segnali
-    allow-listati per design (sonde IDS sul recon, volumi sull'exfil, RISK della risorsa sulle
+    allow-listati per design (sonde IDS sul recon, RISK della risorsa sulle
     violazioni di policy). Lateral movement e credential theft non hanno eccezioni.
     Il floor misurato sul lateral va rimisurato sul generatore v5: il valore 0.567 della
     Tabella I si riferisce al generatore v4.

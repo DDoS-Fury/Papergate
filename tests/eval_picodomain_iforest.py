@@ -1,7 +1,7 @@
 """Isolation Forest anomaly-detection baseline on PicoDomain Zeek telemetry.
 
 Runs a non-relational, one-class Isolation Forest on the mapped PicoDomain stream
-(using the exact same 70/10/20 chronological split and 45-dim per-event tabular features
+(using the exact same 70/10/20 chronological split and 42-dim per-event tabular features
 as in the paper's baselines).
 
 Quantifies how much detection is possible WITHOUT graph structure / temporal memory on
@@ -38,7 +38,7 @@ from graphagate.eval_common import binary_metrics, causal_hist_features  # noqa:
 
 
 def _build_features(msg, src, dst, node_features, y) -> np.ndarray:
-    """Build the 45-dim tabular feature matrix for each event."""
+    """Build the 42-dim tabular feature matrix for each event."""
     msg_np = msg.numpy()
     nf_np = node_features.numpy()
     src_feat = nf_np[src.numpy()]
@@ -152,7 +152,7 @@ def main() -> int:
         label_window=args.label_window,
     )
 
-    print("\n--- STEP 2: EXTRACTING 45-DIMENSIONAL FEATURES ---")
+    print("\n--- STEP 2: EXTRACTING 42-DIMENSIONAL FEATURES ---")
     actor_node = data.device_nodes if data.device_nodes is not None else data.user
     X = _build_features(data.msg, actor_node, data.dst, data.node_features, data.y)
     y = data.y.numpy()

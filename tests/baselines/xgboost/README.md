@@ -20,7 +20,7 @@ docker compose --profile baseline-xgboost up
 ## Details
 
 The baseline treats every event as an independent static feature vector — the
-same 45-dim vector the Isolation Forest sees (10-dim edge msg, 16-dim static
+same 42-dim vector the Isolation Forest sees (7-dim edge msg, 16-dim static
 attributes of both endpoints, 3-dim causal interaction-history counts) —
 ignoring relational and temporal graph structure. It trains a supervised
 `XGBClassifier` (`tree_method="hist"`, `n_jobs=-1`) on **both benign and

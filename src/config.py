@@ -100,7 +100,7 @@ class TGNConfig:
     # Session-replay kits ship residential proxies, so most thefts egress from address
     # space the fleet also uses; at 0.5 src|usr_new alone crossed the audit's 0.85 AUC.
     # Kill chain — p_compromise is a global per-step intrusion rate with remediation
-    # after exfiltration (None = the v4 per-visit hazard with no remediation, which left
+    # after the post-exploitation dwell (None = the v4 per-visit hazard with no remediation, which left
     # ~95% of machines compromised and ~28% of events anomalous). A lateral event pivots
     # with a harvested credential (Euler/LANL sense) at p_lateral_foreign_cred; each
     # harvested credential comes from the machine's logon cache at p_harvest_cached (a
@@ -129,7 +129,8 @@ class TGNConfig:
     # fresh cookie is always tier 0), readable off one static node feature.
     tier_mix: tuple[float, float, float] = (0.35, 0.4, 0.25)
     # Per-step chance an active theft incident emits its next request. Faster incidents
-    # shrink the victim's inter-request gap (msg[9]) until it alone identifies the class.
+    # shrink the victim's inter-request gap (read by the TGN as the user's recency) until
+    # it alone identifies the class.
     p_theft_interleave: float = 0.06
     # Never-seen users at every point of the stream (training and inference), not only
     # in the first few percent: num_new_users registered users are hired mid-stream, one
@@ -165,9 +166,12 @@ class TGNConfig:
 
     # TGN Architecture
     node_feat_dim: int = 16
-    # [ja3, s1, s2, s3, method, role, clearance, bytes_in, bytes_out, log1p(user Δt)/10]
-    # — request-time fields only; see the stream_synthetic module docstring.
-    msg_dim: int = 10
+    # [ja3, s1, s2, s3, method, role, clearance]
+    # — request-time fields only; see the stream_synthetic module docstring. The response
+    # volume (bytes_out) was dropped: the PDP does not know it when it authorises the request.
+    # The request volume (bytes_in) was dropped too: the orchestrator does not supply it.
+    # So was the user's inter-request gap: the TGN reads it natively (src_delta_t).
+    msg_dim: int = 7
     time_dim: int = 32
     memory_dim: int = 256
     num_hops: int = 3

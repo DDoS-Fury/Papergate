@@ -41,17 +41,16 @@ Unbound nodes fall back to per-IP sentinels (``cfg:none:<ip>``, ``dev:none:<ip>`
 inherits another entity's memory. The binding coverage is measured and printed — it is a
 property of the data, not a tuning knob, and it belongs in any result reported on it.
 
-Edge message (``msg_dim=10``, same layout as the synthetic generator)::
+Edge message (``msg_dim=7``, same layout as the synthetic generator)::
 
-    [ ja3_valid=1, s1=0, s2=0, s3=0, method, roleVal=0, clrVal=0,
-      bytes_req, bytes_resp=0, log1p(dt_user)/10 ]
+    [ ja3_valid=1, s1=0, s2=0, s3=0, method, roleVal=0, clrVal=0 ]
 
 The four alarm columns are held **clean**: PicoDomain ships no IDS alert stream, and the
 red-team activity here is signal-clean by construction, so a rule baseline must stay blind
 to it and the temporal/relational pattern remains the sole discriminator — the honest test.
-``bytes_resp`` is held at 0 for the same reason no response field (e.g. the HTTP
-status) enters the synthetic message: a response size is not available at decision
-time, and using it violates causality.
+The response size is left out for the same reason no response field (e.g. the HTTP
+status) enters the synthetic message: it is not available at decision time, and using it
+violates causality.
 
 Static node features are neutral (PicoDomain has no roles, clearances or asset
 classification): zeros with the trust slot 14 at 1.0, and slot 5 (source
@@ -276,7 +275,7 @@ def load_picodomain_stream(
 
     # --- access events ------------------------------------------------------------------
     kinds = ["smb_mapping", "smb_files", "dce_rpc"] + (["http"] if include_http else [])
-    access: list[tuple[float, str, str, str, float, float]] = []  # t, ip, kind, resource, bytes, _
+    access: list[tuple[float, str, str, str]] = []  # t, ip, kind, resource
     for kind in kinds:
         for row in _read_zeek(log_dir, kind):
             ip = row.get("id.orig_h")
@@ -284,17 +283,13 @@ def load_picodomain_stream(
                 continue
             if kind == "smb_mapping":
                 res = f"smb:{row.get('path', '?')}"
-                nbytes = 0.0
             elif kind == "smb_files":
                 res = f"smb:{row.get('path', '?')}/{row.get('name', '?')}"
-                nbytes = float(row.get("size") or 0.0)
             elif kind == "dce_rpc":
                 res = f"rpc:{row.get('endpoint', '?')}.{row.get('operation', '?')}"
-                nbytes = 0.0
             else:
                 res = f"http:{row.get('host', '?')}{row.get('uri', '?')}"
-                nbytes = float(row.get("request_body_len") or 0.0)
-            access.append((_ts(row), ip, kind, res, nbytes, 0.0))
+            access.append((_ts(row), ip, kind, res))
     access.sort(key=lambda e: e[0])
     if not access:
         raise RuntimeError(f"No access events found under {log_dir} — is it the extracted log dir?")
@@ -348,11 +343,10 @@ def load_picodomain_stream(
     last: dict[tuple[str, str], tuple[float, str]] = {}  # (ip, kind) -> (t, value)
     bi = 0
     src_l, cfg_l, dev_l, usr_l, dst_l, t_l, msg_l, y_l, ty_l = [], [], [], [], [], [], [], [], []
-    last_user_t: dict[int, float] = {}
     bound = {"config": 0, "device": 0, "user": 0}
     t0 = access[0][0]
 
-    for when, ip, kind, res, nbytes, _ in access:
+    for when, ip, kind, res in access:
         while bi < len(binds) and binds[bi][0] <= when:
             bt, bip, bkind, bval = binds[bi]
             last[(bip, bkind)] = (bt, bval)
@@ -384,14 +378,7 @@ def load_picodomain_stream(
                 etype = r_type
                 break
 
-        dt_user = when - last_user_t.get(u, when)
-        last_user_t[u] = when
-        msg_l.append([
-            1.0, 0.0, 0.0, 0.0, _METHOD[kind], 0.0, 0.0,
-            float(torch.log1p(torch.tensor(nbytes)).item()) / 10.0,
-            0.0,
-            float(torch.log1p(torch.tensor(dt_user)).item()) / 10.0,
-        ])
+        msg_l.append([1.0, 0.0, 0.0, 0.0, _METHOD[kind], 0.0, 0.0])
         src_l.append(s)
         cfg_l.append(c)
         dev_l.append(d)

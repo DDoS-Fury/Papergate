@@ -49,26 +49,32 @@ pool per role, with one key format, so neither the slot index nor the key hash s
 drew it. Lateral movement pivots with harvested credentials (the Euler / LANL sense)
 instead of spoofing a role claim: most come from the machine's own logon cache, so the
 device->user binding is one the fleet has already seen, and the rest bind to the machine
-for the first time; intrusions arrive at a global rate and are remediated after
-exfiltration, for a ~1-2% attack prevalence. ``V4_KNOBS`` rebuilds the v4 process for
+for the first time; intrusions arrive at a global rate and are remediated after a short
+post-exploitation dwell, for a ~1-2% attack prevalence. ``V4_KNOBS`` rebuilds the v4 process for
 before/after audits; ``graphagate.data.lookup_rules`` is the no-learning baseline the
 audit bounds.
 
 Anomaly types (``types``): 0=benign, 1=policy violation (OPA-owned), 2=contextual,
-3=lateral movement, 4=credential theft, 5=data exfiltration, 6=benign OPA denial (a
-human mistake: ``label=1`` because OPA denies it, but not an attack). ``scenario`` is a
+3=lateral movement, 4=credential theft, 6=benign OPA denial (a human mistake: ``label=1``
+because OPA denies it, but not an attack). 5 (data exfiltration) is reserved and never
+emitted: data theft is out of scope, and the code stays free for the external-dataset
+adapters that carry real exfiltration labels. ``scenario`` is a
 per-event bitmask of benign-context flags (an event can be several at once): 1=roaming,
 2=recently wiped cookie device, 4=shared device, 8=recently hired user.
 
-Edge message layout (10-dim): ``[ja3, s1, s2, s3, method, role, clearance, bytes_in,
-bytes_out, log1p(user Δt)/10]`` — TLS-fingerprint trust, the three Snort/sensor probes,
-the HTTP method code, the requesting identity's role/clearance (possibly stolen), the
-request/response volumes and the recency of this user's previous request.
+Edge message layout (7-dim): ``[ja3, s1, s2, s3, method, role, clearance]`` —
+TLS-fingerprint trust, the three Snort/sensor probes, the HTTP method code and the
+requesting identity's role/clearance (possibly stolen).
 
 Everything in this message is available to the PDP *before* the request is forwarded.
-No **response** field may enter the message (e.g. the HTTP status): using it to decide
-whether to allow the request is a causality violation, and a response field that takes a
-class-specific constant would be a near-deterministic label channel.
+No **response** field may enter the message (e.g. the HTTP status, the response volume):
+using it to decide whether to allow the request is a causality violation, and a response
+field that takes a class-specific constant would be a near-deterministic label channel.
+The response volume (``bytes_out``) was dropped for this reason. The request volume
+(``bytes_in``) was dropped too: the orchestrator does not supply it, and here it was noise
+drawn from one law for every class. The user's inter-request gap (``log1p(Δt)``) was
+dropped as well: the TGN already reads each user's recency off its own memory
+(``src_delta_t``), and as a message column it only ever acted as a theft shortcut.
 
 Invariants this generator must preserve, regression-tested in
 ``tests/test_leakage_audit.py`` (which also bounds single history lookups and checks
@@ -78,8 +84,8 @@ that the role claim always matches the identity):
     own (bar the sensor probes on contextual and the resource RISK, which are legitimate
     signals by design). In particular benign and attack traffic share the same
     destination marginal, so "unusual destination" is never a free label.
-  * **No exact-value fingerprint.** Per-class constants (byte volumes, status codes) let
-    a model memorise the class instead of learning behaviour.
+  * **No exact-value fingerprint.** Per-class constants (such as the byte volumes and status
+    codes of earlier schemas) let a model memorise the class instead of learning behaviour.
 """
 
 from __future__ import annotations
@@ -636,7 +642,6 @@ class ZTAStreamSimulator:
         # USER (the access edge is user -> resource).
         self._valid_cache: dict[str, list[tuple[int, int]]] = {}
         self._violation_cache: dict[str, list[tuple[int, int]]] = {}
-        self._sensitive_cache: dict[str, list[tuple[int, int]]] = {}
         self._user_action_cache: dict[int, tuple[list, list]] = {}
         # Zipf probability vectors, memoised per action-set cache key (see _zipf_choice).
         self._zipf_probs: dict[tuple, np.ndarray] = {}
@@ -687,10 +692,9 @@ class ZTAStreamSimulator:
         self._cfg_pool = [num_configs + k for k in range(num_theft_slots + num_new_configs)]  # local ids
         self._next_dev = self._next_src = self._next_cfg = 0
         self._slot_age: dict[int, int] = {}      # events seen by a re-keyed (wiped) slot
-        self.last_user_t: dict[int, int] = {}
         self.compromised_state: dict[int, int] = {}  # machine -> kill-chain phase
         self.compromised_chain_remaining: dict[int, int] = {} # machine -> steps left in lateral chain
-        self.compromised_dwell: dict[int, int] = {}  # machine -> post-exfil events before remediation
+        self.compromised_dwell: dict[int, int] = {}  # machine -> post-exploitation events before remediation
         self.harvested_creds: dict[int, list[int]] = {}  # machine -> users whose creds were dumped
         self.machine_logons: dict[int, set[int]] = {}  # machine -> hot-desk users who signed in
         self._active_thefts: list[dict] = []
@@ -740,14 +744,6 @@ class ZTAStreamSimulator:
             ]
         return self._violation_cache[role]
 
-    def _sensitive_actions(self, role: str):
-        """Allowed actions on PROTECTED routes for this role — the "loot" set (cached)."""
-        if role not in self._sensitive_cache:
-            self._sensitive_cache[role] = [
-                (r, m) for r, m in self._policy_valid_actions(role)
-                if self.resource_uris[r] in self.security_matrix
-            ]
-        return self._sensitive_cache[role]
 
     def _user_actions(self, user: int, role: str):
         """``(habitual, non_habitual)`` allowed actions for this user (cached)."""
@@ -938,15 +934,12 @@ class ZTAStreamSimulator:
         # and benign traffic share the same destination marginal (no risk shortcut).
         valid = self._policy_valid_actions(role)
         res_idx, method = (self._zipf_choice(valid, ("valid", role)) if valid else (0, 0))
-        # Byte volumes are drawn from the SAME laws as benign traffic. Credential theft is
-        # policy-clean and signal-clean by construction — only the broken
-        # ip -> config -> device -> user binding exposes it. Constant byte values here used
-        # to identify the class with 100% precision and recall, i.e. pure label leakage.
+        # Credential theft is policy-clean and signal-clean by construction — only the
+        # broken ip -> config -> device -> user binding exposes it. (Constant byte volumes
+        # here once identified the class with 100% precision and recall: label leakage.)
         s1, s2, s3 = self._benign_sensors()
         feat = [1.0, s1, s2, s3, float(method),
-                ROLES.index(role) / (len(ROLES) - 1), clr / 4.0,
-                float(abs(np.random.normal(0.1, 0.05))),
-                float(abs(np.random.normal(0.2, 0.1)))]
+                ROLES.index(role) / (len(ROLES) - 1), clr / 4.0]
         incident["remaining"] -= 1
         if incident["remaining"] <= 0:
             self._active_thefts.remove(incident)
@@ -963,11 +956,7 @@ class ZTAStreamSimulator:
             if self._user_age[user] < _NEW_USER_COLD_EVENTS:
                 scenario |= SCEN_NEW_USER
             self._user_age[user] += 1
-            
-        delta_t = self.t - self.last_user_t.get(user, self.t)
-        self.last_user_t[user] = self.t
-        feat.append(float(np.log1p(delta_t) / 10.0))
-        
+
         dst = self.res_lo + res_idx
         return {
             "source": source, "config": config, "device": device, "user": user, "dst": dst,
@@ -1002,9 +991,9 @@ class ZTAStreamSimulator:
         # Credential-theft incidents: requests from a never-seen attacker IP + device as
         # an existing victim user (signal-clean, policy-clean). They INTERLEAVE with normal
         # traffic rather than arriving back-to-back: a high emission rate made the victim's
-        # inter-request gap collapse, and that gap is an edge feature — the class became
-        # identifiable from ``log1p(Δt)`` alone, with no need for the binding structure that
-        # is supposed to be the only thing exposing it.
+        # inter-request gap collapse, and the TGN reads that gap as the user's recency — the
+        # class would be identifiable from timing alone, with no need for the binding
+        # structure that is supposed to be the only thing exposing it.
         if self.admission_horizon:
             max_m = min(
                 self.num_devices,
@@ -1128,7 +1117,7 @@ class ZTAStreamSimulator:
             # or updater), drawn from the same fresh pool as releases and attackers.
             config = self.cfg_lo + self._alloc_cfg()
 
-        # --- APT kill chain on the physical machine (recon -> lateral -> exfil) ---
+        # --- APT kill chain on the physical machine (recon -> lateral -> dwell) ---
         if (
             self.p_compromise is None  # v4 hazard: per visit, never remediated
             and np.random.rand() < 0.005 and machine not in self.compromised_state
@@ -1155,13 +1144,8 @@ class ZTAStreamSimulator:
                 valid = self._policy_valid_actions(u_role)
                 if valid:
                     res_idx, method = valid[0]  # Deterministic access
-                    # Tight but continuous byte volumes: a cronjob is predictable, not
-                    # bit-identical. Constant values here were a guaranteed-benign
-                    # fingerprint the model could memorise.
                     feat = [1.0, *self._benign_sensors(), float(method),
-                            ROLES.index(u_role) / (len(ROLES) - 1), u_clearance / 4.0,
-                            float(abs(np.random.normal(0.2, 0.02))),
-                            float(abs(np.random.normal(0.5, 0.03)))]
+                            ROLES.index(u_role) / (len(ROLES) - 1), u_clearance / 4.0]
                     return self._event(source=source, config=config, device=dev_slot, user=user,
                                        res_idx=res_idx, feat=feat, label=0, etype=0, scenario=scenario)
 
@@ -1171,9 +1155,7 @@ class ZTAStreamSimulator:
                 if invalid:
                     res_idx, method = self._zipf_choice(invalid, ("viol", u_role))
                     feat = [1.0, *self._benign_sensors(), float(method),
-                            ROLES.index(u_role) / (len(ROLES) - 1), u_clearance / 4.0,
-                            float(abs(np.random.normal(0.1, 0.05))),
-                            float(abs(np.random.normal(0.2, 0.1)))]
+                            ROLES.index(u_role) / (len(ROLES) - 1), u_clearance / 4.0]
                     # An OPA denial triggered by a benign user mistake. label=1 because OPA
                     # does deny it, but etype=6 keeps it separable from genuine attacks:
                     # folding it into etype=1 mixed honest mistakes into the policy class.
@@ -1206,13 +1188,11 @@ class ZTAStreamSimulator:
                     res_idx, method = 0, 0  # public-path fallback
 
             ja3, (s1, s2, s3) = 1.0, self._benign_sensors()
-            bytes_in = abs(np.random.normal(0.1, 0.05))
-            bytes_out = abs(np.random.normal(0.2, 0.1))
             label, etype = 0, 0
         else:
             state = self.compromised_state[machine]
-            # v5 (p_compromise set): recon and exfiltration last 1-3 events each instead
-            # of exactly one, so every class is measurable at a realistic base rate.
+            # v5 (p_compromise set): recon lasts 1-3 events instead of exactly one, so every
+            # class is measurable at a realistic base rate.
             multi = self.p_compromise is not None
             if state == 1:
                 anomaly_type = "context"  # Recon phase (often triggers Snort)
@@ -1228,13 +1208,10 @@ class ZTAStreamSimulator:
                 anomaly_type = "lateral"  # Lateral movement phase chain
                 self.compromised_chain_remaining[machine] -= 1
                 if self.compromised_chain_remaining[machine] <= 0:
-                    self.compromised_state[machine] = 3
-                    self.compromised_chain_remaining[machine] = int(np.random.randint(1, 4)) if multi else 1
-            elif state == 3:
-                anomaly_type = "exfil"    # Data Exfiltration
-                self.compromised_chain_remaining[machine] -= 1
-                if self.compromised_chain_remaining[machine] <= 0:
-                    self.compromised_state[machine] = 4  # State 4: kill-chain finished, enter post-exploitation dwell
+                    # State 4: kill chain finished, enter post-exploitation dwell. There is no
+                    # exfiltration phase: data theft is out of this project's scope (lateral
+                    # movement and credential theft), and its only tell was a transfer volume.
+                    self.compromised_state[machine] = 4
                     if multi:
                         # Post-exploitation dwell, then detection + clean-up by the SOC.
                         self.compromised_dwell[machine] = int(np.random.randint(0, 5))
@@ -1249,25 +1226,7 @@ class ZTAStreamSimulator:
                 self.compromised_dwell[machine] -= 1
 
 
-            bytes_in = abs(np.random.normal(0.1, 0.05))
-            bytes_out = abs(np.random.normal(0.2, 0.1))
-
-            if anomaly_type == "exfil":
-                sensitive = self._sensitive_actions(u_role)
-                if sensitive:
-                    res_idx, method = self._zipf_choice(sensitive, ("sens", u_role))
-                else:
-                    res_idx, method = self._zipf_choice(self._all_actions, ("all",))
-                ja3, (s1, s2, s3) = 1.0, self._benign_sensors()
-                # A massive transfer is a legitimate, genuinely easy signal for this class
-                # — drawn continuously rather than as an exact constant. Exfiltration gets
-                # its OWN etype: folding it into etype=3 put a single-feature-separable
-                # sub-population inside the lateral-movement class, whose whole premise is
-                # that its edge features are indistinguishable from a benign access.
-                bytes_in = abs(np.random.normal(1.0, 0.2))
-                bytes_out = abs(np.random.normal(15.0, 3.0))
-                etype = 5
-            elif anomaly_type == "lateral":
+            if anomaly_type == "lateral":
                 creds = [u for u in self.harvested_creds.get(machine, ()) if u != user]
                 pivot = bool(creds) and random.random() < self.p_lateral_foreign_cred
                 if pivot:
@@ -1352,8 +1311,7 @@ class ZTAStreamSimulator:
             label = 1
 
         feat = [ja3, float(s1), float(s2), float(s3), float(method),
-                ROLES.index(u_role) / (len(ROLES) - 1), u_clearance / 4.0,
-                float(bytes_in), float(bytes_out)]
+                ROLES.index(u_role) / (len(ROLES) - 1), u_clearance / 4.0]
         return self._event(source=source, config=config, device=dev_slot, user=user,
                            res_idx=res_idx, feat=feat, label=label, etype=etype,
                            scenario=scenario)
@@ -1390,7 +1348,6 @@ class ZTAStreamSimulator:
         # Invalidate caches so the new resource is picked up
         self._valid_cache.clear()
         self._violation_cache.clear()
-        self._sensitive_cache.clear()
         self._user_action_cache.clear()
         self._zipf_probs.clear()
         self._all_actions = [
@@ -1410,10 +1367,10 @@ class SyntheticStream:
     user: torch.Tensor          # [N] global user node ids
     dst: torch.Tensor           # [N] global resource node ids
     t: torch.Tensor             # [N] timestamps
-    msg: torch.Tensor           # [N, msg_dim=10] edge messages (access edge)
+    msg: torch.Tensor           # [N, msg_dim=7] edge messages (access edge)
     y: torch.Tensor             # [N] binary labels
     types: torch.Tensor         # [N] 0=benign, 1=policy, 2=contextual, 3=lateral,
-                                #     4=cred-theft, 5=exfil, 6=benign human error (denied)
+                                #     4=cred-theft, 6=benign human error (denied); 5 reserved
     scenario: torch.Tensor      # [N] benign-context bitmask (SCEN_*)
     node_features: torch.Tensor  # [num_nodes, 16]
     keys: list = field(repr=False)

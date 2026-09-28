@@ -1026,8 +1026,8 @@ def train_tgn(cfg: TGNConfig | None = None, *, dataset: "StreamData | None" = No
     }
     per_type = {}
     benign = test_types == 0
-    # 5 = data exfiltration, reported separately from lateral movement: it carries a bulk
-    # transfer volume, so folding it into the lateral class would put a trivially separable
+    # 5 = data exfiltration (external datasets only: the synthetic generator does not emit it),
+    # reported separately from lateral movement: it carries a bulk transfer volume, so folding it into the lateral class would put a trivially separable
     # sub-population inside the class the model's central claim rests on.
     # 6 = benign OPA denial (a human mistake): label=1, but not an attack.
     for type_id, name in ((1, "policy"), (2, "contextual"), (3, "lateral"),

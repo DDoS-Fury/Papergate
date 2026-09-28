@@ -45,7 +45,8 @@ def test_shapes_agree(stream):
     for name in ("user", "dst", "msg", "y", "types", "source_nodes", "config_nodes",
                  "device_nodes"):
         assert getattr(stream, name).shape[0] == n, f"{name} has the wrong length"
-    assert stream.msg.shape[1] == 10, "message width must match TGNConfig.msg_dim"
+    from graphagate.config import TGNConfig
+    assert stream.msg.shape[1] == TGNConfig.msg_dim, "message width must match TGNConfig.msg_dim"
     assert stream.node_features.shape == (stream.num_nodes, 16)
     assert len(stream.keys) == stream.num_nodes
 
@@ -83,9 +84,9 @@ def test_stream_is_chronological(stream):
 def test_alarm_columns_are_held_clean(stream):
     """PicoDomain ships no IDS stream. Columns 1-3 must stay zero so a rule baseline
     is blind to the red-team activity and the temporal pattern is the discriminator.
-    Column 8 (response bytes) is zero for causality: it is not known at decision time.
+    (No response-bytes column exists any more: it is not known at decision time.)
     """
-    for col in (1, 2, 3, 8):
+    for col in (1, 2, 3):
         assert float(stream.msg[:, col].abs().max()) == 0.0, f"msg column {col} is not clean"
     assert float(stream.msg[:, 0].min()) == 1.0, "ja3-valid column must be constant"
 

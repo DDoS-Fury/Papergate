@@ -14,12 +14,12 @@ The three classes of defects it guards against:
     **AUC 0.92-0.94 on every anomaly class**, matching the model's own reported lateral
     AUC, because benign traffic concentrates on popular resources (popularity is the
     index) while attacks draw destinations uniformly.
-  * Per-class constants in the edge message (e.g. ``bytes_in``/``bytes_out``): they
-    identify policy violations, credential theft, exfiltration and even benign service
+  * Per-class constants in the edge message (e.g. the byte volumes of earlier schemas):
+    they identify policy violations, credential theft, exfiltration and even benign service
     accounts with **100% precision and recall**.
-  * Mislabelled volume events: labelling exfiltration as lateral movement puts a
-    sub-population separable by a single feature inside the class whose premise is that
-    it has no feature tell.
+  * Out-of-scope volume events: exfiltration was separable by a transfer volume alone, and
+    labelling it as lateral movement put that sub-population inside the class whose premise
+    is that it has no feature tell. The generator no longer emits it (type 5 is reserved).
   * History shortcuts (v5): a single set-membership lookup — "this IP was never seen",
     "this role claim differs from the user's usual one" — must not solve a critical
     class either. The v4 generator passed every static check above while "IP never seen"
@@ -61,7 +61,6 @@ TYPE_NAMES = {
     2: "contextual",
     3: "lateral",
     4: "cred-theft",
-    5: "exfil",
     6: "benign-denied",
 }
 
@@ -78,16 +77,11 @@ ALLOWLIST: dict[tuple[int, str, int], str] = {
     (2, "msg", 1): "Snort probe s1 — fires on 80% of recon events by design",
     (2, "msg", 2): "Snort probe s2",
     (2, "msg", 3): "Snort probe s3",
-    # Exfiltration IS a massive transfer. It is a genuinely easy class, reported
-    # separately precisely so it cannot flatter the lateral-movement numbers.
-    (5, "msg", 7): "bytes_in — exfil moves data, that is what makes it exfil",
-    (5, "msg", 8): "bytes_out — ditto",
     # Resource RISK is a real ZTA attribute known at decision time. Policy violations and
     # data theft target protected routes by definition, so the correlation is semantic.
     # It is bounded, reported as a floor, and identical for benign and attack traffic on
     # any given resource.
     (1, "nf_dst", 4): "resource risk — a policy violation is by definition on a protected route",
-    (5, "nf_dst", 4): "resource risk — exfil targets the loot",
     (6, "nf_dst", 4): "resource risk — a benign OPA denial is also on a protected route",
     # The HTTP method is an input to the OPA decision itself: under Bell-LaPadula most
     # denials are write-downs, so writes are over-represented among denied requests.
@@ -170,8 +164,9 @@ def test_no_exact_value_fingerprint(seed):
     types = s.types.numpy()
     msg = s.msg.numpy().round(6)
 
-    # Single columns, plus the (bytes_in, bytes_out) pair as a potential class tell.
-    candidates = [(j,) for j in range(msg.shape[1])] + [(7, 8)]
+    # Single columns only: the old (bytes_in, bytes_out) pair check lost both members when the
+    # volume columns were dropped from the message.
+    candidates = [(j,) for j in range(msg.shape[1])]
 
     violations = []
     for combo in candidates:
@@ -223,8 +218,8 @@ def test_destination_marginal_matches_benign(seed):
     ben_pop = popularity[dst[benign] - s.res_lo]
 
     failures = []
-    # Only lateral movement is tested here. Policy violations, exfiltration and credential
-    # theft deliberately target protected routes — their destination marginal is shaped by
+    # Only lateral movement is tested here. Policy violations and credential theft
+    # deliberately target protected routes — their destination marginal is shaped by
     # the policy model, not by the sampler, and that is semantic rather than an artifact.
     # Lateral movement has no such excuse: it draws from the same authorised action space
     # that benign exploration draws from.
@@ -303,25 +298,13 @@ def test_critical_classes_have_no_allowlist_entries():
     )
 
 
-def test_exfil_is_not_labelled_lateral():
-    """Exfiltration must not be folded into the lateral-movement class.
-
-    It carries a bulk-transfer volume signal, so mixing the two would introduce
-    a trivial shortcut into the lateral-movement evaluation class.
+def test_no_exfiltration_class():
+    """Exfiltration is out of scope: type 5 is reserved for the external datasets and the
+    generator never emits it. (The message has no volume column left that could smuggle a
+    transfer-size tell into another class.)
     """
-    s = _stream(SEEDS[0])
-    types = s.types.numpy()
-    msg = s.msg.numpy()
-    lateral = types == 3
-    assert lateral.sum() > 100, "vacuous: too few lateral events"
-
-    # No lateral event may look like a bulk transfer.
-    benign_out = msg[types == 0, 8]
-    ceiling = float(benign_out.max())
-    assert float(msg[lateral, 8].max()) <= ceiling, (
-        "a lateral event carries a bulk-transfer volume above anything seen in benign "
-        "traffic — exfil is leaking into the lateral class"
-    )
+    types = _stream(SEEDS[0]).types.numpy()
+    assert not (types == 5).any(), "the generator emitted type 5 (exfiltration)"
 
 
 @pytest.mark.parametrize("seed", SEEDS)

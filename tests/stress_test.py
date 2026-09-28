@@ -56,7 +56,7 @@ RESOURCE_URIS = [
 def _msg(ja3: float) -> list[float]:
     """A signal-clean message of exactly ``TGNConfig.msg_dim`` values.
 
-    Layout: ``[ja3, s1, s2, s3, method, role, clearance, bytes_in, bytes_out, Δt]``. Built
+    Layout: ``[ja3, s1, s2, s3, method, role, clearance]``. Built
     from the config rather than written out as a literal so it tracks the schema.
     """
     from graphagate.config import TGNConfig

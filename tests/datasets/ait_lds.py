@@ -35,7 +35,6 @@ from __future__ import annotations
 import glob
 import gzip
 import json
-import math
 import os
 import re
 from datetime import datetime, timezone
@@ -306,14 +305,9 @@ def load_ait_stream(
 
                         # Extract HTTP URI / resource details
                         uri = ""
-                        nbytes = 0.0
                         if ev_type == "http":
                             http_data = record.get("http", {})
                             uri = http_data.get("url") or http_data.get("hostname", "")
-                            nbytes = float(http_data.get("length", 0.0))
-                        elif "flow" in record:
-                            flow = record.get("flow", {})
-                            nbytes = float(flow.get("bytes_toserver", 0.0))
 
                         # Target resource key
                         res_key = f"res:{dest_ip}:{dest_port}" + (f":{uri[:32]}" if uri else "")
@@ -344,7 +338,6 @@ def load_ait_stream(
                             "dest_port": dest_port,
                             "service": str(app_proto),
                             "res": res_key,
-                            "bytes": nbytes,
                             "etype": etype,
                         })
             except Exception as e:
@@ -370,7 +363,6 @@ def load_ait_stream(
                         "dest_port": d_port,
                         "service": srv,
                         "res": f"res:{d_ip}:{d_port}",
-                        "bytes": 0.0,
                         "etype": T_BENIGN,
                     })
             except Exception as e:
@@ -488,7 +480,6 @@ def load_ait_stream(
     last_state: dict[tuple[str, str], tuple[float, str]] = {}
     bi = 0
     src_l, cfg_l, dev_l, usr_l, dst_l, t_l, msg_l, y_l, ty_l = [], [], [], [], [], [], [], [], []
-    last_user_t: dict[int, int] = {}
     bound_counts = {"user": 0, "device": 0, "config": 0}
 
     for _, row in df_all.iterrows():
@@ -497,7 +488,6 @@ def load_ait_stream(
         rel_t = int(row["rel_t"])
         res_key = row["res"]
         srv = row["service"]
-        nbytes = float(row["bytes"])
         etype = int(row["etype"])
 
         while bi < len(bind_events) and bind_events[bi][0] <= when:
@@ -521,17 +511,11 @@ def load_ait_stream(
         s = index[f"src:{ip}"]
         r = index[res_key]
 
-        dt_user = rel_t - last_user_t.get(u, rel_t)
-        last_user_t[u] = rel_t
-
         msg_vec = [
             1.0,  # ja3_valid
             0.0, 0.0, 0.0,  # sensor alarms
             _service_to_code(srv),
             0.0, 0.0,  # roleVal, clrVal
-            float(math.log1p(nbytes)) / 10.0,
-            0.0,  # bytes_resp (zero response-side leakage)
-            float(math.log1p(dt_user)) / 10.0,
         ]
 
         src_l.append(s)

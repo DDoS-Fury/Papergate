@@ -18,7 +18,6 @@ The stream is chronologically structured for one-class training:
 from __future__ import annotations
 
 import glob
-import math
 import os
 
 import pandas as pd
@@ -229,7 +228,6 @@ def load_uwf_stream(
 
     src_l, cfg_l, dev_l, usr_l, dst_l = [], [], [], [], []
     t_l, y_l, ty_l, msg_l = [], [], [], []
-    last_user_t: dict[int, int] = {}
 
     for row in df_all.itertuples():
         s_ip = str(row.src_ip_zeek)
@@ -245,14 +243,10 @@ def load_uwf_stream(
         c = _get_idx(f"cfg:{srv}")
         r = _get_idx(f"res:{d_ip}:{d_port}")
 
-        dt_user = rel_t - last_user_t.get(u, rel_t)
-        last_user_t[u] = rel_t
-
-        nbytes = float(row.orig_bytes) if (pd.notna(row.orig_bytes) and row.orig_bytes > 0) else 0.0
         method_code = _service_to_code(srv)
 
-        # 10-dim edge message layout (same as synthetic and PicoDomain):
-        # [ja3_valid=1.0, s1=0, s2=0, s3=0, method, roleVal=0, clrVal=0, bytes_in, bytes_out=0, dt_user]
+        # 7-dim edge message layout (same as synthetic and PicoDomain):
+        # [ja3_valid=1.0, s1=0, s2=0, s3=0, method, roleVal=0, clrVal=0]
         msg_vec = [
             1.0,  # ja3_valid
             0.0,  # s1
@@ -261,9 +255,6 @@ def load_uwf_stream(
             method_code,
             0.0,  # roleVal
             0.0,  # clrVal
-            float(math.log1p(nbytes)) / 10.0,
-            0.0,  # bytes_out (zero response-side leakage)
-            float(math.log1p(dt_user)) / 10.0,
         ]
 
         src_l.append(s)

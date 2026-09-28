@@ -3,7 +3,7 @@
 A classic, **non-relational** unsupervised anomaly detector. Like the Isolation
 Forest baseline, One-Class SVM (RBF kernel) treats every ZTA access event as an
 independent static feature vector with no graph structure or temporal history:
-a 45-dim vector (edge features `msg` [10] ⊕ static features of device [16] ⊕ static
+a 42-dim vector (edge features `msg` [7] ⊕ static features of device [16] ⊕ static
 features of resource [16] ⊕ causal benign-gated history counters [3]).
 
 ## Mechanism

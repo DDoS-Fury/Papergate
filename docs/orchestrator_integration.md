@@ -20,12 +20,17 @@ The TGN model was designed specifically to be **stateful** and to autonomously m
    - `key_config` (optional): client configuration — the TLS/JA3 fingerprint, `conf:<ja3>`. If omitted the server substitutes `conf:guest`, so **the config node is always present**.
    - `key_dst`: resource URI.
    - Timestamp (e.g. Unix epoch).
-   - `features`: edge message of **`msg_dim` floats** (currently **10**, see
+   - `features`: edge message of **`msg_dim` floats** (currently **7**, see
      `TGNConfig.msg_dim`; `/infer` rejects a different length with 422):
-     `[ja3, s1, s2, s3, method, role, clearance, bytes_in, bytes_out, log1p(Δt user)/10]`.
-     Only fields available **at decision time**: no response field (the HTTP status
-     is deliberately not part of the message — see the docstring of
-     `stream_synthetic`).
+     `[ja3, s1, s2, s3, method, role, clearance]`.
+     Only fields available **at decision time**: no response field (neither the HTTP
+     status nor the response volume `bytes_out`, which earlier schemas carried at
+     index 8 — see the docstring of `stream_synthetic`). The request volume `bytes_in`
+     was dropped as well, and so was the user's inter-request gap: the model reads each
+     entity's recency from its own memory and the `timestamp`. The server computes none
+     of these values: the orchestrator builds all of them. A checkpoint keeps the
+     `msg_dim` it was trained with (`/health` reports it): artifacts trained on the
+     intermediate schemas expect 8 to 11 floats.
    - **Entity static attributes** (`user_feat` / `device_feat` / `dst_feat`, len ==
      `node_feat_dim` = 16): role, clearance, device tier. The orchestrator/OPA already
      knows them for every request, so they are passed per-event (no extra datastore).
@@ -151,16 +156,13 @@ Configuration via environment variables (all optional):
   "key_config": "conf:771,4865-...", // opt.: TLS/JA3 fingerprint; default "conf:guest"
   "key_dst": "/api/v1/documents",  // resource key (normalized URI)
   "timestamp": 1717000000,         // integer (e.g. Unix epoch)
-  "features": [1.0, 0.0, 0.0, 0.0, 0.0, 0.67, 0.5, 0.12, 0.08, 0.31],
-                                              // edge message: len == msg_dim (10)
+  "features": [1.0, 0.0, 0.0, 0.0, 0.0, 0.67, 0.5],
+                                              // edge message: len == msg_dim (7)
                                               // [0] JA3: 1.0 (ok), 0.0 (anomaly)
                                               // [1-3] Snort probes s1, s2, s3 (0.0 or 1.0)
                                               // [4] HTTP method (0=GET, 1=POST, 2=PUT, 3=DELETE, 4=PATCH)
                                               // [5] Normalized role (idx/(len-1))
                                               // [6] Normalized clearance (idx/4)
-                                              // [7] Normalized bytes_in
-                                              // [8] Normalized bytes_out
-                                              // [9] log1p(Δt since the user's last request)/10
   "user_feat": [/* ... */],        // opt., static attributes, len == node_feat_dim (16)
   "device_feat": [/* ... */],      // opt., same (tier in node_feat[2])
   "dst_feat": [/* ... */],         // opt.; for preregistered resources the RISK
@@ -266,7 +268,7 @@ For this reason, the Orchestrator must inject the privileges at runtime via `use
 # Read-only score of an event
 curl -s -X POST http://localhost:8888/infer \
   -H 'Content-Type: application/json' \
-  -d '{"key_user":"alice","key_device":"tpm:a1b2c3","key_source":"src:10.0.0.7","key_config":"conf:guest","key_dst":"/api/v1/documents","timestamp":1717000000,"features":[1.0,0.0,0.0,0.0,0.0,0.67,0.5,0.12,0.08,0.31]}'
+  -d '{"key_user":"alice","key_device":"tpm:a1b2c3","key_source":"src:10.0.0.7","key_config":"conf:guest","key_dst":"/api/v1/documents","timestamp":1717000000,"features":[1.0,0.0,0.0,0.0,0.0,0.67,0.5]}'
 # -> {"anomaly_score":0.83,"is_anomaly":true,"threshold":0.6264}
 ```
 
@@ -283,7 +285,7 @@ type Event struct {
     KeyConfig string    `json:"key_config,omitempty"` // "conf:<ja3>" (default "conf:guest")
     KeyDst    string    `json:"key_dst"`
     Timestamp int64     `json:"timestamp"`
-    Features  []float64 `json:"features"`             // len == msg_dim (10)
+    Features  []float64 `json:"features"`             // len == msg_dim (7)
     UserFeat  []float64 `json:"user_feat,omitempty"`  // len == node_feat_dim (16)
     DeviceFeat []float64 `json:"device_feat,omitempty"`
     DstFeat   []float64 `json:"dst_feat,omitempty"`

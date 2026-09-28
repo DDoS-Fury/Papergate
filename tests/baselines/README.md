@@ -22,7 +22,7 @@ All baselines:
 4. Report on the **test** segment the same metrics as the TGN:
    - `roc_auc_score` and `average_precision_score` aggregate (benign vs all anomalies);
    - breakdown **per type** (0=benign, 1=policy, 2=contextual, 3=lateral, 4=cred-theft,
-     5=exfil, 6=benign-denied — same set as the `train_tgn` breakdown),
+     5=exfil [external datasets only], 6=benign-denied — same set as the `train_tgn` breakdown),
      benign-vs-that-type, with AUC / AP / Recall@threshold;
    - the threshold is calibrated on the **benign validation** segment at the `target_fpr`
      of `TGNConfig` (1%, 99th percentile of the benign scores), identical to the TGN.
@@ -40,9 +40,9 @@ time-sorted):
 | `src` | `[N]` | source node index of the chain (v4: source IP → config → device → user) |
 | `dst` | `[N]` | destination node index (resource) |
 | `t`   | `[N]` | timestamp (increasing integers) |
-| `msg` | `[N,10]` | dynamic v4 edge features |
+| `msg` | `[N,7]` | dynamic v4 edge features |
 | `y`   | `[N]` | binary label (0=benign, 1=anomalous) |
-| `types` | `[N]` | 0=benign, 1=policy, 2=contextual, 3=lateral, 4=cred-theft, 5=exfil, 6=benign-denied |
+| `types` | `[N]` | 0=benign, 1=policy, 2=contextual, 3=lateral, 4=cred-theft, 5=exfil (external datasets only), 6=benign-denied |
 | `node_features` | `[num_nodes,16]` | static attributes per node type |
 
 Node indices are block-allocated per type (`num_users`, `num_ips`, `num_devices`,

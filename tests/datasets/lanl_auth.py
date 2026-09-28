@@ -16,12 +16,11 @@ Schema mapping → :class:`graphagate.train_tgn.StreamData` (the synthetic strea
   auth.txt: time, srcUser@dom, dstUser@dom, srcComp, dstComp, authType, logonType, authOrient, success
   - src node  = source computer, dst node = destination computer (host-to-host = the lateral graph)
   - t         = integer second
-  - msg[10]    = [ja3=1, snort=0, s1=0, s2=0, method, roleVal=0, clrVal=0, bytes_in=0,
-                bytes_out=0, log1p(Δt actor)/10] — the alarm columns are held CLEAN because
-                LANL auth carries no TLS/IDS signal and red-team lateral movement is signal-clean
-                by construction; ``method`` carries auth metadata (the auth orientation code) and
-                the last column carries the actor's inter-arrival recency, as in the synthetic
-                stream and the PicoDomain adapter. This keeps the rule baseline correctly blind
+  - msg[7]     = [ja3=1, snort=0, s1=0, s2=0, method, roleVal=0, clrVal=0] — the alarm
+                columns are held CLEAN because LANL auth carries no TLS/IDS signal and
+                red-team lateral movement is signal-clean by construction; ``method`` carries
+                auth metadata (the auth orientation code), as in the synthetic stream and the
+                PicoDomain adapter. This keeps the rule baseline correctly blind
                 to lateral and makes the temporal/relational pattern the sole discriminator — the
                 honest test.
   - y / types = 1 / 3 (lateral) iff (time,user,srcComp,dstComp) is a red-team event, else 0 / 0
@@ -33,7 +32,6 @@ Schema mapping → :class:`graphagate.train_tgn.StreamData` (the synthetic strea
 from __future__ import annotations
 
 import gzip
-import math
 import sys
 
 import torch
@@ -103,7 +101,6 @@ def load_lanl_stream(
         return i
 
     src_l, dst_l, t_l, msg_l, y_l, ty_l = [], [], [], [], [], []
-    last_actor_t: dict[str, int] = {}
     benign_seen = 0
     n_lateral = 0
 
@@ -131,13 +128,9 @@ def load_lanl_stream(
                     continue
                 benign_seen += 1
 
-            # Alarm columns held clean (signal-clean premise); auth orientation in ``method``;
-            # actor recency (log1p Δt / 10) in the last slot, as in the other adapters.
+            # Alarm columns held clean (signal-clean premise); auth orientation in ``method``.
             method = float(_ORIENT_CODE.get(orient, 4))
-            dt_actor = t - last_actor_t.get(src_comp, t)
-            last_actor_t[src_comp] = t
-            msg_l.append([1.0, 0.0, 0.0, 0.0, method, 0.0, 0.0, 0.0, 0.0,
-                          math.log1p(dt_actor) / 10.0])
+            msg_l.append([1.0, 0.0, 0.0, 0.0, method, 0.0, 0.0])
             src_l.append(_idx(src_comp))
             dst_l.append(_idx(dst_comp))
             t_l.append(t)

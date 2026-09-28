@@ -31,8 +31,8 @@ KEY_SOURCE = "src:10.99.99.1"                  # namespaced source key, admitted
 KEY_DST = "/api/v1/reactor-parameters"         # a preregistered resource entity URI
 TS = 10**9            # a timestamp far beyond any training time
 
-# Message layout prefix: [ja3, s1, s2, s3, method, role, clearance, ...]. The tail (byte
-# volumes, Δt) is zero-padded to the checkpoint's own msg_dim rather than hardcoded — a
+# Message layout: [ja3, s1, s2, s3, method, role, clearance]. An older checkpoint's longer
+# message is zero-padded to its own msg_dim rather than hardcoded — a
 # fixed-length literal here silently rotted every time the schema changed and made this
 # verification harness crash instead of reporting.
 _BENIGN_PREFIX = [1.0, 0.0, 0.0, 0.0, 0.0, 0.5, 0.5]
