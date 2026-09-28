@@ -1,0 +1,31 @@
+    [ERRORE] quota giornaliera di Drive esaurita per questo file. Riprova più tardi (fino a 24 h) oppure copia la cartella nel tuo Drive e scarica con rclone; lo script non aggira il limite.
+    [ERRORE] quota giornaliera di Drive esaurita per questo file. Riprova più tardi (fino a 24 h) oppure copia la cartella nel tuo Drive e scarica con rclone; lo script non aggira il limite.
+
+[!] 2 file non scaricati:
+    ecar/evaluation/23Sep19-red/AIA-201-225/AIA-201-225.ecar-2019-12-08T11-05-10.046.json.gz: quota giornaliera di Drive esaurita per questo file. Riprova più tardi (fino a 24 h) oppure copia la cartella nel tuo Drive e scarica con rclone; lo script non aggira il limite.
+    ecar/evaluation/23Sep19-red/AIA-201-225/AIA-201-225.ecar-last.json.gz: quota giornaliera di Drive esaurita per questo file. Riprova più tardi (fino a 24 h) oppure copia la cartella nel tuo Drive e scarica con rclone; lo script non aggira il limite.
+    Rilancia lo stesso comando: i file completi vengono saltati, i .part ripresi.
+=== OpTC Downloader ===
+Destinazione: /home/gabs/Documenti/Università/Advanced Cybersecurity/Papergate/data/optc
+Subset: ecar | path: evaluation/23Sep19-red/AIA-201-225
+
+-> Elenco ecar...
+    [!] ecar/evaluation: nomi uguali a meno delle maiuscole (23Sep-night, 23Sep-Night): salvati con suffisso __<id>
+
+   ecar/evaluation                      2 file     2.33 GB
+
+Selezionati: 2 file, 2.33 GB | già presenti: 0 | da scaricare: 2 (2.33 GB)
+Spazio libero: 1210.45 GB
+
+-> Metadati (GitHub, commit pinnati)
+   meta/OpTC-data/README.md (5 KB)
+   meta/OpTC-data/ecar.md (2 KB)
+   meta/OpTC-data/errata.md (1 KB)
+   meta/OpTC-data/OpTCRedTeamGroundTruth.pdf (453 KB)
+   meta/LMDEval/optc_redteam.csv (111 KB)
+   meta/LMDEval/optc_known_addresses.json (136 KB)
+   meta/LMDEval/LICENSE (1 KB)
+
+[1/2] ecar/evaluation/23Sep19-red/AIA-201-225/AIA-201-225.ecar-2019-12-08T11-05-10.046.json.gz (109.7 MB)
+
+[2/2] ecar/evaluation/23Sep19-red/AIA-201-225/AIA-201-225.ecar-last.json.gz (2.22 GB)

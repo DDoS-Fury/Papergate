@@ -458,7 +458,7 @@ def _synthetic_stream_data(cfg: TGNConfig) -> StreamData:
 
 def train_tgn(cfg: TGNConfig | None = None, *, dataset: "StreamData | None" = None,
               use_struct_head=True, use_hash_identity=True, use_hist_feats=True,
-              use_precursor=True, use_config_node=True, save=True):
+              use_precursor=True, use_config_node=True, save=True, return_scores=False):
     """Train + evaluate the streaming TGN.
 
     The keyword flags drive the ablation study (``tests/ablations``): they toggle the
@@ -1223,6 +1223,9 @@ def train_tgn(cfg: TGNConfig | None = None, *, dataset: "StreamData | None" = No
         "use_hist_feats": use_hist_feats,
         "use_precursor": use_precursor,
         "use_config_node": use_config_node,
+        # Raw per-event test scores (events [test_start, n) of the stream), for evaluation
+        # protocols whose positive/negative sets differ from per_type's (e.g. LMDEval on OpTC).
+        **({"test_scores": test_scores, "test_start": val_end} if return_scores else {}),
     }
 
 

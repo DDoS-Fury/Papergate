@@ -4,7 +4,7 @@ Documento tecnico ad uso degli autori. Raccoglie l'esito della ricerca del 2026-
 dataset pubblico da affiancare a PicoDomain (LANL escluso per scelta), le motivazioni, i rischi
 noti e i controlli ancora da fare.
 
-**Nessun risultato su OpTC esiste ancora.** Tutto ciò che segue riguarda la scelta e il
+**Nessun risultato pubblicabile su OpTC esiste ancora** (solo il pilota del §11). Tutto ciò che segue riguarda la scelta e il
 protocollo, non le prestazioni. Le informazioni sono marcate per grado di verifica (§9).
 
 ---
@@ -290,6 +290,25 @@ degli host compromessi riduce ancora, ma cambia il grafo e va dichiarato.
 ```
 python scripts/download_optc.py --subset ecar --path evaluation/23Sep19-red --path benign/19Sep19 --yes
 ```
+
+## 11. Pilota (2026-09-28/29): estrazione verificata, numeri non rappresentativi
+
+Procedura per la run completa: `optc_runbook.md`.
+
+*   **Drive originale:** il 28/09 sera la quota giornaliera era esaurita su entrambi i file del bucket
+    `23Sep19-red/AIA-201-225`. Fonte alternativa: la release corretta di Majorczyk (doi:10.57745/UXCWOC,
+    un tar per giorno, un file per host, range HTTP). Il confronto di contenuto originale/corretta è ancora da fare.
+*   **`scripts/optc_extract.py`**: `extract` legge i membri dei tar via range HTTP e scarta il grezzo al volo,
+    `extract-local` fa lo stesso sui file locali, `build` applica mappa host, dedup ed etichette di LMDEval
+    tenendo timestamp assoluto, `label_lm` e i campi eCAR. Il filtro rapido accetta anche il JSON con spazi.
+*   **Equivalenza** (23/9, AIA-201-225, 25 host, 6,1 GB): output identico a `extract_optc.py` originale, con il
+    solo filtro rapido esteso agli spazi (202.834 flussi, 301 positivi, 18 LM), anche in `--lm-only`.
+    Streaming e locale identici. Velocità streaming ~22 MB/s con 4 processi.
+*   Nella release corretta `principal` è pieno nel 94,4% dei flussi e `image_path` nel 99,8%: il rischio §5.2
+    riguarda il campione dell'originale, non questa release.
+*   **Smoke TGN** (split interno al 23/9): LM AUC 0.997 / AP 0.265, all AUC 0.9998 / AP 0.921. La baseline
+    1/(1+conteggio della coppia) fa LM AUC 0.993 (AP 0.022): su 25 host e mezza giornata le coppie del LM non
+    compaiono mai prima dell'attacco. Il pilota dimostra la pipeline, non le prestazioni.
 
 ## Fonti
 

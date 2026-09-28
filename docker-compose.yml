@@ -161,6 +161,25 @@ services:
               "--epochs", "15",
               "--eval-batch-size", "1024"]
 
+  # External validity on DARPA OpTC with the LMDEval protocol (tests/eval_optc.py).
+  # Prerequisite: the flow list built by scripts/optc_extract.py in ./data/optc.
+  eval-optc:
+    <<: *base
+    profiles: ["eval-optc"]
+    container_name: graphagate-eval-optc
+    volumes:
+      - ./public:/app/public
+      - ./src:/app/src
+      - ./tests:/app/tests
+      - ./data:/data
+    entrypoint: ["python"]
+    command: ["/app/tests/eval_optc.py",
+              "--flows", "/data/optc/optc_flows.csv.gz",
+              "--val-start", "2019-09-22T20:00:00-04:00",
+              "--test-start", "2019-09-23T00:00:00-04:00",
+              "--scores-out", "/data/optc/scores_lmdeval.npz",
+              "--eval-batch-size", "1024"]
+
   # Non-relational baseline (Isolation Forest) on PicoDomain Zeek logs.
   baseline-picodomain-iforest:
     <<: *base
