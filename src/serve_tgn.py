@@ -28,7 +28,10 @@ the OPA-in-the-loop gate is the conservative choice.
 - :func:`commit_event` — the unconditional commit used when the benign/anomalous
   decision is made outside the model (e.g. OPA): map keys and advance memory +
   neighbour history without re-scoring.
-- :func:`apply_feedback` — precursor arming + trust nudge, shared by both paths.
+- :func:`deny_event` — the DENY counterpart of :func:`commit_event`: records the event's
+  alarm in the kill-chain alert state and touches nothing else.
+- :func:`event_alarm` — the per-event alarm rule (flagged, armed, or sensor), shared by
+  the offline replay and every serving path.
 - :func:`save_model` / :func:`load_model` — persist and restore weights, the TGN
   memory buffers, the (non-state_dict) raw-message store, the entity registry and
   the calibrated decision threshold.
@@ -356,47 +359,36 @@ def precursor_shift(model, src_idx: int, t_val: int) -> float:
 
 
 def record_alert(model, src_idx: int, t_val: int) -> None:
-    """Arm the kill-chain precursor: remember that ``src_idx`` just alerted at ``t_val``."""
+    """Arm the kill-chain precursor: remember that ``src_idx`` alerted at ``t_val``.
+
+    Keeps the latest alert time, never an older one: a retried or late ``/deny`` /
+    ``/update`` cannot move an entity's alert back in time, so recording is idempotent.
+    """
     if not hasattr(model, "recent_alert"):
         model.recent_alert = {}
-    model.recent_alert[src_idx] = t_val
+    last = model.recent_alert.get(src_idx)
+    model.recent_alert[src_idx] = t_val if last is None else max(last, t_val)
 
 
-TRUST = 14  # runtime trust slot in node_feat
+def sensor_alarm(features) -> bool:
+    """Whether the event's Snort probe (``features[1]``) fired. Recon precedes lateral
+    movement, so a sensor alert arms the precursor on its own. Datasets whose message has
+    no probe slot (e.g. LANL) never raise it."""
+    return len(features) > 1 and float(features[1]) > 0.5
 
 
-def apply_feedback(model, user_idx: int, device_idx: int | None, timestamp: int, features,
-                   *, flagged: bool, boost_idx: int | None = None) -> None:
-    """Per-event alarm feedback: arm the kill-chain precursor and nudge the trust feature.
+def event_alarm(score: float, *, flagged: bool, threshold_arm: float | None, features) -> bool:
+    """The per-event alarm that arms the kill-chain precursor (see :func:`precursor_shift`).
 
-    ``flagged`` is the decision the *system* reached for this event — the model's own
-    ``is_anomaly`` on the internal-gate path, or the caller's verdict on the
-    ``/infer`` → OPA → ``/update`` path. A sensor alert in ``features`` (Snort probe)
-    counts as an alarm on its own, since recon precedes lateral movement.
-
-    Both serving paths must call this. Previously only ``score_event(update=True)`` did,
-    so on the documented two-step flow — which is ``score_event(update=False)`` followed
-    by ``commit_event`` — ``recent_alert`` stayed empty, ``precursor_shift`` always
-    returned 0.0 and the trust column stayed frozen at its checkpoint value: two inputs
-    that contribute offline were simply absent in deployment.
+    An event alarms when it was flagged (``score`` at or above its decision threshold),
+    when it is *armed* (``score >= threshold_arm``: recon sits below the decision threshold
+    by construction, so arming needs its own, lower threshold), or when its sensor fired.
+    ``threshold_arm=None`` (no arm threshold, e.g. artifacts that predate it) leaves the
+    decision alone. One rule for the offline replay and every serving path, so the
+    reported numbers describe the deployed system.
     """
-    if boost_idx is None:
-        boost_idx = device_idx if device_idx is not None else user_idx
-    alarm = bool(flagged) or (len(features) > 1 and features[1] > 0.5)
-    targets = [user_idx] if device_idx is None else [device_idx, user_idx]
-    # Datasets whose node_feat is narrower than the ZTA schema (e.g. the LANL adapter)
-    # have no trust column; the precursor still applies.
-    if model.node_feat.size(1) <= TRUST:
-        if alarm:
-            record_alert(model, boost_idx, timestamp)
-        return
-    if alarm:
-        record_alert(model, boost_idx, timestamp)
-        for idx in targets:
-            model.node_feat[idx, TRUST] = max(0.0, model.node_feat[idx, TRUST].item() - 0.5)
-    else:
-        for idx in targets:
-            model.node_feat[idx, TRUST] = min(1.0, model.node_feat[idx, TRUST].item() + 0.01)
+    armed = threshold_arm is not None and score >= threshold_arm
+    return bool(flagged) or armed or sensor_alarm(features)
 
 
 def signal_dirty(features) -> bool:
@@ -587,9 +579,9 @@ def score_event(
         eff_threshold = threshold_dirty
     is_anomaly = score >= eff_threshold
 
-    if update:
-        apply_feedback(model, user_idx, device_idx, timestamp, features,
-                       flagged=is_anomaly, boost_idx=boost_idx)
+    if update and event_alarm(score, flagged=is_anomaly, threshold_arm=model.threshold_arm,
+                              features=features):
+        record_alert(model, boost_idx, timestamp)
 
     if update and not is_anomaly:
         # Commit order mirrors the causal chain: source→config, config→device,
@@ -623,7 +615,7 @@ def commit_event(
     device_feat=None,
     dst_feat=None,
     guest_device_fallback: bool = False,
-    flagged: bool = False,
+    alarm: bool = False,
 ) -> None:
     """Commit an event the caller has already judged benign (e.g. OPA returned ALLOW).
 
@@ -636,10 +628,11 @@ def commit_event(
     :func:`infer_logit` / :func:`score_event` ``update=False`` first, then commit here
     only on approval).
 
-    ``flagged`` carries back what the scoring step decided: OPA may ALLOW an event the
-    model still flagged, and that is precisely the case the kill-chain precursor exists
-    for. It drives :func:`apply_feedback` (precursor + trust), which this function used
-    not to run at all — leaving both signals inert on the recommended flow.
+    ``alarm`` carries back the :func:`event_alarm` of the scoring step (``/infer`` returns
+    it): OPA may ALLOW an event the model still flagged or armed on, and that is precisely
+    the case the kill-chain precursor exists for. Every scored event must end in exactly
+    one of this function or :func:`deny_event`, so the alert state sees every event — as
+    the offline replay does.
     """
     model.eval()
     if key_config is None:
@@ -661,7 +654,8 @@ def commit_event(
     if source_idx is not None:
         _set_source_network_feature(model, source_idx, key_source)
 
-    apply_feedback(model, user_idx, device_idx, timestamp, features, flagged=flagged)
+    if alarm or sensor_alarm(features):
+        record_alert(model, device_idx if device_idx is not None else user_idx, timestamp)
 
     features_bind = [0.0] * len(features)
     # Commit order: source→config, config→device, config→user, device→user, user→resource.
@@ -674,6 +668,36 @@ def commit_event(
         update_memory(model, device_idx, user_idx, timestamp, features_bind, device)
     update_memory(model, user_idx, dst_idx, timestamp, features, device,
                   aux_pair=(device_idx, dst_idx) if device_idx is not None else None)
+
+
+def deny_event(
+    model,
+    registry: NodeRegistry,
+    key_user: Hashable,
+    key_device: Hashable | None,
+    timestamp: int,
+    features,
+    *,
+    guest_device_fallback: bool = False,
+    alarm: bool = False,
+) -> None:
+    """Record an event the caller DENYed: the alert state only, never the baseline.
+
+    The DENY counterpart of :func:`commit_event`. The offline replay applies the per-event
+    alarm to *every* scored event, whatever the commit gate decides; without this call a
+    DENYed event — typically the Snort-flagged recon that should arm the kill-chain
+    precursor — would leave no trace. It is a delivery channel, not evidence: the DENY
+    itself does not alarm, only ``alarm`` (the :func:`event_alarm` returned by ``/infer``)
+    or the event's sensor does. Memory, neighbour history and the interaction counters are
+    untouched, so the anti-poisoning gate is unchanged. Only the alerted entity (device,
+    else user) is admitted, and only when there is an alarm to record.
+    """
+    if not (alarm or sensor_alarm(features)):
+        return
+    if guest_device_fallback:
+        key_device = to_guest_device(key_device)
+    actor = _admit(model, registry, key_device if key_device is not None else key_user)
+    record_alert(model, actor, timestamp)
 
 
 def save_model(model, registry: NodeRegistry, threshold: float, hp: dict,
@@ -713,6 +737,8 @@ def save_model(model, registry: NodeRegistry, threshold: float, hp: dict,
     stats = {
         "threshold": float(threshold),
         "threshold_dirty": float(threshold_dirty if threshold_dirty is not None else threshold),
+        # Kill-chain arm threshold (see event_alarm); read back onto the model by load_model.
+        "threshold_arm": model.threshold_arm,
         "target_fpr": hp.get("target_fpr"),
         "capacity": int(hp["capacity"]),
         "registry": registry.to_dict(),
@@ -758,6 +784,9 @@ def load_model(checkpoint_path, stats_path, device):
     with open(stats_path, encoding="utf-8") as f:
         stats = json.load(f)
     registry = NodeRegistry.from_dict(stats["registry"])
+    # Artifacts without an arm threshold keep arming on the decision alone (flagged / sensor).
+    arm = stats.get("threshold_arm")
+    model.threshold_arm = None if arm is None else float(arm)
     threshold = float(stats["threshold"])
     threshold_dirty = float(stats.get("threshold_dirty", threshold))
     return model, registry, threshold, threshold_dirty, hp

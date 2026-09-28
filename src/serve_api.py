@@ -17,6 +17,9 @@ Endpoints
   entity keys into the registry, which is state by design; step 1 of the
   anti-poisoning flow: orchestrator scores, asks OPA, then commits only on ALLOW).
 - ``POST /update``  — commit an event the caller already judged benign (post-ALLOW).
+- ``POST /deny``    — record a DENYed event's alarm in the kill-chain alert state; never
+  touches memory or neighbour history. Every ``/infer`` ends in exactly one of
+  ``/update`` or ``/deny``, echoing the ``alarm`` it returned.
 - ``POST /score``   — score + internal gate + conditional update (OPA-less / testing).
 - ``POST /persist`` — write the evolved in-RAM state back to ``public/``.
 
@@ -63,6 +66,8 @@ def get_sys_stats():
 from graphagate.config import TGN_CHECKPOINT_PATH, TGN_STATS_PATH
 from graphagate.serve_tgn import (
     commit_event,
+    deny_event,
+    event_alarm,
     load_model,
     save_model,
     score_event,
@@ -171,14 +176,17 @@ class EventIn(BaseModel):
     dst_feat: Optional[list[float]] = Field(
         None, description="Destination static attributes."
     )
-    flagged: bool = Field(
+    alarm: bool = Field(
         False,
         description=(
-            "/update only: the `is_anomaly` the preceding /infer returned. OPA may ALLOW "
-            "an event the model flagged; passing it back arms the kill-chain precursor "
-            "and drops the trust feature, which otherwise never fire on this flow. "
-            "Ignored by /infer and /score, which know their own verdict."
+            "/update and /deny only: the `alarm` the preceding /infer returned. Passing it "
+            "back arms the kill-chain precursor, whatever OPA decided. Ignored by /infer "
+            "and /score, which compute their own."
         ),
+    )
+    flagged: bool = Field(
+        False,
+        description="Deprecated alias of `alarm` (older clients echo `is_anomaly` here).",
     )
 
 
@@ -186,6 +194,13 @@ class ScoreOut(BaseModel):
     anomaly_score: float
     is_anomaly: bool
     threshold: float
+    # Kill-chain alarm (flagged, armed or sensor): echo it to /update or /deny.
+    alarm: bool = False
+
+
+def _alarm(ev: "EventIn", score: float, is_anomaly: bool) -> bool:
+    return event_alarm(score, flagged=is_anomaly, threshold_arm=STATE.model.threshold_arm,
+                       features=ev.features)
 
 
 class OkOut(BaseModel):
@@ -271,6 +286,7 @@ def health():
         "capacity": int(STATE.hp.get("capacity", 0)),
         "threshold": STATE.threshold,
         "threshold_dirty": STATE.threshold_dirty,
+        "threshold_arm": STATE.model.threshold_arm if STATE.loaded else None,
         "msg_dim": int(STATE.hp.get("msg_dim", 0)),
         "node_feat_dim": int(STATE.hp.get("node_feat_dim", 0)),
         "schema_version": int(STATE.hp.get("schema_version", 1)),
@@ -297,6 +313,7 @@ def infer(ev: EventIn, background_tasks: BackgroundTasks) -> ScoreOut:
             user_feat=ev.user_feat, device_feat=ev.device_feat, dst_feat=ev.dst_feat, update=False,
             guest_device_fallback=bool(STATE.hp.get("guest_device_fallback", False)),
         )
+        alarm = _alarm(ev, score, is_anomaly)
     t1 = time.perf_counter()
     if STATE.active_websockets:
         sys_stats = get_sys_stats()
@@ -313,7 +330,8 @@ def infer(ev: EventIn, background_tasks: BackgroundTasks) -> ScoreOut:
             "cpu_percent": sys_stats["cpu_percent"],
             "ram_gb": sys_stats["ram_gb"],
         })
-    return ScoreOut(anomaly_score=score, is_anomaly=is_anomaly, threshold=eff_threshold)
+    return ScoreOut(anomaly_score=score, is_anomaly=is_anomaly, threshold=eff_threshold,
+                    alarm=alarm)
 
 
 @app.post("/update", response_model=OkOut)
@@ -327,7 +345,20 @@ def update(ev: EventIn) -> OkOut:
             key_source=ev.key_source, key_config=ev.key_config,
             user_feat=ev.user_feat, device_feat=ev.device_feat, dst_feat=ev.dst_feat,
             guest_device_fallback=bool(STATE.hp.get("guest_device_fallback", False)),
-            flagged=ev.flagged,
+            alarm=ev.alarm or ev.flagged,
+        )
+    return OkOut()
+
+
+@app.post("/deny", response_model=OkOut)
+def deny(ev: EventIn) -> OkOut:
+    """Record a DENYed event: kill-chain alert state only, memory + neighbours untouched."""
+    _validate_dims(ev)
+    with STATE.lock:
+        deny_event(
+            STATE.model, STATE.registry, ev.key_user, ev.key_device, ev.timestamp, ev.features,
+            guest_device_fallback=bool(STATE.hp.get("guest_device_fallback", False)),
+            alarm=ev.alarm or ev.flagged,
         )
     return OkOut()
 
@@ -346,6 +377,7 @@ def score(ev: EventIn, background_tasks: BackgroundTasks) -> ScoreOut:
             user_feat=ev.user_feat, device_feat=ev.device_feat, dst_feat=ev.dst_feat, update=True,
             guest_device_fallback=bool(STATE.hp.get("guest_device_fallback", False)),
         )
+        alarm = _alarm(ev, s, is_anomaly)
     t1 = time.perf_counter()
     if STATE.active_websockets:
         sys_stats = get_sys_stats()
@@ -362,7 +394,8 @@ def score(ev: EventIn, background_tasks: BackgroundTasks) -> ScoreOut:
             "cpu_percent": sys_stats["cpu_percent"],
             "ram_gb": sys_stats["ram_gb"],
         })
-    return ScoreOut(anomaly_score=s, is_anomaly=is_anomaly, threshold=eff_threshold)
+    return ScoreOut(anomaly_score=s, is_anomaly=is_anomaly, threshold=eff_threshold,
+                    alarm=alarm)
 
 
 @app.post("/persist", response_model=PersistOut)

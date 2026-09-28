@@ -108,13 +108,6 @@ def _replay_ref(model, source_nodes, device_nodes, user, dst, t, msg, y, device,
         is_anomaly = (score >= eff_thr) if not gate_by_label else (lab == 1)
         if is_anomaly or snort_alert:
             record_alert(model, actor, tv)
-            model.node_feat[actor, 14] = max(0.0, model.node_feat[actor, 14].item() - 0.5)
-            if actor != u:
-                model.node_feat[u, 14] = max(0.0, model.node_feat[u, 14].item() - 0.5)
-        else:
-            model.node_feat[actor, 14] = min(1.0, model.node_feat[actor, 14].item() + 0.01)
-            if actor != u:
-                model.node_feat[u, 14] = min(1.0, model.node_feat[u, 14].item() + 0.01)
 
     return scores, labels
 

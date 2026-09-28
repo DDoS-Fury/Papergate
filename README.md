@@ -92,11 +92,11 @@ flowchart TD
     SUM --> SCO["anomaly score = 1 − σ(logit)"]
     SCO --> PREC["score = min(1, score × precursor_boost)"]
     PREC --> DEC{"score ≥ threshold ?<br/>(cost-sensitive routing)"}
-    DEC -->|anomaly| REP["report anomaly<br/>(+ arm precursor, drop trust)"]
+    DEC -->|anomaly| REP["report anomaly<br/>(+ arm precursor)"]
     DEC -->|benign| OK["allow"]
     PREC --> GATE{"commit gate"}
     GATE -->|"OPA ALLOW<br/>(measured protocol)"| UPD["update TGNMemory<br/>+ neighbor_loader.insert"]
-    GATE -->|"OPA DENY"| NOUPD["memory NOT updated"]
+    GATE -->|"OPA DENY (/deny)"| NOUPD["memory NOT updated<br/>(alarm still recorded)"]
     UPD -.->|writes back history| NL
 ```
 
@@ -116,7 +116,7 @@ flowchart TD
 | **Hashed Identity** (`hash_emb`) | Learnable embedding via deterministic hashing of the key (`stable_hash`, BLAKE2b). Keeps the model 100% inductive for new nodes and gives every entity — including the **resources** — a distinguishable identity. *Honest note:* the ablation delta awaits regeneration (see §Results) — the two series present in the repo contradicted each other and neither had a supporting log. |
 | **History features** (`compute_hist_feats`) | For every event `[log1p(pair_count), log1p(src_count), pair/(src+1)]`: causal, *benign-gated* interaction counters (derivable at runtime, not circular). They inject the **novelty** signal of the src→dst pair. The ablation delta awaits regeneration (see §Results). |
 | **Kill-chain precursor** (`recent_alert`, `precursor_boost`) | Multiplicative *serving-time* prior that raises an entity's score right after one of its alerts (recon→lateral), with decay `0.5^(Δt/half_life)`. State kept outside the TGN memory (the gate would discard the precursor); **not** a trained input. Ablation delta awaits regeneration (see §Results). |
-| **Static node features** (`node_feat`) | Per-node static ZTA attributes, buffer `[num_nodes, 16]`. Indices in use: `[2]` device tier, `[3]` **unused** (it held the resource index: leakage, removed), `[4]` resource **risk** (per-resource sensitivity from the reference policy model), `[5]` source network **internal/external** (RFC1918, derived from the IP — a feature, not a gate), `[14]` trust_score. |
+| **Static node features** (`node_feat`) | Per-node static ZTA attributes, buffer `[num_nodes, 16]`. Indices in use: `[2]` device tier, `[3]` **unused** (it held the resource index: leakage, removed), `[4]` resource **risk** (per-resource sensitivity from the reference policy model), `[5]` source network **internal/external** (RFC1918, derived from the IP — a feature, not a gate), `[14]` trust_score (held at 1.0: never mutated, since training never sees it vary). |
 | **MessageNeighborLoader** (`neighbor_loader`) | **Bounded-in-RAM** ring buffer with the last `neighbor_size=30` temporal neighbours per node. Enables message passing over the historical neighbourhood — the **structural** signal for lateral movement — with constant memory `O(num_nodes·K·msg_dim)`. **No graph database.** |
 | **GraphAttentionEmbedding** (`gnn`) | Multi-hop (`num_hops=3`) stacks of `TransformerConv` (4 heads, with residual connections) computing the node embedding `z` over the extended temporal neighbourhood; `edge_attr` = encoding of the relative time `Δt` concatenated with the edge's historical message. |
 | **Feature head** (`link_pred`, `LinkPredictor`) | MLP over `[z_src, z_dst, cur_msg, feat_src, feat_dst, Δt_enc, history_feats]`. Trained with an **InfoNCE** objective (ranking the true dst above K random ones) + positive anchor BCE + contextual BCE. This is the head that — with memory + history feats — carries the **lateral** signal. |
@@ -165,9 +165,10 @@ ring-buffer mode. The history of the other users is never moved, loaded or alter
 4. `score()`: sums the **feature head** and the **structural head** → logit →
    `anomaly score = 1 − σ(logit)`.
 5. The external decider (OPA) answers ALLOW/DENY. On **ALLOW**, `TGNMemory` is updated and the
-   edge is inserted into the neighbour loader (**predict-then-update**); on DENY the memory stays
-   untouched. The model's verdict is reported back (`flagged`) and it arms the kill-chain
-   precursor / lowers the trust even when OPA admits the event.
+   edge is inserted into the neighbour loader (**predict-then-update**); on DENY (`/deny`) the
+   memory stays untouched. Both branches echo the `alarm` of `/infer` (flagged, armed or
+   Snort), which arms the kill-chain precursor whatever OPA decided; the trust feature is
+   never mutated.
 
 > **Train/serve consistency — verified equivalence, not shared code.** The offline
 > evaluation (`train_tgn._replay`) does **not** call the serving primitives: it is a

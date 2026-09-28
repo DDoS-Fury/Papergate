@@ -115,11 +115,11 @@ class ZTATemporalGraphNetwork(nn.Module):
         # global node id. Populated from the data at train time and persisted in the
         # state_dict; dynamic entities admitted at serving time write their slot here.
         _nf = torch.zeros(num_nodes, node_feat_dim)
-        # Column 14 is the trust score, and its neutral value is 1.0 (fully trusted), not
-        # 0.0. Zero-initialising the whole buffer meant every slot in the capacity headroom
-        # — i.e. every entity first seen at SERVING time — entered at minimum trust, the
-        # value that during training only followed two anomalous events on that entity,
-        # while training entities and evicted-and-recycled slots both entered at 1.0.
+        # Column 14 is the trust score, held at its neutral 1.0 everywhere (training,
+        # offline replay, serving): the benign-only objective never sees it vary, so any
+        # runtime mutation would be an untrained input shift. Per-entity alarm history
+        # lives in the kill-chain alert state instead (``recent_alert``). A zero here would
+        # put every capacity-headroom slot off the training value.
         if node_feat_dim > 14:
             _nf[:, 14] = 1.0
         self.register_buffer("node_feat", _nf)
@@ -187,6 +187,10 @@ class ZTATemporalGraphNetwork(nn.Module):
 
         self.precursor_half_life = _Cfg.precursor_half_life
         self.precursor_max_shift = _Cfg.precursor_max_shift
+        # Score at or above which an event arms the precursor even below the decision
+        # threshold (serve_tgn.event_alarm). Fitted at calibration and persisted in the stats
+        # file, not the state_dict; None = arm on the decision alone.
+        self.threshold_arm = None
         # Recency cap / never-seen sentinel for both Δt inputs — see config.delta_t_cap
         # and ``pair_delta_t``. Runtime attribute (not a buffer): it is a decoding
         # convention, and persisting it would let an old checkpoint silently override a

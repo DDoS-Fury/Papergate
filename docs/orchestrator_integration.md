@@ -65,7 +65,9 @@ The TGN model was designed specifically to be **stateful** and to autonomously m
      the edge into the neighbour loader.
    - If **OPA answers DENY**, the `update_memory` call is omitted. This absolutely prevents
      attackers from "poisoning" the model, guaranteeing that the TGN learns only from what
-     OPA explicitly approved — both in memory and in the neighbour history.
+     OPA explicitly approved — both in memory and in the neighbour history. The Orchestrator
+     calls **`/deny`** instead, which records the event's kill-chain alarm (if any) and
+     touches nothing else.
 
    > Note: `infer_score` / `update_memory` work on slot indices already mapped by the
    > `NodeRegistry`; the per-event static attributes must be written into the slot before
@@ -132,13 +134,14 @@ Configuration via environment variables (all optional):
 |---|---|---|
 | `GET /health` | Readiness + loaded parameters (device, threshold, dimensions, registry slots) | no |
 | `POST /infer` | Computes the anomaly score **without** advancing memory/neighbourhood (only admits the entity in the registry) — *step 1* of the anti-poisoning flow | no (admission only) |
-| `POST /update` | Commits an **already approved** event (post-OPA-ALLOW): advances memory + neighbour history | yes |
+| `POST /update` | Commits an **already approved** event (post-OPA-ALLOW): advances memory + neighbour history, records the echoed `alarm` | yes |
+| `POST /deny` | Closes a **DENYed** event: records the echoed `alarm` in the kill-chain alert state; memory, neighbourhood and counters untouched | alert state only |
 | `POST /score` | Score + internal gate + conditional update (OPA-less use / tests) | yes if benign |
 | `POST /persist` | Rewrites the evolved state to `public/` (also automatic at shutdown) | writes to disk |
 
 ### Request schema (events)
 
-`/infer`, `/update`, `/score` accept the same JSON body:
+`/infer`, `/update`, `/deny`, `/score` accept the same JSON body:
 
 ```json
 {
@@ -163,10 +166,10 @@ Configuration via environment variables (all optional):
   "dst_feat": [/* ... */],         // opt.; for preregistered resources the RISK
                                    // (node_feat[*,4]) is already baked in the checkpoint, so
                                    // dst_feat is NOT required in production.
-  "flagged": false                 // only /update: the is_anomaly returned by the
-                                   // previous /infer. OPA can ALLOW an event the model
-                                   // flagged: sending it back is what arms the kill-chain
-                                   // precursor and lowers the trust.
+  "alarm": false                   // only /update and /deny: the `alarm` returned by the
+                                   // previous /infer, echoed back whatever OPA decided.
+                                   // It arms the kill-chain precursor. (`flagged` is a
+                                   // deprecated alias.)
 }
 ```
 
@@ -183,8 +186,14 @@ maximum over the edges present.
 Response of `/infer` and `/score`:
 
 ```json
-{ "anomaly_score": 0.83, "is_anomaly": true, "threshold": 0.6264 }
+{ "anomaly_score": 0.83, "is_anomaly": true, "threshold": 0.6264, "alarm": true }
 ```
+
+`alarm` is the kill-chain alarm: the event was flagged, or its score reached the precursor
+arm threshold (lower than the decision threshold: recon stays below the decision threshold
+by construction), or its Snort probe fired. The alarm arms a time-decayed prior on the
+entity's (device, else user) next scores. The trust feature (`node_feat[14]`) is never
+mutated: it stays at its training value, 1.0.
 
 ### Anti-poisoning flow mapping (OPA gatekeeper)
 
@@ -193,10 +202,20 @@ The two-step schema of the previous section is realized as follows:
 1. Orchestrator → `POST /infer` → obtains `anomaly_score` (read-only with respect to the
    baseline; only admits new keys in the registry).
 2. Orchestrator → OPA with the request + score.
-3. If **ALLOW** → `POST /update` (commits into the model). If **DENY** → no call to
-   `/update`: the hostile event never enters the baseline (memory + neighbourhood). The
-   only trace of a DENYed event is the registry slot allocated at admission, which does
-   not modify the model's learned state.
+3. If **ALLOW** → `POST /update` (commits into the model). If **DENY** → `POST /deny`:
+   the hostile event never enters the baseline (memory + neighbourhood); it only leaves its
+   kill-chain alarm, plus the registry slot allocated at admission, neither of which
+   modifies the model's learned state.
+
+**Invariant.** Every `/infer` must be closed by exactly one `/update` (ALLOW) or `/deny`
+(DENY), both echoing the `alarm` that `/infer` returned. The offline evaluation applies the
+alarm to every scored event whatever the commit gate decides; skipping `/deny` would leave
+the precursor unarmed exactly on the DENYed recon it exists for, and the deployed system
+would no longer be the one the reported numbers describe. A DENY is a delivery channel, not
+evidence: `/deny` without an alarm (and without a Snort probe) is a no-op. Retries are safe
+(the alert state keeps the latest alert time). Ordering: an event's `/update` or `/deny` must complete
+before the next `/infer` on the same entity — the offline replay records event *i*'s alarm
+(and commits its memory) before scoring event *i+1*.
 
 ### Identity handling (new users and guests, Hashed Identity)
 
@@ -253,7 +272,7 @@ curl -s -X POST http://localhost:8888/infer \
 
 ### Example: integration from the orchestrator (Go)
 
-The three-step anti-poisoning flow (`/infer` → OPA → `/update`) is written with the
+The three-step anti-poisoning flow (`/infer` → OPA → `/update` | `/deny`) is written with the
 standard library only:
 
 ```go
@@ -268,12 +287,13 @@ type Event struct {
     UserFeat  []float64 `json:"user_feat,omitempty"`  // len == node_feat_dim (16)
     DeviceFeat []float64 `json:"device_feat,omitempty"`
     DstFeat   []float64 `json:"dst_feat,omitempty"`
-    Flagged   bool      `json:"flagged,omitempty"`    // only /update: is_anomaly of /infer
+    Alarm     bool      `json:"alarm,omitempty"`      // only /update and /deny: alarm of /infer
 }
 type ScoreResp struct {
     AnomalyScore float64 `json:"anomaly_score"`
     IsAnomaly    bool    `json:"is_anomaly"`
     Threshold    float64 `json:"threshold"`
+    Alarm        bool    `json:"alarm"`
 }
 
 func post(base, path string, in, out any) error {
@@ -301,9 +321,11 @@ var s ScoreResp
 if err := post(base, "/infer", ev, &s); err != nil { /* fail-closed */ }
 
 allow := opa.Decide(req, s.AnomalyScore)   // OPA is the final decider
+ev.Alarm = s.Alarm                         // echoed on both branches: arms the precursor
 if allow {
-    ev.Flagged = s.IsAnomaly               // reports the verdict: arms precursor + trust
     _ = post(base, "/update", ev, nil)     // commits ONLY if approved
+} else {
+    _ = post(base, "/deny", ev, nil)       // alert state only, never the baseline
 }
 ```
 

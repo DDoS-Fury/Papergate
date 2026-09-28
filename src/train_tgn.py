@@ -64,9 +64,11 @@ from graphagate.serve_tgn import (
     chain_edge_logits,
     combine_edge_logits,
     fit_edge_calibration,
+    event_alarm,
     precursor_shift,
     record_alert,
     save_model,
+    sensor_alarm,
     set_edge_calibration,
     signal_dirty,
 )
@@ -150,9 +152,10 @@ def _replay(model, source_nodes, device_nodes, user, dst, t, msg, y, device, *,
     decision threshold: recon sits below the decision threshold by construction (if it did
     not, it would already be an alert), and on the signal-clean stream the cost-sensitive
     decision threshold is pinned at the "flag nothing" sentinel, so an arming gated on it
-    can only ever fire from the Snort flag. ``None`` falls back to the decision threshold
-    (the old coupled behaviour). Arming only ever feeds the precursor prior; the trust
-    nudge and the reported decision keep using the decision threshold.
+    can only ever fire from the Snort flag. An event alarms when it is flagged, armed or
+    sensor-alerted (:func:`serve_tgn.event_alarm`, the rule every serving path applies);
+    ``None`` leaves the decision and the sensor. Arming only ever feeds the precursor
+    prior; the node features (trust included) are never mutated.
 
     Decision threshold mirrors :func:`serve_tgn.score_event`: when ``threshold_dirty`` is
     given, the decision is *signal-routed* — events whose edge signal fires (broken JA3 /
@@ -165,8 +168,8 @@ def _replay(model, source_nodes, device_nodes, user, dst, t, msg, y, device, *,
     with one shared neighbour expansion + GNN forward (the exact pattern the training loop
     already uses) and commits the benign-gated memory updates in batch afterwards — the
     standard batched-TGN regime the model is trained under, which saturates the GPU on large
-    streams (LANL). The cheap per-event feedback (kill-chain precursor, trust nudge,
-    decision) stays strictly sequential, so the lateral-movement precursor keeps its exact
+    streams (LANL). The cheap per-event feedback (kill-chain precursor, decision) stays
+    strictly sequential, so the lateral-movement precursor keeps its exact
     within-batch ordering. This is the OFFLINE eval/calibration path only — the online
     server (:mod:`serve_tgn`) is untouched and remains strictly sequential.
 
@@ -188,12 +191,6 @@ def _replay(model, source_nodes, device_nodes, user, dst, t, msg, y, device, *,
     has_src = source_nodes is not None
     has_config = config_nodes is not None
     msg_dim = msg.shape[1]
-    TRUST = 14  # runtime trust slot in node_feat (the only column replay mutates)
-
-    # CPU mirror of the trust feature: the sequential per-event feedback mutates it exactly
-    # (at any batch size), written back to the GPU column once per block so the next block's
-    # scoring sees it. Only Phase 1 reads node_feat[:, TRUST] (on GPU); only Phase 2 writes it.
-    trust = model.node_feat[:, TRUST].detach().cpu().numpy().copy()
 
     def _bump(a, b, tv):
         """Advance the benign-gated recency / interaction-history counters (cf. update_memory)."""
@@ -247,7 +244,7 @@ def _replay(model, source_nodes, device_nodes, user, dst, t, msg, y, device, *,
             raw_np = raw.detach().cpu().numpy()
             bmsg_rows = bmsg.tolist()
 
-            # --- Phase 2: sequential per-event feedback (precursor / trust / decision).
+            # --- Phase 2: sequential per-event feedback (precursor / decision).
             do_update = np.zeros(B, dtype=bool)
             for j in range(B):
                 i = start + j
@@ -266,35 +263,25 @@ def _replay(model, source_nodes, device_nodes, user, dst, t, msg, y, device, *,
                 if threshold_dirty is not None and signal_dirty(msg_row):
                     eff_thr = threshold_dirty
                 # Commit gate = OPA ALLOW proxy (signal-clean), NOT the model's own score:
-                # see the docstring. eff_thr below still routes the trust/precursor alarm.
+                # see the docstring. eff_thr below still routes the precursor alarm.
                 do_update[j] = (lab == 0) if gate_by_label else (not signal_dirty(msg_row))
 
-                snort_alert = msg_row[1] > 0.5
                 # ``eff_thr is None`` = bootstrap pass: no threshold exists yet, so only the
-                # sensor alarm arms the precursor / trust feedback. Used by the first of the
-                # two calibration passes (see the CALIBRATION section).
+                # sensor alarm arms the precursor. Used by the first of the two calibration
+                # passes (see the CALIBRATION section).
                 if gate_by_label:
-                    is_anomaly = arms = lab == 1
+                    alarm = lab == 1 or sensor_alarm(msg_row)
                 else:
-                    is_anomaly = eff_thr is not None and score >= eff_thr
-                    # The precursor arms on its OWN, lower threshold: the decision
+                    # The precursor also arms on its OWN, lower threshold: the decision
                     # threshold on the signal-clean stream is the cost-sensitive one,
                     # which the prevalence pins at the "flag nothing" sentinel, so an
                     # arming gated on it can only ever fire from the Snort flag. Recon is
                     # what has to arm the chain, and recon is by construction below the
                     # decision threshold — otherwise it would already be an alert.
-                    arm_thr = eff_thr if threshold_arm is None else threshold_arm
-                    arms = arm_thr is not None and score >= arm_thr
-                if arms or snort_alert:
+                    alarm = event_alarm(score, flagged=eff_thr is not None and score >= eff_thr,
+                                        threshold_arm=threshold_arm, features=msg_row)
+                if alarm:
                     record_alert(model, actor, tv)  # arm the precursor (recon → lateral)
-                if is_anomaly or snort_alert:
-                    trust[actor] = max(0.0, trust[actor] - 0.5)
-                    if actor != u:
-                        trust[u] = max(0.0, trust[u] - 0.5)
-                else:
-                    trust[actor] = min(1.0, trust[actor] + 0.01)
-                    if actor != u:
-                        trust[u] = min(1.0, trust[u] + 0.01)
 
             # --- Phase 3: batched benign-gated memory / neighbour / counter commit (serving
             # edge order: source→device, device→user, user→resource — mirrors the train loop).
@@ -338,10 +325,6 @@ def _replay(model, source_nodes, device_nodes, user, dst, t, msg, y, device, *,
                         dvd = (devs[j], d)
                         model.pair_count[dvd] = model.pair_count.get(dvd, 0) + 1
 
-            # Commit this block's trust feedback so the next block scores against it.
-            model.node_feat[:, TRUST] = torch.as_tensor(
-                trust, dtype=model.node_feat.dtype, device=device
-            )
         pbar.update(B)
     pbar.close()
     if return_edge_logits:
@@ -623,8 +606,8 @@ def train_tgn(cfg: TGNConfig | None = None, *, dataset: "StreamData | None" = No
             # NOTE: the trust score (node_feat[:, 14]) is NO LONGER mutated from
             # ground-truth labels here. Doing so coupled the labels into a persistent
             # input feature and trained a self-fulfilling "low trust ⇒ anomaly" signal.
-            # Trust is now a static, orchestrator-supplied attribute (optionally evolved
-            # at serving time only); it is never used to build a training negative.
+            # Trust is held at its neutral 1.0 in training, replay and serving alike; the
+            # per-entity alarm history is the kill-chain alert state (recent_alert).
 
             benign_mask = b_y == 0
             if not benign_mask.any():
@@ -841,17 +824,13 @@ def train_tgn(cfg: TGNConfig | None = None, *, dataset: "StreamData | None" = No
 
     # --- THRESHOLD CALIBRATION (held-out benign slice) -----------------------
     print("\n--- THRESHOLD CALIBRATION (on the benign validation stream) ---")
-    # The eval replay evolves the runtime trust feature (node_feat[:, 14]); snapshot the
-    # post-training node features so calibration does not bleed trust state into the test
-    # replay and so re-runs stay idempotent.
-    node_feat_post_train = model.node_feat.clone()
     def _slice(arr, lo, hi):
         return arr[lo:hi] if arr is not None else None
 
     # The calibration replay runs the SAME gate as the test replay (``gate_by_label=False``:
     # commit on the OPA-ALLOW proxy, not on ground truth). Running with
-    # ``gate_by_label=True`` would let the labels decide what enters memory, what the trust
-    # feature becomes and when the precursor arms — and the threshold would be fitted on a
+    # ``gate_by_label=True`` would let the labels decide what enters memory and when the
+    # precursor arms — and the threshold would be fitted on a
     # score distribution that is not the one it is then applied to. Because the score-driven part
     # of that feedback needs a threshold that does not exist yet, calibration is a single
     # fixed-point iteration: pass A runs with no score threshold (sensor alarms only), its
@@ -888,7 +867,6 @@ def train_tgn(cfg: TGNConfig | None = None, *, dataset: "StreamData | None" = No
         model.pair_count = dict(snap["pair_count"])
         model.src_count = dict(snap["src_count"])
         model.recent_alert = dict(snap["recent_alert"])
-        model.node_feat.copy_(node_feat_post_train)
 
     pre_cal_state = _snapshot_runtime()
 
@@ -916,7 +894,7 @@ def train_tgn(cfg: TGNConfig | None = None, *, dataset: "StreamData | None" = No
     # lateral movement and credential theft show, are drowned. Each edge kind is mapped onto
     # the upper-tail p-value of its own benign reference (signal-clean benign events of pass
     # A — no attack label) before the max; see serve_tgn.calibrated_edge_logit.
-    # Fitting on pass A is exact: with no score threshold yet, pass A's trust / precursor
+    # Fitting on pass A is exact: with no score threshold yet, pass A's precursor
     # feedback is driven by the sensor alarm alone, so its per-edge logits and precursor
     # shifts do not depend on the aggregation, and its calibrated scores are recomputed
     # below instead of replaying the slice again.
@@ -941,6 +919,9 @@ def train_tgn(cfg: TGNConfig | None = None, *, dataset: "StreamData | None" = No
     threshold, threshold_dirty, threshold_clean_unsup, benign_val_scores = _fit_thresholds(
         val_scores, val_labels
     )
+    # The label-free clean threshold is also the kill-chain arm threshold: the test replay
+    # arms on it, and save_model persists it so serving arms on the same one.
+    model.threshold_arm = threshold_clean_unsup
     val_types = types[train_end:val_end].numpy()
     val_msg = msg[train_end:val_end].numpy()
     val_clean = ~_rule_baseline(val_msg).astype(bool)
@@ -959,7 +940,7 @@ def train_tgn(cfg: TGNConfig | None = None, *, dataset: "StreamData | None" = No
         f"threshold_dirty@FPR={cfg.target_fpr}: {threshold_dirty:.4f} "
         f"[signal-dirty events] | "
         f"threshold_clean_unsup@FPR={cfg.target_fpr}: {threshold_clean_unsup:.4f} "
-        f"[label-free alternative, calibration metadata only]"
+        f"[label-free alternative; persisted as the precursor arm threshold]"
     )
     # Lateral recall/FPR trade-off the clean threshold was picked from (operator/OPA reference).
     if cal_labels.sum() > 0:
@@ -978,9 +959,7 @@ def train_tgn(cfg: TGNConfig | None = None, *, dataset: "StreamData | None" = No
     _mode = f"batch={cfg.eval_batch_size}" if cfg.eval_batch_size > 1 else "per-event"
     print(f"\n--- INFERENCE / ANOMALY DETECTION PHASE START ({_mode}) ---")
     # Memory + neighbour history legitimately continue from the (benign) calibration
-    # slice, but reset the runtime trust feature to the post-training snapshot so the
-    # test stream is not pre-conditioned by calibration.
-    model.node_feat.copy_(node_feat_post_train)
+    # slice; the alert state does not.
     model.recent_alert.clear()  # don't let calibration-slice alerts pre-condition the test stream
     test_scores, test_labels = _replay(
         model, _slice(source_arr, val_end, n), _slice(device_arr, val_end, n),

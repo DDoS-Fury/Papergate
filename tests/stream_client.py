@@ -67,13 +67,15 @@ async def run_stream_client(host="localhost", port=8888, duration_seconds=120, n
             is_signal_dirty = bool(feats and (feats[0] <= 0.5 or any(s > 0.5 for s in feats[1:4])))
             allow = (not is_policy_violation) and (not is_signal_dirty)
                 
-            if allow:
-                try:
-                    async with session.post(f"{base_url}/update", json=event) as resp:
-                        if resp.status != 200:
-                            print(f"Warning: /update returned {resp.status}")
-                except Exception as e:
-                    print(f"Error during /update: {e}")
+            # Every /infer is closed by /update (ALLOW) or /deny (DENY), echoing its alarm.
+            event["alarm"] = bool(resp_data.get("alarm", False))
+            path = "/update" if allow else "/deny"
+            try:
+                async with session.post(f"{base_url}{path}", json=event) as resp:
+                    if resp.status != 200:
+                        print(f"Warning: {path} returned {resp.status}")
+            except Exception as e:
+                print(f"Error during {path}: {e}")
                     
     print("Test finished. Generating report...")
     tracker.stop_and_report()
