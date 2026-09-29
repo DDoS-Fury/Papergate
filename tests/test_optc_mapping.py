@@ -62,3 +62,17 @@ def test_rejects_cuts_outside_data(tmp_path):
 
     with pytest.raises(ValueError):
         load_optc_stream(_flows(tmp_path), val_start=1.0, test_start=2.0)
+
+
+def test_pair_rarity():
+    from datasets.optc import pair_rarity
+
+    df = pd.DataFrame({"src": ["A", "A", "B", "A", "B"], "dst": ["B", "B", "A", "B", "A"]})
+    assert pair_rarity(df).tolist() == [1.0, 0.5, 1.0, 1 / 3, 0.5]  # directed pairs, earlier events only
+
+
+def test_default_is_enriched(tmp_path):
+    from datasets.optc import load_optc_stream
+
+    data, *_ = load_optc_stream(_flows(tmp_path), val_start=1.5e9 + 6 * 3600, test_start=1.5e9 + 8 * 3600)
+    assert data.device_nodes is not None and data.config_nodes is not None and data.source_nodes is not None

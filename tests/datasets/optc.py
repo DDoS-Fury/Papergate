@@ -5,12 +5,13 @@ columns (``timestamp, src, dst, src_port, dst_port, proto, label``) plus ``label
 ``timestamp_abs`` and the extra eCAR fields.
 
 Schema mapping -> :class:`graphagate.train_tgn.StreamData`:
-  * ``nodes="lmdeval"`` (default): the same information the LMDEval detectors get. The source
-    host is the actor (USER role), the destination host is the resource; no binding edges, as
-    for LANL.
-  * ``nodes="enriched"``: adds the device (source host), the eCAR ``principal`` as user and the
-    ``image_path`` as configuration node, each with a per-host sentinel when the field is empty
-    (never one shared "unknown" node). The source IP is the source node.
+  * ``nodes="enriched"`` (default): the 5-node chain the model is built for. Source = source IP,
+    device = source host, user = eCAR ``principal``, config = ``image_path``, resource =
+    destination host. Empty ``principal`` / ``image_path`` map to a per-host sentinel (never
+    one shared "unknown" node).
+  * ``nodes="lmdeval"``: only the information the LMDEval detectors get, for the equal-information
+    comparison with Tab. 6. The source host is the actor (USER role), the destination host is
+    the resource; no binding edges, as for LANL.
   * ``msg[7] = [ja3=1, 0, 0, 0, method, 0, 0]``: alarm columns clean (OpTC has no sensor
     signal, so the commit gate commits everything); ``method`` is a destination-port class.
   * ``types``: 3 = "Lateral movement", 7 = the other red-team events ("Other"), 0 = benign.
@@ -52,7 +53,12 @@ def port_class(port: int) -> float:
     return 14.0 if port >= 49152 else 15.0  # ephemeral / other registered
 
 
-def load_optc_stream(path: str, *, val_start: float, test_start: float, nodes: str = "lmdeval",
+def pair_rarity(df) -> np.ndarray:
+    """Baseline score 1 / (1 + earlier events with the same src -> dst pair), in stream order."""
+    return 1.0 / (1.0 + df.groupby(["src", "dst"], sort=False).cumcount().to_numpy(dtype=np.float64))
+
+
+def load_optc_stream(path: str, *, val_start: float, test_start: float, nodes: str = "enriched",
                      t_min: float | None = None, t_max: float | None = None):
     """Returns ``(StreamData, train_frac, val_frac, df)``; ``df`` is the kept rows, stream order."""
     import pandas as pd

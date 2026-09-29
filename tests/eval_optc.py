@@ -10,8 +10,9 @@ computes the protocol's per-event metrics from the raw test scores:
   * all       : positives = every red-team id.
 
 Also printed: LM vs benign only (Other left out), prevalence, TPR at 1% / 0.1% FPR on the test
-ROC, alerts per day at the validation 1%-FPR threshold. Raw scores go to ``--scores-out``
-before any metric is computed.
+ROC, alerts per day at the validation 1%-FPR threshold, and the same metrics for the pair
+rarity baseline 1/(1 + earlier src->dst events). Raw scores go to ``--scores-out`` before any
+metric is computed.
 
 Usage (docker-compose profile ``eval-optc``, or):
     python tests/eval_optc.py --flows /data/optc/optc_flows.csv.gz \
@@ -29,7 +30,7 @@ import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from datasets.optc import T_LATERAL, T_OTHER, load_optc_stream, to_ts  # noqa: E402
+from datasets.optc import T_LATERAL, T_OTHER, load_optc_stream, pair_rarity, to_ts  # noqa: E402
 from sklearn.metrics import average_precision_score, roc_auc_score, roc_curve  # noqa: E402
 
 from graphagate.config import TGNConfig  # noqa: E402
@@ -61,10 +62,12 @@ def main() -> int:
     p.add_argument("--test-start", required=True, help="ISO time: start of the test period")
     p.add_argument("--t-min", default=None, help="ISO time: drop earlier flows")
     p.add_argument("--t-max", default=None, help="ISO time: drop later flows")
-    p.add_argument("--nodes", choices=("lmdeval", "enriched"), default="lmdeval")
+    p.add_argument("--nodes", choices=("enriched", "lmdeval"), default="enriched",
+                   help="enriched: 5-node chain (default); lmdeval: hosts only, as the Tab. 6 detectors")
     p.add_argument("--epochs", type=int, default=5)
     p.add_argument("--seed", type=int, default=TGNConfig().seed)
-    p.add_argument("--eval-batch-size", type=int, default=1024)
+    p.add_argument("--eval-batch-size", type=int, default=1,
+                   help="1 = per-event replay, how the model runs (default); >1 only for quick smoke tests")
     p.add_argument("--scores-out", default=None, help=".npz with the raw test scores and labels")
     args = p.parse_args()
 
@@ -80,11 +83,12 @@ def main() -> int:
 
     s = np.asarray(m["test_scores"], dtype=np.float64)
     test = df.iloc[m["test_start"]:]
+    rarity = pair_rarity(df)[m["test_start"]:]
     types = data.types[m["test_start"]:].numpy()
     assert len(s) == len(test) == len(types)
     if args.scores_out:
         np.savez_compressed(args.scores_out, scores=s, types=types, ts=test["timestamp_abs"].to_numpy(),
-                            threshold_dirty=m["threshold_dirty"])
+                            rarity=rarity, threshold_dirty=m["threshold_dirty"])
         print(f"punteggi grezzi -> {args.scores_out}")
 
     days = (test["timestamp_abs"].iloc[-1] - test["timestamp_abs"].iloc[0]) / 86400
@@ -95,6 +99,10 @@ def main() -> int:
     report("all malicious", (lm | oth).astype(int), s)
     keep = ~oth
     report("LM vs benign", lm[keep].astype(int), s[keep])
+    print("  baseline 1/(1+occorrenze precedenti della coppia src->dst), stessi eventi:")
+    report("rarità LM only", lm.astype(int), rarity)
+    report("rarità all malicious", (lm | oth).astype(int), rarity)
+    report("rarità LM vs benign", lm[keep].astype(int), rarity[keep])
     thr = m["threshold_dirty"]
     alerts = int((s[~(lm | oth)] >= thr).sum())
     print(f"  soglia val FPR 1% = {thr:.6f}: allarmi benigni={alerts} ({alerts / max(days, 1e-9):.0f}/giorno), "

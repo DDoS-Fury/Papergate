@@ -103,3 +103,15 @@ def test_build_labels_hosts_and_time(ox, tmp_path):
     # learned mapping overrides the known file, as in LMDEval
     assert learned == {"142.20.56.1": "A", "142.20.56.3": "C"}
     assert list(df["src"]) == ["C", "C", "A"] and list(df["dst"]) == ["B", "A", "B"]
+
+
+def test_select_members(ox):
+    idx = [("2019-09-23/AIA-201-225/AIA-201-225.ecar-2019-09-23-sysclient0201.json.gz", 512, 10),
+           ("2019-09-23/AIA-201-225/AIA-201-225.ecar-2019-09-23-sysclient0202.json.gz", 1024, 10),
+           ("2019-09-23/AIA-401-425/AIA-401-425.ecar-2019-09-23-sysclient0402.json.gz", 2048, 10),
+           ("2019-09-23/AIA-401-425/README.txt", 4096, 10)]
+    assert len(ox.select_members(idx)) == 3
+    assert [m[1] for m in ox.select_members(idx, groups=["AIA-201-225"])] == [512, 1024]
+    assert [m[1] for m in ox.select_members(idx, hosts=["SysClient0402", "sysclient0201"])] == [512, 2048]
+    assert [m[1] for m in ox.select_members(idx, groups=["AIA-201-225"], hosts=["sysclient0402"])] == []
+    assert ox.select_members(idx, hosts=["sysclient020"]) == []  # no prefix matches

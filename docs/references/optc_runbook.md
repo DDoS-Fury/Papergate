@@ -66,7 +66,7 @@ docker compose --profile eval-optc run --rm eval-optc /app/tests/eval_optc.py \
   --flows /data/optc/optc_flows.csv.gz \
   --val-start 2019-09-22T20:00:00-04:00 --test-start 2019-09-23T00:00:00-04:00 \
   --epochs 5 --seed 42 --scores-out /data/optc/scores_s42.npz \
-  2>&1 | tee tasks/runs/optc_lmdeval_s42.log
+  2>&1 | tee tasks/runs/optc_enriched_s42.log
 ```
 
 - Ripetere con `--seed 43` e `--seed 44`. Le run si lanciano in sequenza: due training in parallelo sulla GPU
@@ -75,9 +75,12 @@ docker compose --profile eval-optc run --rm eval-optc /app/tests/eval_optc.py \
 - Stima non misurata: ~5 M eventi di training a ~16k eventi/s (ritmo del pilota), cioè ~5 min per epoca; test
   batched in pochi minuti. La RAM necessaria per ~15 M eventi non è misurata.
 - `--scores-out` salva gli score grezzi prima di qualsiasi metrica: ogni analisi successiva parte dal `.npz`.
-- Variante con 5 nodi (utente = `principal`, configurazione = `image_path`, sentinelle per host): aggiungere
-  `--nodes enriched`, solo come ablation. La variante principale (`lmdeval`) usa le stesse informazioni dei
-  detector del paper.
+- Il default è `--nodes enriched`: catena a 5 nodi (sorgente = IP, device = host, utente = `principal`,
+  config = `image_path`, risorsa = host di destinazione; sentinelle per host sui campi vuoti). È la variante per
+  cui OpTC è stato scelto e va riportata come risultato principale, dichiarando che usa più informazione dei
+  detector della Tab. 6.
+- `--nodes lmdeval` (solo host, come i detector del paper) dà il confronto a parità di informazione: eseguirla
+  con gli stessi seed e riportarla accanto.
 
 L'output finale (`OpTC / LMDEval SUMMARY`) riporta, per LM only, all malicious e LM contro soli benigni:
 prevalenza, AUC, AP, rapporto AP/prevalenza, TPR a FPR 1% e 0,1%. Riporta poi gli allarmi al giorno alla
@@ -112,7 +115,7 @@ soglia calibrata in validazione.
 | File | Ruolo |
 |---|---|
 | `scripts/optc_extract.py` | `index`, `extract` (range HTTP), `extract-local`, `build` |
-| `tests/datasets/optc.py` | flow list → `StreamData`; split per tempo; `nodes=lmdeval\|enriched` |
+| `tests/datasets/optc.py` | flow list → `StreamData`; split per tempo; `nodes=enriched` (default) `\|lmdeval` |
 | `tests/eval_optc.py` | training, replay, metriche LMDEval dagli score grezzi |
 | `src/train_tgn.py` | `return_scores=True` restituisce gli score di test (default spento) |
 | `docker-compose.yml` | profilo `eval-optc` |

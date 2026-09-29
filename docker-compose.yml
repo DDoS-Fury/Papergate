@@ -177,8 +177,7 @@ services:
               "--flows", "/data/optc/optc_flows.csv.gz",
               "--val-start", "2019-09-22T20:00:00-04:00",
               "--test-start", "2019-09-23T00:00:00-04:00",
-              "--scores-out", "/data/optc/scores_lmdeval.npz",
-              "--eval-batch-size", "1024"]
+              "--scores-out", "/data/optc/scores_enriched.npz"]
 
   # Non-relational baseline (Isolation Forest) on PicoDomain Zeek logs.
   baseline-picodomain-iforest:

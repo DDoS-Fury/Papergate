@@ -24,6 +24,7 @@ Copyright (c) 2026, cl-anssi, BSD 2-Clause License (text in data/optc/meta/LMDEv
 Usage:
     python scripts/optc_extract.py index 2019-09-23.tar                       # member list
     python scripts/optc_extract.py extract --day 2019-09-23 --group AIA-201-225 --out data/optc/flows
+    python scripts/optc_extract.py extract --day 2019-09-23 --hosts hosts.txt --out data/optc/flows
     python scripts/optc_extract.py extract-local data/optc/ecar --out data/optc/flows_local
     python scripts/optc_extract.py build data/optc/flows --meta data/optc/meta/LMDEval \
         --out data/optc/optc_flows.csv.gz
@@ -311,12 +312,23 @@ def cmd_index(args) -> int:
     return 0
 
 
+def select_members(index, groups=(), hosts=()) -> list[tuple[str, int, int]]:
+    """Raw members of a tar index, restricted to host groups and/or hosts (e.g. ``sysclient0201``)."""
+    ends = tuple(f"-{h.lower()}.json.gz" for h in hosts)
+    return [m for m in index if m[0].endswith(".json.gz")
+            and (not groups or any(f"/{g}/" in m[0] for g in groups))
+            and (not ends or m[0].lower().endswith(ends))]
+
+
 def cmd_extract(args) -> int:
     tar = f"{args.day}.tar"
     fid = release_files()[tar]
     print(f"-> indice di {tar} (solo intestazioni)...")
-    members = [m for m in cached_index(fid, tar, args.out) if m[0].endswith(".json.gz")
-               and (not args.group or any(f"/{g}/" in m[0] for g in args.group))]
+    hosts = []
+    if args.hosts:
+        with open(args.hosts) as f:
+            hosts = [line.strip() for line in f if line.strip()]
+    members = select_members(cached_index(fid, tar, args.out), args.group, hosts)
     todo = [m for m in members if not os.path.exists(_member_out(args.out, m[0]))]
     total = sum(m[2] for m in todo)
     print(f"   membri selezionati: {len(members)} | da estrarre: {len(todo)} ({total / 1e9:.2f} GB grezzi)")
@@ -381,6 +393,7 @@ def main(argv=None) -> int:
     s = sub.add_parser("extract", help="stream-extract members of the corrected release")
     s.add_argument("--day", required=True, help="YYYY-MM-DD (one tar per day)")
     s.add_argument("--group", action="append", default=[], help="host group, e.g. AIA-201-225 (repeatable)")
+    s.add_argument("--hosts", default=None, help="file with one host per line, e.g. sysclient0201")
     s.add_argument("--out", required=True)
     s.add_argument("--jobs", type=int, default=4, help="members streamed in parallel")
     s.set_defaults(fn=cmd_extract)
