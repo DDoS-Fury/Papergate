@@ -10,7 +10,7 @@ come risultato finale. Il contesto sui lateral è in
 
 ## 1. Verifica della calibrazione per arco
 
-Config: `edge_calibration=True`, `edge_calib_tail_q=0.99`. Log: `tasks/runs/edgecal_e15.log`
+Config: `edge_calibration=True`, `edge_calib_tail_q=0.99`. Log: `../../tasks/runs/edgecal_e15.log`
 (le loss di training sono identiche a `opt_train_branch.log`, quindi cambia solo lo scoring).
 
 | classe | AP (senza → con) | recall@soglia (senza → con) |
@@ -35,7 +35,7 @@ Config: `edge_calibration=True`, `edge_calib_tail_q=0.99`. Log: `tasks/runs/edge
 lateral e cred-theft, anche se in termini assoluti restano bassi, e il prezzo si paga su
 classi che il modello già vedeva.
 
-**Da decidere:** tenerla o toglierla, e se e quando rigenerare `public/` (cambiano i numeri
+**Da decidere:** tenerla o toglierla, e se e quando rigenerare `../../public` (cambiano i numeri
 di LANL, PicoDomain, UWF e delle ablation).
 
 ## 2. Cosa fa la testa strutturale
@@ -59,7 +59,7 @@ avere coseno basso.
 
 ## 3. Cosa ha misurato il probe
 
-Script: `tasks/tmp/diag_edgecal/struct_probe.py`. Output: `tasks/runs/struct_probe.log` e
+Script: `../../tasks/tmp/diag_edgecal/struct_probe.py`. Output: `tasks/runs/struct_probe.log` e
 `tasks/tmp/diag_edgecal/struct_probe.json`.
 
 Il probe osserva l'addestramento senza modificarlo:
@@ -139,7 +139,7 @@ la variante senza testa ha lateral AP 0.011.
 ## 6. Cosa resta da fare
 
 - [ ] Decidere sulla calibrazione per arco (raccomandazione: tenerla) e su quando
-      rigenerare `public/`.
+  rigenerare `../../public`.
 - [ ] Fix A: implementarlo, verificarlo con il probe e poi con la run completa. B e C
       solo se A non basta.
 - [ ] Negativi più difficili senza etichette (pesati per popolarità o a 2 hop), rispettando
@@ -153,12 +153,12 @@ la variante senza testa ha lateral AP 0.011.
 
 | file | cosa contiene |
 |---|---|
-| `tasks/tmp/diag_edgecal/struct_probe.py` | probe per epoca della testa strutturale (R, coseni, gradienti) |
-| `tasks/tmp/diag_edgecal/struct_probe.json` | output del probe, una riga per epoca |
-| `tasks/tmp/diag_edgecal/diag_scores.py` | logit per arco, calibrati e combinati, sui set di valutazione |
-| `tasks/runs/struct_probe.log` | log della run del probe |
-| `tasks/runs/edgecal_e15.log` | run di verifica con calibrazione per arco |
-| `tasks/runs/opt_train_branch.log` | run di riferimento senza calibrazione |
+| `../../tasks/tmp/diag_edgecal/struct_probe.py` | probe per epoca della testa strutturale (R, coseni, gradienti) |
+| `../../tasks/tmp/diag_edgecal/struct_probe.json` | output del probe, una riga per epoca |
+| `../../tasks/tmp/diag_edgecal/diag_scores.py` | logit per arco, calibrati e combinati, sui set di valutazione |
+| `../../tasks/runs/struct_probe.log` | log della run del probe |
+| `../../tasks/runs/edgecal_e15.log` | run di verifica con calibrazione per arco |
+| `../../tasks/runs/opt_train_branch.log` | run di riferimento senza calibrazione |
 
 Fonte: [Wang & Isola, ICML 2020](https://arxiv.org/abs/2005.10242), allineamento e
 uniformità sulla ipersfera.

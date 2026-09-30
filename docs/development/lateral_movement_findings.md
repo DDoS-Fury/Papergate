@@ -22,7 +22,7 @@ Refactor di supporto: `_fit_thresholds` estratta a livello di modulo come
 `train_tgn.fit_thresholds(scores, labels, v_types, v_msg, cfg)`, pura nei suoi input, così
 lo sweep ricalibra senza duplicarne la logica.
 
-**Verifica**: `tests/verify_replay_batching.py` → `OVERALL PARITY: PASS` su tutti e quattro i
+**Verifica**: `../../tests/verify_replay_batching.py` → `OVERALL PARITY: PASS` su tutti e quattro i
 percorsi (v4 5-edge e v3 legacy × gate di calibrazione e di valutazione), scarti massimi
 8.5e-08 … 1.9e-07 contro una soglia di contratto di 1e-5.
 
@@ -219,14 +219,14 @@ memorizzazione del grafo; `benign_explore_prob` quella scorciatoia l'ha rimossa.
 
 | file | cosa misura |
 |---|---|
-| `tasks/tmp/lateral_chain_diag.py` | struttura delle campagne, Δt recon→laterale |
-| `tasks/tmp/precursor_sweep.py` | sweep del precursore, un training e N ricalibrazioni |
-| `tasks/tmp/fp_breakdown.py` | composizione dei falsi positivi, recall di campagna |
-| `tasks/tmp/agg_metrics.py` | recall/FPR per device-giorno e device-settimana |
-| `tasks/tmp/aggregator_probe.py` | confronto degli aggregatori a livello di bucket |
-| `tasks/tmp/online_probe.py` | accumulo causale, tempo alla rilevazione, pre-esfiltrazione |
-| `tasks/tmp/lit_protocol.py` | AUC / AP / Rec@B sul protocollo della letteratura |
-| `tasks/tmp/ua_difficulty.py` | regola Unknown Authentication, difficoltà relativa a LANL |
+| `../../tasks/tmp/lateral_chain_diag.py` | struttura delle campagne, Δt recon→laterale |
+| `../../tasks/tmp/precursor_sweep.py` | sweep del precursore, un training e N ricalibrazioni |
+| `../../tasks/tmp/fp_breakdown.py` | composizione dei falsi positivi, recall di campagna |
+| `../../tasks/tmp/agg_metrics.py` | recall/FPR per device-giorno e device-settimana |
+| `../../tasks/tmp/aggregator_probe.py` | confronto degli aggregatori a livello di bucket |
+| `../../tasks/tmp/online_probe.py` | accumulo causale, tempo alla rilevazione, pre-esfiltrazione |
+| `../../tasks/tmp/lit_protocol.py` | AUC / AP / Rec@B sul protocollo della letteratura |
+| `../../tasks/tmp/ua_difficulty.py` | regola Unknown Authentication, difficoltà relativa a LANL |
 
 Fonti: [Euler, NDSS 2022](https://www.ndss-symposium.org/wp-content/uploads/2022-107A-paper.pdf) ·
 [Larroche, ANSSI 2025](https://arxiv.org/abs/2504.13527) ·

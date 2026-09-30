@@ -94,7 +94,7 @@ users' historical context.
 ## HTTP API (inference service)
 
 The primitives described above are exposed as a **REST/JSON microservice** by
-`src/serve_api.py` (FastAPI + uvicorn), started with `python -m graphagate.serve_api`
+`../../src/serve_api.py` (FastAPI + uvicorn), started with `python -m graphagate.serve_api`
 (Docker Compose profile `serve-tgn`; container port `8088`, exposed on the host as
 `8888`). The Go orchestrator talks to it with
 `net/http` + `encoding/json` — no `.proto`/gRPC to maintain.
@@ -142,7 +142,7 @@ Configuration via environment variables (all optional):
 | `POST /update` | Commits an **already approved** event (post-OPA-ALLOW): advances memory + neighbour history, records the echoed `alarm` | yes |
 | `POST /deny` | Closes a **DENYed** event: records the echoed `alarm` in the kill-chain alert state; memory, neighbourhood and counters untouched | alert state only |
 | `POST /score` | Score + internal gate + conditional update (OPA-less use / tests) | yes if benign |
-| `POST /persist` | Rewrites the evolved state to `public/` (also automatic at shutdown) | writes to disk |
+| `POST /persist` | Rewrites the evolved state to `../../public` (also automatic at shutdown) | writes to disk |
 
 ### Request schema (events)
 
@@ -249,7 +249,7 @@ For this reason, the Orchestrator must inject the privileges at runtime via `use
 - **Key and Resource continuity.** The registry serialized by the training preregisters
   the exact strings of the endpoint URIs (e.g. `/api/v1/personnel`,
   `/api/v1/reactor-parameters` — the canonical list is `RESOURCE_URIS` in
-  `src/data/stream_synthetic.py`). The Orchestrator MUST use these exact strings as
+  `../../src/data/stream_synthetic.py`). The Orchestrator MUST use these exact strings as
   `key_dst`: sub-routes with path-parameters (e.g. `/api/v1/personnel/123`) must be
   normalized to the base route before the call (see `normalizeAIPath` in
   services/security-orchestrator). If a different string is used, the model will interpret
