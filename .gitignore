@@ -25,6 +25,7 @@ public/*.json
 .antigravitycli/
 .claude/
 CLAUDE.md
+AGENTS.md
 WORKFLOW.md
 tasks/*.md
 
