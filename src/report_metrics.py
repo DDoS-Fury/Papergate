@@ -1,11 +1,6 @@
-"""Shared helpers that make the LaTeX report a reproducible artifact.
+"""Report helpers: multi-seed aggregation, paired comparisons, LaTeX cells, atomic JSON.
 
-This module centralises (a) multi-seed aggregation (mean ± std),
-(b) LaTeX cell formatting for result tables, and (c) atomic JSON serialisation,
-ensuring tables can be rebuilt deterministically from fixed seeds.
-
-No training logic lives here — only formatting/IO — so it is import-cheap and safe to
-reuse from both the package and the test drivers.
+Formatting and IO only (no training logic), so drivers can import it cheaply.
 """
 
 from __future__ import annotations
@@ -20,13 +15,8 @@ import numpy as np
 def mean_std(vals) -> tuple[float, float]:
     """``(nanmean, sample nanstd)`` — the multi-seed aggregation used everywhere.
 
-    ``nan``-aware so a metric that is undefined for a given seed (e.g. a class with
-    ``n=0`` in that seed's test split) does not poison the whole cell.
-
-    Uses ``ddof=1`` (sample standard deviation). numpy's default of ``ddof=0`` is the
-    *population* std and understates the sample std by ``sqrt((n-1)/n)`` — about 18% at
-    the n=3 seeds these tables are built from, i.e. every published error bar was that
-    much too tight.
+    ``nan``-aware, so a metric undefined for one seed does not poison the cell;
+    ``ddof=1`` (sample std).
     """
     a = np.asarray(vals, dtype=float)
     n = int(np.count_nonzero(~np.isnan(a)))
@@ -58,18 +48,9 @@ def latex_cell(vals, *, bold: bool = False, decimals: int = 3) -> str:
 def paired_delta(a_vals, b_vals, decimals: int = 3, alpha: float = 0.05) -> dict:
     """Paired comparison of two arms measured on the SAME seeds.
 
-    Every driver in ``tests/ablations/`` runs both arms under an identical seed, so the
-    observations are paired and the analysis should use that: the per-seed differences
-    cancel the seed-to-seed variance that dominates the raw spread.
-
-    Returns ``mean_delta``, ``sd_delta``, ``ci95`` (bootstrap on the per-seed
-    differences), ``p_value`` (Wilcoxon signed-rank, two-sided) and ``significant``.
-
-    Note on power: the Wilcoxon signed-rank test cannot produce p < 0.05 with fewer than
-    6 pairs, so at the current 3 seeds ``significant`` is essentially always ``False``.
-    That is not a defect of the test — it is the honest statement that 3 seeds cannot
-    establish these effects, and the reason the experimental grid needs more seeds and
-    repeated runs per seed.
+    Per-seed differences cancel the seed-to-seed variance. Returns ``n_pairs``,
+    ``mean_delta``, ``sd_delta``, ``ci95`` (bootstrap), ``p_value`` (two-sided Wilcoxon
+    signed-rank) and ``significant``. Wilcoxon needs >= 6 pairs to reach p < 0.05.
     """
     a = np.asarray(a_vals, dtype=float)
     b = np.asarray(b_vals, dtype=float)
@@ -103,25 +84,14 @@ def paired_delta(a_vals, b_vals, decimals: int = 3, alpha: float = 0.05) -> dict
 
         out["p_value"] = float(wilcoxon(diffs).pvalue)
         out["significant"] = bool(out["p_value"] < alpha)
-    except Exception:
+    except ImportError:
         # No scipy: fall back to the bootstrap CI excluding zero.
         out["significant"] = bool(lo > 0.0 or hi < 0.0)
     return out
 
 
-def delta(a_vals, b_vals, decimals: int = 3) -> tuple[float, bool]:
-    """``(mean(a) - mean(b), significant)`` — thin wrapper over :func:`paired_delta`.
-
-    Kept for the existing call sites. ``significant`` now comes from the paired test, not
-    from the old ``|Δ| > max(sd_a, sd_b)`` rule, which was not a test at all: it compared
-    a difference of means against a *single-arm* standard deviation, and discarded the
-    seed pairing that every driver already establishes.
-    """
-    res = paired_delta(a_vals, b_vals, decimals=decimals)
-    return res["mean_delta"], res["significant"]
-
-
 def _json_default(o):
+    """``json.dump`` fallback for numpy scalars and arrays."""
     if isinstance(o, np.floating):
         return float(o)
     if isinstance(o, np.integer):

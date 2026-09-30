@@ -263,10 +263,10 @@ def test_route_method_pairs_are_served(seed):
     dst = s.dst.numpy()
     types = s.types.numpy()
 
-    from graphagate.data.stream_synthetic import build_resource_universe
+    from graphagate.data.access_policy import NUM_BASE_ROUTES, build_resource_universe
 
     route_methods, _, resource_uris, _ = build_resource_universe(
-        TGNConfig().num_resources - 19, seed
+        TGNConfig().num_resources - NUM_BASE_ROUTES, seed
     )
     bad = []
     for type_id in list(TYPE_NAMES) + [0]:

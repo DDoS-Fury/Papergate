@@ -7,11 +7,8 @@ network internal/external classifier, and the resource-risk node feature.
 from pytest import approx
 
 from graphagate.netclass import ip_is_internal, strip_source_prefix
-from graphagate.data.stream_synthetic import (
-    RESOURCE_RISK,
-    RESOURCE_URIS,
-    ZTAStreamSimulator,
-)
+from graphagate.data.access_policy import RESOURCE_RISK, RESOURCE_URIS
+from graphagate.data.stream_synthetic import ZTAStreamSimulator
 
 
 def test_ip_is_internal_rfc1918_only():

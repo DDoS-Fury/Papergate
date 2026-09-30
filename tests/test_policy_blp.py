@@ -13,14 +13,13 @@ import dataclasses
 import pytest
 
 from graphagate.config import TGNConfig
-from graphagate.data.stream_synthetic import (
+from graphagate.data.access_policy import (
     RESOURCE_URIS,
     ROLE_CLEARANCE,
     SECURITY_MATRIX,
-    ZTAStreamSimulator,
     policy_allows,
-    stream_kwargs_from_cfg,
 )
+from graphagate.data.stream_synthetic import ZTAStreamSimulator, stream_kwargs_from_cfg
 
 GET, POST, DELETE = 0, 1, 3
 DOCS = "/api/v1/documents"

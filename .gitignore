@@ -29,8 +29,8 @@ AGENTS.md
 WORKFLOW.md
 tasks/*.md
 
-# LANL dataset
-data/
+# Datasets (LANL, ...) at the repo root only: src/data/ is code
+/data/
 
 # Per-run cache of tests/regen_report_tables.py (resumes a crashed multi-hour run)
 tasks/runs/cache/

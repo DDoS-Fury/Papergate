@@ -1,4 +1,4 @@
-"""Train and evaluate the streaming Temporal Graph Network (v2).
+"""Train and evaluate the streaming Temporal Graph Network.
 
 Pipeline:
   1. Generate a chronologically ordered synthetic ZTA access stream.
@@ -20,6 +20,12 @@ unsupervised:
     benign-quantile threshold (``threshold_dirty``) is reported alongside it.
 
 No attack label is ever used to compute a test-set score.
+
+Memory commit gate (offline replays): an event is committed when the deterministic signal
+layer does not flag it, a proxy for OPA ALLOW (``serve_tgn.commit_event`` runs only on
+ALLOW). Gating on the model's own score would starve false-positive benign events of
+updates and inflate the FPR; committing every signal-clean event, laterals included, keeps
+the reported FPR conservative.
 """
 
 import copy
@@ -75,13 +81,7 @@ from graphagate.serve_tgn import (
 
 
 def _pbar(iterable=None, *, total=None, desc=None):
-    """A tqdm progress bar that renders cleanly in a TTY *and* in ``docker compose`` logs.
-
-    On a real terminal it updates smoothly; when stderr is not a TTY (docker-compose / CI)
-    it throttles to one ASCII line every ~10 s, so the logs get periodic, readable progress
-    instead of a flood of carriage returns. It is never disabled — watching progress in the
-    container logs is exactly the point.
-    """
+    """tqdm bar; without a TTY (docker logs, CI) it prints one ASCII line every ~10 s."""
     is_tty = sys.stderr.isatty()
     return tqdm(
         iterable, total=total, desc=desc, disable=False,
@@ -90,9 +90,8 @@ def _pbar(iterable=None, *, total=None, desc=None):
 
 
 def fit_thresholds(scores, labels, v_types, v_msg, cfg):
-    """(threshold_clean, threshold_dirty, threshold_clean_unsup, benign_scores) from one
-    validation replay's scores. Pure in its inputs, so a diagnostic can re-calibrate a
-    trained model under different serving-time priors without re-running the training."""
+    """``(threshold_clean, threshold_dirty, threshold_clean_unsup, benign_scores)`` from the
+    scores of one validation replay (pure function of its inputs)."""
     scores = np.asarray(scores)
     labels = np.asarray(labels)
     benign = scores[labels == 0]
@@ -100,18 +99,15 @@ def fit_thresholds(scores, labels, v_types, v_msg, cfg):
         raise RuntimeError("No benign events in the validation slice for calibration.")
     t_dirty = float(np.quantile(benign, 1.0 - cfg.target_fpr))
     v_clean = ~_rule_baseline(v_msg).astype(bool)
-    # Label-free clean threshold: the benign-FPR quantile restricted to signal-clean
-    # events. Recorded in the artifact's calibration metadata as the alternative for
-    # deployments without red-team labels; the persisted serving threshold is the
-    # cost-sensitive t_clean below.
+    # Label-free alternative to t_clean (benign quantile over signal-clean events), stored
+    # in the calibration metadata for deployments without red-team labels.
     clean_benign = scores[v_clean & (labels == 0)]
     t_unsup = float(np.quantile(clean_benign, 1.0 - cfg.target_fpr)) if clean_benign.size \
         else t_dirty
     mask = v_clean & ((labels == 0) | (v_types == 3))
     cal_labels_ = (v_types[mask] == 3).astype(int)
     if cal_labels_.sum() == 0:
-        # No lateral examples to calibrate against (e.g. a window without red-team
-        # activity): fall back to the conservative FPR threshold.
+        # No lateral example in the window: fall back to the FPR threshold.
         t_clean = t_dirty
     else:
         t_clean = cost_sensitive_threshold(
@@ -124,58 +120,29 @@ def fit_thresholds(scores, labels, v_types, v_msg, cfg):
 def _replay(model, source_nodes, device_nodes, user, dst, t, msg, y, device, *,
             config_nodes=None, threshold=None, threshold_dirty=None, threshold_arm=None,
             gate_by_label=False, batch_size=1, desc="replay", return_edge_logits=False):
-    """Streaming replay matching the serving path (v4: up to 5 edges), optionally batched.
+    """Offline replay mirroring the serving path; returns ``(scores, labels)``.
 
-    ``source_nodes`` / ``config_nodes`` / ``device_nodes`` may be ``None`` (datasets
-    without a network / config / hardware entity, e.g. LANL host-to-host auth): the
-    corresponding binding edges are skipped, exactly like :func:`serve_tgn.score_event`
-    with the matching key omitted. They are dataset-level (every event carries them, or
-    none does), so each block is a set of equally-shaped edge groups. The causal chain is
-    ``source → config → device → user → resource`` plus ``config → user``.
+    ``source_nodes`` / ``config_nodes`` / ``device_nodes`` may be ``None`` (dataset without
+    that entity, e.g. LANL): their edges are skipped, as :func:`serve_tgn.score_event` does
+    when the key is omitted.
 
-    Memory update gating (who is committed into TGN memory):
-      - ``gate_by_label=True``  -> commit on ground-truth benign (calibration replay,
-        which has no threshold yet so it cannot self-gate);
-      - ``gate_by_label=False`` -> commit on the **OPA-ALLOW proxy**: every event the
-        deterministic signal layer does not flag (``not signal_dirty``). This mirrors the
-        deployed two-step flow — :func:`serve_tgn.score_event` with ``update=False`` returns
-        the score, OPA folds it (soft-weighted) into a decision *dominated by the
-        deterministic policy/sensor layer*, and :func:`serve_tgn.commit_event` runs only on
-        ALLOW. Gating the commit on the model's *own* score (``score < threshold``) instead
-        is the no-OPA, self-serving deployment: it starves misclassified-benign (FP) events
-        out of memory, their state goes stale, their score stays high, and the benign FPR
-        runs away (the val->test blow-up). Committing on the observable signal keeps benign
-        memory fresh; the residual surface — signal-clean laterals OPA would also admit — is
-        committed too, so the reported FPR is conservative rather than oracle-optimistic.
+    Memory commit gate:
+      * ``gate_by_label=True``: ground-truth benign events (calibration replay);
+      * ``gate_by_label=False``: signal-clean events, the OPA-ALLOW proxy of the module
+        docstring (never the model's own score).
 
-    ``threshold_arm`` is the threshold the kill-chain precursor arms on, separate from the
-    decision threshold: recon sits below the decision threshold by construction (if it did
-    not, it would already be an alert), and on the signal-clean stream the cost-sensitive
-    decision threshold is pinned at the "flag nothing" sentinel, so an arming gated on it
-    can only ever fire from the Snort flag. An event alarms when it is flagged, armed or
-    sensor-alerted (:func:`serve_tgn.event_alarm`, the rule every serving path applies);
-    ``None`` leaves the decision and the sensor. Arming only ever feeds the precursor
-    prior; the node features (trust included) are never mutated.
+    Thresholds: with ``threshold_dirty`` the decision is signal-routed (signal-dirty events
+    use ``threshold_dirty``, the rest ``threshold``); without it ``threshold`` applies to all.
+    ``threshold_arm`` is the lower threshold on which the kill-chain precursor arms
+    (:func:`serve_tgn.event_alarm`); ``None`` arms only on a flag or a sensor. Arming feeds
+    the precursor prior only; node features are never mutated.
 
-    Decision threshold mirrors :func:`serve_tgn.score_event`: when ``threshold_dirty`` is
-    given, the decision is *signal-routed* — events whose edge signal fires (broken JA3 /
-    Snort / sensor) use ``threshold_dirty`` and the rest use the recall-oriented
-    ``threshold`` (the signal-clean threshold). With ``threshold_dirty=None`` a single
-    ``threshold`` is used everywhere (legacy behaviour). Returns ``(scores, labels)``.
+    ``batch_size=1`` is the exact per-event loop; ``B>1`` scores a block against the
+    start-of-batch memory and commits afterwards (offline only: serving stays sequential).
+    The precursor/decision feedback is sequential in both cases.
 
-    ``batch_size`` controls offline GPU batching: ``1`` is bit-for-bit the old per-event
-    loop; ``B>1`` scores a block of ``B`` events against the *start-of-batch* memory snapshot
-    with one shared neighbour expansion + GNN forward (the exact pattern the training loop
-    already uses) and commits the benign-gated memory updates in batch afterwards — the
-    standard batched-TGN regime the model is trained under, which saturates the GPU on large
-    streams (LANL). The cheap per-event feedback (kill-chain precursor, decision) stays
-    strictly sequential, so the lateral-movement precursor keeps its exact
-    within-batch ordering. This is the OFFLINE eval/calibration path only — the online
-    server (:mod:`serve_tgn`) is untouched and remains strictly sequential.
-
-    ``return_edge_logits=True`` appends a third element ``{"edge_logits": {kind: [N]},
-    "shift": [N]}``: the raw per-edge anomaly logits and the precursor shift of every event,
-    from which the per-edge benign calibration is fitted (see the CALIBRATION section).
+    ``return_edge_logits=True`` also returns ``{"edge_logits": {kind: [N]}, "shift": [N]}``,
+    the inputs of the per-edge benign calibration.
     """
     model.eval()
     N = int(user.shape[0])
@@ -233,7 +200,7 @@ def _replay(model, source_nodes, device_nodes, user, dst, t, msg, y, device, *,
                 if has_src:
                     groups.append((EDGE_SRC_CFG, bsrc, bcfg, zeros_msg, None))
             if has_src and has_bind and not has_config:
-                groups.append((EDGE_SRC_DEV, bsrc, bdev, zeros_msg, None))  # legacy chain
+                groups.append((EDGE_SRC_DEV, bsrc, bdev, zeros_msg, None))  # config-node ablation
             edge_logits = chain_edge_logits(model, groups, bt, device)
             if edge_rec is not None:
                 for kind, v in edge_logits.items():
@@ -262,29 +229,20 @@ def _replay(model, source_nodes, device_nodes, user, dst, t, msg, y, device, *,
                 msg_row = bmsg_rows[j]
                 if threshold_dirty is not None and signal_dirty(msg_row):
                     eff_thr = threshold_dirty
-                # Commit gate = OPA ALLOW proxy (signal-clean), NOT the model's own score:
-                # see the docstring. eff_thr below still routes the precursor alarm.
+                # Commit gate: OPA-ALLOW proxy (signal-clean), not the model's own score.
                 do_update[j] = (lab == 0) if gate_by_label else (not signal_dirty(msg_row))
 
-                # ``eff_thr is None`` = bootstrap pass: no threshold exists yet, so only the
-                # sensor alarm arms the precursor. Used by the first of the two calibration
-                # passes (see the CALIBRATION section).
+                # Calibration pass: no threshold yet, the label or the sensor arms the precursor.
                 if gate_by_label:
                     alarm = lab == 1 or sensor_alarm(msg_row)
                 else:
-                    # The precursor also arms on its OWN, lower threshold: the decision
-                    # threshold on the signal-clean stream is the cost-sensitive one,
-                    # which the prevalence pins at the "flag nothing" sentinel, so an
-                    # arming gated on it can only ever fire from the Snort flag. Recon is
-                    # what has to arm the chain, and recon is by construction below the
-                    # decision threshold — otherwise it would already be an alert.
+                    # Also arm on threshold_arm: recon sits below the decision threshold.
                     alarm = event_alarm(score, flagged=eff_thr is not None and score >= eff_thr,
                                         threshold_arm=threshold_arm, features=msg_row)
                 if alarm:
                     record_alert(model, actor, tv)  # arm the precursor (recon → lateral)
 
-            # --- Phase 3: batched benign-gated memory / neighbour / counter commit (serving
-            # edge order: source→device, device→user, user→resource — mirrors the train loop).
+            # --- Phase 3: batched commit of the gated events (memory, neighbours, counters).
             sel = np.nonzero(do_update)[0]
             if sel.size:
                 sel_t = torch.as_tensor(sel, dtype=torch.long, device=device)
@@ -332,16 +290,11 @@ def _replay(model, source_nodes, device_nodes, user, dst, t, msg, y, device, *,
     return scores, labels
 
 
-
-
 def _rule_baseline(test_msg):
-    """Trivial detector: flag if any Zero-Trust edge signal fires.
+    """Signal-only detector: 1 if TLS trust is broken (``ja3 == 0``) or a sensor s1-s3 fires.
 
-    Columns are ``[ja3, s1, s2, s3, method, role, clearance]``: an event is suspicious
-    when the TLS trust is broken (``ja3==0``) or any Snort/sensor probe fires. Column 4
-    is the HTTP method, NOT a sensor (an earlier revision included it, silently flagging
-    every POST). This catches *contextual* anomalies but is blind to *policy* violations
-    (which share benign edge features) — it quantifies how much the TGN adds beyond rules.
+    Column 4 is the HTTP method, not a sensor. Catches contextual anomalies and misses the
+    signal-clean ones (policy, lateral, theft): the floor the TGN must beat.
     """
     return (
         (test_msg[:, 0] == 0.0)
@@ -352,27 +305,15 @@ def _rule_baseline(test_msg):
 
 
 def _sample_structural_negatives(num_events, num_res, res_lo, device, *, avoid=None):
-    """Uniform random resource destinations for self-supervised negatives.
+    """Uniformly random resource destinations (standard temporal link-prediction negatives).
 
-    Standard temporal link-prediction negative sampling: pair each src with a
-    resource drawn *uniformly at random* over the whole resource space. The
-    objective then learns ``P(dst | src, history)`` — each entity's habitual
-    access distribution — so an unusual access (a lateral movement, or a policy
-    violation) is scored as a low-likelihood event under the learned baseline.
-
-    De-circularisation guard: this sampler takes only the resource id-range, **not**
-    the data generator's ``auth_mask`` / habitual sets. A negative construction
-    derived from habituality/authorization would encode the evaluation's *specific*
-    anomaly definition (authorised-but-non-habitual), which would make the reported
-    recall a memorised curriculum rather than honest generalisation.
-    NOTE: this is the standard self-supervised setup, **not** a zero-shot claim —
-    random destinations are mostly non-habitual, so the objective does learn the
-    generic "unusual access" notion; it does not mirror the test rule.
+    Uses only the resource id-range, never the generator's habitual/authorization sets, so
+    the objective learns each entity's access distribution rather than the evaluation's
+    anomaly definition.
     """
     neg = torch.randint(0, num_res, (num_events,), device=device) + res_lo
     if avoid is not None:
-        # Avoid the degenerate case where the random draw equals the true benign dst
-        # (a false negative label). One re-roll suffices at num_res >> 1.
+        # Re-roll draws equal to the true dst (false negatives); once suffices at num_res >> 1.
         collide = neg == avoid
         if collide.any():
             neg[collide] = (
@@ -383,25 +324,14 @@ def _sample_structural_negatives(num_events, num_res, res_lo, device, *, avoid=N
 
 @dataclass
 class StreamData:
-    """A ZTA access stream ready for :func:`train_tgn`, decoupled from the generator.
+    """A ZTA access stream for :func:`train_tgn`, decoupled from the generator (e.g. LANL).
 
-    This lets the training/calibration/evaluation pipeline run unchanged on an externally
-    mapped dataset (e.g. LANL auth — see ``tests/eval_lanl.py``) for external validity.
-    Node indices are ``0..num_nodes-1`` and ``keys[i]`` is the external registry key for
-    slot ``i`` (used for the deterministic hashed-identity embedding). Structural negatives
-    for the access edge are drawn uniformly from ``[neg_lo, neg_lo + neg_num)`` — the
-    resource range for the synthetic stream, the whole computer range for host-to-host auth.
-
-    v4 schema: ``source_nodes`` (client IP), ``config_nodes`` (TLS/JA3 fingerprint) and
-    ``device_nodes`` (hardware id) are optional. ``None`` skips the corresponding binding
-    edge(s) and their training objective — a device-less dataset (LANL) degrades to the
-    single ``user → dst`` edge. The ``usr_lo/usr_num`` / ``dev_lo/dev_num`` /
-    ``cfg_lo/cfg_num`` ranges drive the binding-edge negative sampling (random users for
-    device→user and config→user, random devices for config→device, random configs for
-    source→config); they are only needed when the corresponding entity tensors are
-    present. The causal chain is ``source → config → device → user → dst`` plus the
-    ``config → user`` binding. ``scenario`` is the benign-context bitmask of the synthetic
-    generator (``None`` skips scenario evals).
+    Node ids are ``0..num_nodes-1``; ``keys[i]`` is slot ``i``'s registry key (hashed-identity
+    embedding). Access-edge negatives are drawn from ``[neg_lo, neg_lo + neg_num)``.
+    ``source_nodes`` / ``config_nodes`` / ``device_nodes`` are optional: ``None`` drops their
+    edges and objectives (LANL keeps only ``user -> dst``). The ``usr_*`` / ``dev_*`` /
+    ``cfg_*`` ranges drive the binding-edge negatives. ``scenario`` is the synthetic
+    benign-context bitmask (``None`` skips the scenario evals).
     """
 
     user: torch.Tensor
@@ -428,11 +358,10 @@ class StreamData:
 
 
 def stream_to_data(s) -> StreamData:
-    """Wrap a generated :class:`SyntheticStream` as :class:`StreamData` for :func:`train_tgn`.
+    """Wrap a :class:`SyntheticStream` as :class:`StreamData`.
 
-    Split out of :func:`_synthetic_stream_data` so a caller can hand ``train_tgn`` a
-    stream it has already built or reshaped (e.g. the truncated tail of the data-budget
-    curve, ``eval_common.tail_stream``) through the ``dataset=`` argument.
+    Lets a caller pass an already built or reshaped stream (e.g. ``eval_common.tail_stream``)
+    to ``train_tgn(dataset=...)``.
     """
     return StreamData(
         user=s.user, dst=s.dst, t=s.t, msg=s.msg, y=s.y, types=s.types,
@@ -446,43 +375,27 @@ def stream_to_data(s) -> StreamData:
 
 
 def _synthetic_stream_data(cfg: TGNConfig) -> StreamData:
-    """Build :class:`StreamData` from the synthetic v4 generator (the default path).
-
-    Users are keyed by their integer ids, devices by ``tpm:<id>`` / ``ck:<uuid>``
-    strings, sources by IP strings and resources by their URI strings (so the
-    orchestrator can send all of them natively); structural negatives are sampled over
-    the resource id-range.
-    """
+    """:class:`StreamData` from the synthetic generator configured by ``cfg`` (default path)."""
     return stream_to_data(generate_streaming_data(**stream_kwargs_from_cfg(cfg)))
 
 
 def train_tgn(cfg: TGNConfig | None = None, *, dataset: "StreamData | None" = None,
               use_struct_head=True, use_hash_identity=True, use_hist_feats=True,
               use_precursor=True, use_config_node=True, save=True, return_scores=False):
-    """Train + evaluate the streaming TGN.
+    """Train + evaluate the streaming TGN; returns a metrics dict.
 
-    The keyword flags drive the ablation study (``tests/ablations``): they toggle the
-    structural-compatibility head and the hashed-identity embedding. ``use_config_node``
-    (v4) drops the configuration node from training/eval — the stream is unchanged but
-    the model falls back to the legacy ``source→device`` chain, i.e. a ≈v3 run on the
-    same data; the Δ vs the full model isolates the config node's contribution.
-    ``save=False`` skips persisting the deployable artifact (ablation runs must not
-    clobber the full-model checkpoint in ``public/``). ``dataset`` injects an
-    externally-mapped :class:`StreamData` (e.g. LANL auth) instead of the synthetic
-    generator, reusing the whole pipeline for external validity; ``None`` is the default
-    synthetic path. Returns a metrics dict.
+    Keyword flags drive the ablations (``tests/ablations``): ``use_struct_head``,
+    ``use_hash_identity``, ``use_hist_feats`` and ``use_precursor`` toggle model components;
+    ``use_config_node=False`` drops the config node, so the same stream runs on the
+    ``source -> device`` chain. ``save=False`` skips persisting the artifact (ablations must
+    not overwrite the full-model checkpoint). ``dataset`` injects an external
+    :class:`StreamData` (e.g. LANL) instead of the synthetic generator.
     """
     if cfg is None:
         cfg = TGNConfig()
-    # Full seeding. `torch.manual_seed` alone leaves the CUDA generators and the
-    # non-deterministic scatter kernels free, so run-to-run spread on the same stream
-    # is not below the across-seed standard deviation — the reported sigmas
-    # (3 seeds x 1 run) therefore confound the two sources of variance.
-    #
-    # `warn_only=True` because the scatter-add in TransformerConv / TGNMemory has no
-    # deterministic CUDA kernel: PyTorch warns instead of raising, and the residual
-    # non-determinism must be quantified by repeated runs rather than assumed away. Set
-    # CUBLAS_WORKSPACE_CONFIG=:4096:8 in the environment for the cuBLAS half of this.
+    # Full seeding. The scatter-add in TransformerConv / TGNMemory has no deterministic CUDA
+    # kernel (hence warn_only): residual run-to-run noise must be measured by repeated runs.
+    # Set CUBLAS_WORKSPACE_CONFIG=:4096:8 for cuBLAS determinism.
     torch.manual_seed(cfg.seed)
     torch.cuda.manual_seed_all(cfg.seed)
     np.random.seed(cfg.seed)
@@ -501,9 +414,7 @@ def train_tgn(cfg: TGNConfig | None = None, *, dataset: "StreamData | None" = No
     user_arr, dst, t, msg, y, types = data.user, data.dst, data.t, data.msg, data.y, data.types
     device_arr, source_arr, scenario = data.device_nodes, data.source_nodes, data.scenario
     config_arr = data.config_nodes
-    # Config-node ablation (≈v3): drop the configuration node so the whole pipeline
-    # (training loop, both _replay calls, history counters) falls back to the legacy
-    # source→device chain on the SAME stream. Isolates the config node's contribution.
+    # Config-node ablation: the whole pipeline falls back to the source→device chain.
     if not use_config_node:
         config_arr = None
     node_features = data.node_features
@@ -518,13 +429,8 @@ def train_tgn(cfg: TGNConfig | None = None, *, dataset: "StreamData | None" = No
     else:
         device = torch.device("cpu")
     print(f"Using device: {device}")
-    # NOTE: the data generator's per-IP authorised-resource matrix is intentionally NOT
-    # used during training — see _sample_structural_negatives. Using it would re-introduce
-    # the circular "authorised-but-non-habitual" negative that mirrors the lateral-movement
-    # test anomaly. It stays unused on purpose (dropped in _synthetic_stream_data).
 
-    # Entity registry: ``data.keys[i]`` is the external key for slot ``i`` (int ids for
-    # users/IPs, URI strings for resources in the synthetic stream; computer names for LANL).
+    # Entity registry: ``data.keys[i]`` is the external key of slot ``i``.
     registry = NodeRegistry(capacity=capacity)
     registry.preregister(data.keys)
 
@@ -542,9 +448,8 @@ def train_tgn(cfg: TGNConfig | None = None, *, dataset: "StreamData | None" = No
         link_pred_hidden_layers=cfg.link_pred_hidden_layers,
     ).to(device)
 
-    # Load the static node attributes (role / clearance / tier) into the model's
-    # buffer for the preregistered training entities. Slots reserved for entities
-    # first seen at serving time stay zero until those entities supply their features.
+    # Static node features of the preregistered entities; slots for entities first seen
+    # at serving time stay zero until they supply their own.
     with torch.no_grad():
         model.node_feat[:total_nodes] = node_features.to(device)
         # Hashed Identity Trick (deterministic across processes/runs — see stable_hash).
@@ -574,8 +479,7 @@ def train_tgn(cfg: TGNConfig | None = None, *, dataset: "StreamData | None" = No
     n_val = int(n * cfg.val_frac)
     train_end, val_end = n_train, n_train + n_val
     bs = cfg.batch_size
-    # One-class, not unsupervised: labels select the training set (benign only). See the
-    # module docstring for the full statement of what is and is not supervised.
+    # One-class: labels select the (benign) training set; see the module docstring.
     print("--- ONE-CLASS TRAINING START (benign traffic only) ---")
     _t_train0 = time.perf_counter()  # wall time of the gradient loop only (no calibration / replay)
     for epoch in range(1, cfg.epochs + 1):
@@ -603,12 +507,7 @@ def train_tgn(cfg: TGNConfig | None = None, *, dataset: "StreamData | None" = No
             b_source = source_arr[start_idx:end_idx].to(device) if source_arr is not None else None
             b_config = config_arr[start_idx:end_idx].to(device) if config_arr is not None else None
 
-            # NOTE: the trust score (node_feat[:, 14]) is NO LONGER mutated from
-            # ground-truth labels here. Doing so coupled the labels into a persistent
-            # input feature and trained a self-fulfilling "low trust ⇒ anomaly" signal.
-            # Trust is held at its neutral 1.0 in training, replay and serving alike; the
-            # per-entity alarm history is the kill-chain alert state (recent_alert).
-
+            # Trust (node_feat[:, 14]) stays at the neutral 1.0: never derived from labels.
             benign_mask = b_y == 0
             if not benign_mask.any():
                 continue
@@ -621,24 +520,14 @@ def train_tgn(cfg: TGNConfig | None = None, *, dataset: "StreamData | None" = No
             p_source = b_source[benign_mask] if b_source is not None else None
             p_config = b_config[benign_mask] if b_config is not None else None
 
-            # STRUCTURAL NEGATIVES — for each positive, K uniform random alternatives
-            # (standard self-supervised temporal link prediction), one set per edge of
-            # the chain. They are independent of the generator's habitual sets, so
-            # detection is honest generalisation, not a memorised test rule:
-            #   * access  user→resource: K random RESOURCES — "which resources does this
-            #     user habitually reach" (the lateral-movement objective);
-            #   * binding device→user:   K random USERS — "which users does this machine
-            #     habitually host" (the credential-theft / session-binding objective);
-            #   * binding config→user:   K random USERS — "which clients does this user
-            #     habitually use" (a stolen-credential client differs from the victim's);
-            #   * binding config→device: K random DEVICES — "which machines run this
-            #     config" (a new tool on a known device is lateral movement);
-            #   * binding source→config: K random CONFIGS — "which clients live behind
-            #     this IP" (the network-binding objective; replaces source→device, now
-            #     routed through the config node; roaming positives teach IP tolerance).
-            # The binding objectives are NOT optional: with the access edge anchored on
-            # the (warm) user, a credential thief touching the victim's habitual
-            # resources looks benign there — the anomaly lives only in the bindings.
+            # Structural negatives: K uniform random alternatives per positive, per edge:
+            #   user→resource   random resources  (habitual accesses: lateral movement)
+            #   device→user     random users      (hosted users: credential theft)
+            #   config→user     random users      (a thief's client differs from the victim's)
+            #   config→device   random devices    (a new tool on a known device)
+            #   source→config   random configs    (clients behind an IP; roaming = tolerance)
+            # The bindings are required: a thief reaching the victim's habitual resources
+            # looks benign on the access edge; the anomaly lives in the bindings.
             P = len(p_user)
             K = cfg.infonce_k
             neg_res = _sample_structural_negatives(
@@ -670,7 +559,7 @@ def train_tgn(cfg: TGNConfig | None = None, *, dataset: "StreamData | None" = No
                         P * K, data.cfg_num, data.cfg_lo, device, avoid=cfg_rep
                     )
             if has_src and has_bind and not has_config:
-                # legacy source→device binding (no config node to route the chain through)
+                # source→device binding (config-node ablation)
                 neg_dev = _sample_structural_negatives(
                     P * K, data.dev_num, data.dev_lo, device, avoid=dev_rep
                 )
@@ -724,16 +613,12 @@ def train_tgn(cfg: TGNConfig | None = None, *, dataset: "StreamData | None" = No
             pos_access = _edge_logits(p_user, p_dst, p_t, p_msg, hist_acc_pos)
             neg_access = _edge_logits(user_rep, neg_res, tv_rep, msg_rep, hist_acc_neg).view(P, K)
 
-            # --- CONTEXTUAL NEGATIVES (off-manifold edge message via additive Gaussian
-            # noise). A *different mechanism* from the eval's contextual anomalies
-            # (discrete 0/1 signal randomisation), so the model is not handed the test
-            # corruption. Contextual anomalies are near-trivial on edge features (the
-            # rule baseline already catches them — see eval), so this term mainly keeps
-            # the feature head from ignoring the message.
+            # --- CONTEXTUAL NEGATIVES: Gaussian noise on the message, a different mechanism
+            # from the eval's discrete signal flips; keeps the feature head using the message.
             neg_msg = p_msg + torch.randn_like(p_msg) * 0.5
             neg_out_ctx = _edge_logits(p_user, p_dst, p_t, neg_msg, hist_acc_pos)
 
-            # --- UNSUPERVISED LOSS ---
+            # --- SELF-SUPERVISED LOSS ---
             #   * InfoNCE ranking per edge: among {true endpoint, K random alternatives}
             #     the true one must score most-benign given the src's history. AP-aligned
             #     (a relative/soft target, unlike a hard 0/1 negative).
@@ -766,7 +651,7 @@ def train_tgn(cfg: TGNConfig | None = None, *, dataset: "StreamData | None" = No
                     loss = loss + _binding_loss(p_config, p_device, cfg_rep, neg_cdev, cfg_l, dev_l)  # config → device
                 if has_src:
                     loss = loss + _binding_loss(p_source, p_config, src_rep, neg_scfg, src_l, cfg_l)  # source → config
-            if has_src and has_bind and not has_config:  # legacy source → device
+            if has_src and has_bind and not has_config:  # source → device (ablation)
                 loss = loss + _binding_loss(p_source, p_device, src_rep, neg_dev, src_l, dev_l)
 
             loss.backward()
@@ -777,10 +662,8 @@ def train_tgn(cfg: TGNConfig | None = None, *, dataset: "StreamData | None" = No
             # (mininterval) draw it — otherwise every batch forces a line in non-TTY logs.
             epoch_bar.set_postfix(loss=f"{batch_loss:.4f}", refresh=False)
 
-            # Predict-then-update: commit benign traffic to memory, neighbour store, the
-            # recency cache and the interaction-history counters (benign-only — anomalies
-            # never enter the baseline, matching the serving anti-poisoning gate). Edge
-            # order mirrors serving: source→config, config→device, config→user,
+            # Predict-then-update: commit the benign events (memory, neighbours, recency,
+            # counters) in serving edge order: source→config, config→device, config→user,
             # device→user, user→resource.
             def _commit_edge(p_src, p_dst_e, e_msg):
                 model.memory.update_state(p_src, p_dst_e, p_t, e_msg)
@@ -827,23 +710,12 @@ def train_tgn(cfg: TGNConfig | None = None, *, dataset: "StreamData | None" = No
     def _slice(arr, lo, hi):
         return arr[lo:hi] if arr is not None else None
 
-    # The calibration replay runs the SAME gate as the test replay (``gate_by_label=False``:
-    # commit on the OPA-ALLOW proxy, not on ground truth). Running with
-    # ``gate_by_label=True`` would let the labels decide what enters memory and when the
-    # precursor arms — and the threshold would be fitted on a
-    # score distribution that is not the one it is then applied to. Because the score-driven part
-    # of that feedback needs a threshold that does not exist yet, calibration is a single
-    # fixed-point iteration: pass A runs with no score threshold (sensor alarms only), its
-    # scores yield provisional thresholds, and pass B re-runs the identical replay under
-    # them. Pass B's scores are what the reported thresholds are fitted on.
+    # Calibration replays with the test gate (gate_by_label=False), so the thresholds are
+    # fitted on the score distribution they are applied to. The score-driven precursor needs
+    # a threshold that does not exist yet, hence one fixed-point iteration: pass A (sensor
+    # alarms only) gives provisional thresholds, pass B replays the same slice under them.
     def _snapshot_runtime():
-        """Deep copy of every piece of mutable runtime state a replay advances.
-
-        The two calibration passes replay the *same* slice, so pass B must start from the
-        state pass A started from — otherwise it scores against a memory that has already
-        ingested the very events it is about to see. (The test replay, by contrast,
-        legitimately continues from calibration: it is a later slice of the same stream.)
-        """
+        """Deep copy of the mutable runtime state a replay advances (pass B restarts from it)."""
         return {
             "memory": copy.deepcopy(model.memory.state_dict()),
             "msg_s_store": copy.deepcopy(model.memory.msg_s_store),
@@ -857,6 +729,7 @@ def train_tgn(cfg: TGNConfig | None = None, *, dataset: "StreamData | None" = No
         }
 
     def _restore_runtime(snap):
+        """Restore a :func:`_snapshot_runtime` copy."""
         model.memory.load_state_dict(copy.deepcopy(snap["memory"]))
         model.memory.msg_s_store = copy.deepcopy(snap["msg_s_store"])
         model.memory.msg_d_store = copy.deepcopy(snap["msg_d_store"])
@@ -871,6 +744,7 @@ def train_tgn(cfg: TGNConfig | None = None, *, dataset: "StreamData | None" = No
     pre_cal_state = _snapshot_runtime()
 
     def _cal_replay(desc, thr=None, thr_dirty=None, thr_arm=None, **kw):
+        """Replay the validation slice from the pre-calibration state."""
         _restore_runtime(pre_cal_state)
         return _replay(
             model, _slice(source_arr, train_end, val_end), _slice(device_arr, train_end, val_end),
@@ -888,16 +762,12 @@ def train_tgn(cfg: TGNConfig | None = None, *, dataset: "StreamData | None" = No
     scores_a, labels_a, extra_a = _cal_replay(
         "Calibration pass A (val replay, no threshold)", return_edge_logits=True
     )
-    # Per-edge benign calibration of the score aggregation. The event score is a max over
-    # its edges, whose raw logits live on different scales (benign access ≈ -10, bindings
-    # ≈ -15): the access edge decides the max almost always and the binding edges, where
-    # lateral movement and credential theft show, are drowned. Each edge kind is mapped onto
-    # the upper-tail p-value of its own benign reference (signal-clean benign events of pass
-    # A — no attack label) before the max; see serve_tgn.calibrated_edge_logit.
-    # Fitting on pass A is exact: with no score threshold yet, pass A's precursor
-    # feedback is driven by the sensor alarm alone, so its per-edge logits and precursor
-    # shifts do not depend on the aggregation, and its calibrated scores are recomputed
-    # below instead of replaying the slice again.
+    # Per-edge benign calibration: raw edge logits live on different scales (access ≈ -10,
+    # bindings ≈ -15), so the max would pick the access edge and drown the bindings, where
+    # lateral movement and theft show. Each kind is mapped to the p-value of its own
+    # signal-clean benign reference (no attack label); see serve_tgn.calibrated_edge_logit.
+    # Pass A's feedback uses sensor alarms only, so fitting on it is exact and its scores
+    # are recomputed here instead of replayed.
     set_edge_calibration(model, None)
     if cfg.edge_calibration:
         ref = (labels_a == 0) & ~_rule_baseline(msg[train_end:val_end].numpy()).astype(bool)
@@ -984,9 +854,7 @@ def train_tgn(cfg: TGNConfig | None = None, *, dataset: "StreamData | None" = No
     print(f"Test Stream | AUC: {auc:.4f} | AP: {ap:.4f}")
     print(f"Routed decision | Precision: {precision:.4f} | Recall: {recall:.4f}")
 
-    # --- HEADLINE: AUC -> operational recall ---------------------------------
-    # Before = the previous single global threshold (the benign-FPR quantile applied to
-    # everything). After = signal-routed cost-sensitive decision. This is the value-add.
+    # --- HEADLINE: lateral recall, global FPR threshold vs routed cost-sensitive decision ---
     lat = test_types == 3
     benign_test = test_labels == 0
     old_preds = (test_scores >= threshold_dirty).astype(int)
@@ -997,28 +865,17 @@ def train_tgn(cfg: TGNConfig | None = None, *, dataset: "StreamData | None" = No
     print("\n--- LATERAL RECALL: GLOBAL-FPR THRESHOLD  vs  COST-SENSITIVE ROUTING ---")
     print(f"  before (global @FPR={cfg.target_fpr}): lateral_recall={old_lat_recall:.4f} | benign_fpr={old_fpr:.4f}")
     print(f"  after  (routed cost-sensitive)       : lateral_recall={new_lat_recall:.4f} | benign_fpr={new_fpr:.4f}")
-    # Aggregate recall (all anomaly types) at the SAME global 1% FPR threshold the
-    # baselines report, so the baselines-comparison panel is apples-to-apples.
+    # Aggregate recall at the global target_fpr threshold, the one the baselines report.
     pos_test = test_labels == 1
     old_agg_recall = float(old_preds[pos_test].mean()) if pos_test.any() else float("nan")
     print(f"  aggregate recall (global @FPR={cfg.target_fpr}): {old_agg_recall:.4f}")
 
     # --- PER-ANOMALY-TYPE BREAKDOWN ------------------------------------------
-    # Per-type AUC/AP are benign (type 0) vs that type, so an aggregate cannot mask a
-    # weak class. NONE of the training negatives encode the generator's anomaly rules
-    # (InfoNCE over random-destination negatives + Gaussian feature noise — see the loss),
-    # AND the task is no longer degenerate: benign traffic now *also* makes
-    # authorised-but-non-habitual accesses (benign_explore_prob), so "non-habitual" is not
-    # a free label for lateral — the model must use the temporal pattern + history signals.
-    # These numbers are therefore honest generalisation. The "vs-rule" column says whether
-    # the cheap signal-only rule baseline (below) can also catch the class — i.e. how much
-    # the TGN genuinely adds:
-    #   policy  -> OPA-OWNED: blocked deterministically upstream; reported only as a sanity
-    #     column, NOT a value-add of this model (kept for completeness).
-    #   contextual -> rule-trivial: broken JA3 / Snort fires; the rule baseline matches it.
-    #   lateral -> rule-blind and the GENUINELY HARD case (authorised, signal-clean,
-    #     indistinguishable from benign exploration except by temporal/relational pattern).
-    #     This is the model's real target.
+    # Per-type AUC/AP are benign (type 0) vs that type, so an aggregate cannot mask a weak
+    # class. The vs-rule column says whether the signal-only rule baseline also catches it:
+    #   policy, benign-denied  OPA-owned (decided upstream): sanity column only;
+    #   contextual             rule-trivial (broken JA3 / sensor);
+    #   lateral, cred-theft    rule-blind (signal-clean): the model's real target.
     print("\n--- PER-ANOMALY-TYPE METRICS ---")
     vs_rule = {
         1: "OPA-owned  ", 2: "rule-trivial", 3: "rule-blind ", 4: "rule-blind ",
@@ -1026,10 +883,8 @@ def train_tgn(cfg: TGNConfig | None = None, *, dataset: "StreamData | None" = No
     }
     per_type = {}
     benign = test_types == 0
-    # 5 = data exfiltration (external datasets only: the synthetic generator does not emit it),
-    # reported separately from lateral movement: it carries a bulk transfer volume, so folding it into the lateral class would put a trivially separable
-    # sub-population inside the class the model's central claim rests on.
-    # 6 = benign OPA denial (a human mistake): label=1, but not an attack.
+    # 5 = exfiltration (external datasets only), kept apart from lateral: its transfer volume
+    # would add a trivially separable sub-population. 6 = benign OPA denial (label 1, no attack).
     for type_id, name in ((1, "policy"), (2, "contextual"), (3, "lateral"),
                           (4, "cred-theft"), (5, "exfil"), (6, "benign-denied")):
         sel = benign | (test_types == type_id)
@@ -1041,8 +896,8 @@ def train_tgn(cfg: TGNConfig | None = None, *, dataset: "StreamData | None" = No
         # Recall at the routed operational decision (not a single global threshold).
         preds_sel = test_preds[sel]
         t_recall = float(preds_sel[l_sel == 1].mean()) if (l_sel == 1).any() else 0.0
-        # Recall at the single global 1%-FPR threshold: the metric every baseline reports.
-        # ``recall`` above is the ROUTED recall — the two must never share a table column.
+        # Recall at the global target_fpr threshold (what baselines report); ``recall`` above
+        # is the routed one: never mix the two in one table column.
         t_recall_global = float(old_preds[sel][l_sel == 1].mean())
         per_type[name] = {"auc": t_auc, "ap": t_ap, "recall": t_recall,
                           "recall_global": t_recall_global, "n": int(l_sel.sum())}
@@ -1050,13 +905,9 @@ def train_tgn(cfg: TGNConfig | None = None, *, dataset: "StreamData | None" = No
               f"AP: {t_ap:.4f} | Recall@thr: {t_recall:.4f}")
 
     # --- COLD-START CONDITIONING (lateral) -----------------------------------
-    # Lateral movement can only be flagged for an entity the model has *some* history on;
-    # many laterals hit IPs that are still cold (the stream admits IPs progressively, and
-    # a freshly-compromised IP may have no benign history yet). Report lateral recall split
-    # by whether the src had >=1 benign event before the event (warmed) vs not (cold), so
-    # the honest "where detection is even possible" number is visible next to the overall one.
-    # Labels are available only up to val_end; from there on the partition is driven by the
-    # system's own routed decision, exactly as it would be in deployment.
+    # Lateral recall split by whether the actor had benign history before the event (warmed)
+    # or not (cold: detection not yet possible). Labels are used up to val_end; after that
+    # the partition follows the system's own routed decision, as in deployment.
     actor_arr = device_arr if device_arr is not None else user_arr
     pred_full = np.zeros(len(y), dtype=np.int64)
     pred_full[val_end:] = test_preds
@@ -1071,16 +922,15 @@ def train_tgn(cfg: TGNConfig | None = None, *, dataset: "StreamData | None" = No
     cold_start["recall_warmed"] = float(lat_pred[warmed].mean()) if warmed.any() else float("nan")
     cold_start["recall_cold"] = float(lat_pred[cold].mean()) if cold.any() else float("nan")
     if warmed.any() and lat_mask.any():
-        from sklearn.metrics import roc_auc_score as _auc
         warmed_sel = (test_types == 0) | warmed
-        cold_start["auc_warmed"] = float(_auc((test_types[warmed_sel] == 3).astype(int), test_scores[warmed_sel]))
+        cold_start["auc_warmed"] = float(roc_auc_score((test_types[warmed_sel] == 3).astype(int), test_scores[warmed_sel]))
     print("\n--- LATERAL: COLD-START CONDITIONING ---")
     print(f"  warmed src (has benign history): n={cold_start['n_warmed']:4d} | "
           f"recall@thr={cold_start['recall_warmed']:.4f} | AUC={cold_start.get('auc_warmed', float('nan')):.4f}")
     print(f"  cold   src (no history yet)     : n={cold_start['n_cold']:4d} | "
           f"recall@thr={cold_start['recall_cold']:.4f}  (detection not yet possible)")
 
-    # --- SCENARIO-LEVEL EVALUATION (the v2-schema goals) ----------------------
+    # --- SCENARIO-LEVEL EVALUATION -------------------------------------------
     # (a) roaming / wiped-cookie benign events must not become false positives;
     # (b) credential theft (new IP + new device on a known user) must be caught;
     # (c) lateral movement on shared machines must not be diluted by the user split.
@@ -1188,8 +1038,7 @@ def train_tgn(cfg: TGNConfig | None = None, *, dataset: "StreamData | None" = No
             threshold_dirty=threshold_dirty,
             calibration={"mode": "cost", "cost_ratio": cfg.cost_ratio,
                          "clean_fpr_cap": cfg.clean_fpr_cap, "target_fpr": cfg.target_fpr,
-                         # Label-free alternative to ``threshold``; recorded so a deployment
-                         # without red-team labels can adopt it (see the CALIBRATION section).
+                         # Label-free alternative for deployments without red-team labels.
                          "threshold_clean_unsup": threshold_clean_unsup},
             operating_point=op_new,
         )
@@ -1204,9 +1053,8 @@ def train_tgn(cfg: TGNConfig | None = None, *, dataset: "StreamData | None" = No
         "agg_ap": ap,
         "agg_precision": precision,
         "agg_recall": recall,
-        # Aggregate recall at the SAME global 1% FPR threshold the baselines use, for the
-        # apples-to-apples Panel A (tab:baselines) comparison; agg_recall above is the
-        # signal-routed (operational) recall used by Panel B (tab:v3v4).
+        # Recall at the global target_fpr threshold (baseline comparison); agg_recall above
+        # is the routed operational recall.
         "agg_recall_global": old_agg_recall,
         "lateral_recall_before": old_lat_recall,
         "lateral_recall_after": new_lat_recall,

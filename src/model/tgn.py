@@ -1,3 +1,12 @@
+"""ZTA temporal graph network: TGN memory + graph attention over temporal neighbours.
+
+- :func:`stable_hash`: process-independent hashed identity of an entity key.
+- :class:`GraphAttentionEmbedding`: multi-hop attention over historical edges.
+- :class:`LinkPredictor`: feature head of the edge score.
+- :class:`ZTATemporalGraphNetwork`: the model, including the runtime state (recency,
+  history counters, precursor alerts) kept outside the state_dict.
+"""
+
 import hashlib
 
 import torch
@@ -16,16 +25,17 @@ from graphagate.model.neighbor import MessageNeighborLoader
 def stable_hash(key, buckets: int) -> int:
     """Deterministic bucket for an entity ``key`` in ``[0, buckets)``.
 
-    Uses BLAKE2b over the key's string form so the bucket assignment is identical
-    across processes and machines. The builtin ``hash()`` is salted per process
-    (``PYTHONHASHSEED``), which would give the *same* entity a *different* hashed
-    identity across restarts / training runs — breaking both reproducibility and
-    the inductive hashed-identity guarantee for entities admitted at serving time.
+    BLAKE2b over ``str(key)``, not the per-process salted ``hash()``, so an entity keeps
+    its bucket across processes, restarts and serving-time admissions.
     """
     digest = hashlib.blake2b(str(key).encode("utf-8"), digest_size=8).digest()
     return int.from_bytes(digest, "big") % buckets
 
+
 class GraphAttentionEmbedding(nn.Module):
+    """``num_hops`` TransformerConv layers (LayerNorm, residual from the second) over
+    historical edges whose attributes are ``[time_enc(Δt), msg]``."""
+
     def __init__(self, in_channels, out_channels, msg_dim, time_enc, num_hops=3, heads=4):
         super().__init__()
         self.time_enc = time_enc
@@ -38,13 +48,14 @@ class GraphAttentionEmbedding(nn.Module):
         self.norms = nn.ModuleList([nn.LayerNorm(out_channels) for _ in range(num_hops)])
 
     def forward(self, x, last_update, edge_index, t, msg):
+        """Embed ``x`` over edges ``edge_index`` with times ``t`` and messages ``msg``."""
         if edge_index.numel() == 0:
             edge_attr = torch.empty(0, msg.size(-1) + self.time_enc.out_channels, device=x.device)
         else:
             rel_t = last_update[edge_index[0]] - t
             rel_t_enc = self.time_enc(rel_t.to(x.dtype))
             edge_attr = torch.cat([rel_t_enc, msg], dim=-1)
-            
+
         for i, conv in enumerate(self.convs):
             x_new = conv(x, edge_index, edge_attr)
             if i > 0:
@@ -56,23 +67,19 @@ class GraphAttentionEmbedding(nn.Module):
                 x = x.relu()
         return x
 
+
 class LinkPredictor(nn.Module):
+    """Feature head: MLP over both endpoints' embeddings and static features (+ hashed
+    identity), the edge message, both recency encodings and the pair's history features."""
+
     def __init__(self, in_channels, msg_dim, node_feat_dim, hash_dim, time_dim, hist_feat_dim=0, hidden_layers=2):
         super().__init__()
-        # Static node attributes (role / clearance / device tier) are concatenated
-        # for both endpoints: they carry the policy-relevant signal that separates a
-        # policy-violation anomaly (same edge features as benign) from benign traffic.
-        # ``hist_feat_dim`` adds the explicit interaction-history features for the scored
-        # src→dst pair (how habitual this access is) — the runtime-derivable, non-circular
-        # novelty signal that, combined with the temporal memory, flags lateral movement.
         self.lin1 = nn.Linear(
             in_channels * 2 + msg_dim + (node_feat_dim + hash_dim) * 2 + time_dim * 2 + hist_feat_dim,
             in_channels,
         )
         self.lin_mid = nn.Linear(in_channels, in_channels)
-        # Extra hidden layers beyond the historical two (lin1 + lin_mid). Empty when
-        # ``hidden_layers<=2`` so the state_dict keys stay identical to older checkpoints
-        # (back-compat); ``hidden_layers=3`` inserts one extra Linear before the output.
+        # hidden_layers > 2 adds Linear layers before the output; none at <= 2.
         self.lin_extra = nn.ModuleList(
             nn.Linear(in_channels, in_channels) for _ in range(max(0, hidden_layers - 2))
         )
@@ -100,7 +107,21 @@ class LinkPredictor(nn.Module):
             h = layer(h).relu()
         return self.lin2(h)
 
+
 class ZTATemporalGraphNetwork(nn.Module):
+    """Streaming TGN scoring directed edges of the ZTA access graph.
+
+    Buffers (state_dict): ``node_feat`` static features, ``node_hash`` hashed identities,
+    TGN ``memory``. Runtime state (plain attributes, benign-gated, persisted by
+    ``serve_tgn.save_model``):
+      * ``last_contact[(src, dst)]``: last commit time of the pair (recency input);
+      * ``pair_count`` / ``src_count``: interaction-history counters (``compute_hist_feats``);
+      * ``recent_alert[entity]``: last alert time (kill-chain precursor prior);
+      * ``neighbor_loader``: bounded temporal neighbourhood (``init_neighbor_loader``).
+    Serving knobs: ``precursor_half_life``, ``precursor_max_shift``, ``threshold_arm``,
+    ``delta_t_cap``. The ``use_*`` switches (default on) exist for the ablations.
+    """
+
     def __init__(self, num_nodes, node_feat_dim, msg_dim, memory_dim=64, time_dim=32, num_hops=2, hash_buckets=10000, hash_dim=16, hist_feat_dim=6, gnn_heads=4, link_pred_hidden_layers=2):
         super().__init__()
 
@@ -111,19 +132,13 @@ class ZTATemporalGraphNetwork(nn.Module):
         self.msg_dim = msg_dim
         self.hist_feat_dim = hist_feat_dim
 
-        # Static per-node attributes (role / clearance / device tier), indexed by the
-        # global node id. Populated from the data at train time and persisted in the
-        # state_dict; dynamic entities admitted at serving time write their slot here.
+        # Static node features by global node id; serving writes the slots it admits.
         _nf = torch.zeros(num_nodes, node_feat_dim)
-        # Column 14 is the trust score, held at its neutral 1.0 everywhere (training,
-        # offline replay, serving): the benign-only objective never sees it vary, so any
-        # runtime mutation would be an untrained input shift. Per-entity alarm history
-        # lives in the kill-chain alert state instead (``recent_alert``). A zero here would
-        # put every capacity-headroom slot off the training value.
+        # Column 14 (trust) is a neutral 1.0 everywhere, headroom slots included; alarm
+        # history lives in recent_alert.
         if node_feat_dim > 14:
             _nf[:, 14] = 1.0
         self.register_buffer("node_feat", _nf)
-
 
         # Hashed Identity Trick buffer
         self.register_buffer("node_hash", torch.zeros(num_nodes, dtype=torch.long))
@@ -152,12 +167,8 @@ class ZTATemporalGraphNetwork(nn.Module):
             time_dim=time_dim, hist_feat_dim=hist_feat_dim, hidden_layers=link_pred_hidden_layers,
         )
 
-        # Dedicated structural-compatibility head: projects the (identity-aware)
-        # embeddings and scores a src/dst pair by cosine similarity, scaled by a
-        # learnable temperature. Unlike the concat-MLP feature head — which keys on the
-        # edge message and static attributes — this head measures whether the pair
-        # "belongs together" given the entities' history, the only signal that flags a
-        # valid-but-non-habitual access (lateral movement).
+        # Structural head: scaled cosine compatibility of the projected embeddings, i.e.
+        # whether the pair belongs together given history (valid-but-non-habitual access).
         self.struct_proj = nn.Sequential(
             nn.Linear(memory_dim, memory_dim * 2),
             nn.ReLU(),
@@ -165,42 +176,24 @@ class ZTATemporalGraphNetwork(nn.Module):
             nn.Linear(memory_dim * 2, memory_dim)
         )
         self.struct_scale = nn.Parameter(torch.tensor(5.0))
+        # Runtime state (see the class docstring).
         self.last_contact = {}
-        # Interaction-history counters (benign-gated, like last_contact): how many times
-        # each src→dst pair and each src have been committed to memory. They feed
-        # ``compute_hist_feats``; they are persisted alongside last_contact (not in the
-        # state_dict) and reset/purged on the same events.
         self.pair_count = {}
         self.src_count = {}
-        # Kill-chain precursor state: per-entity timestamp of the last alert (Snort /
-        # detected anomaly). Lateral movement follows a recon alert on the SAME entity,
-        # but the predict-then-update gate drops that precursor from the TGN memory — so
-        # it is carried here and used as a time-decayed SERVING-TIME prior (see
-        # serve_tgn.precursor_shift). It is NOT a trained input (benign-only training
-        # would make it a dead feature). Persisted/purged like last_contact.
         self.recent_alert = {}
-        # Single source of truth: graphagate.config.TGNConfig. Importing the defaults
-        # here keeps the three copies of this knob (config, model, serve_tgn fallback)
-        # from drifting apart. The shift is bounded, so a long half-life can no longer
-        # saturate a score to 1.0 after a single cold-start alert.
+        # Defaults from TGNConfig, the single source of truth.
         from graphagate.config import TGNConfig as _Cfg
 
         self.precursor_half_life = _Cfg.precursor_half_life
         self.precursor_max_shift = _Cfg.precursor_max_shift
-        # Score at or above which an event arms the precursor even below the decision
-        # threshold (serve_tgn.event_alarm). Fitted at calibration and persisted in the stats
-        # file, not the state_dict; None = arm on the decision alone.
+        # Arm threshold of serve_tgn.event_alarm, fitted at calibration (stats file);
+        # None = arm on the decision alone.
         self.threshold_arm = None
-        # Recency cap / never-seen sentinel for both Δt inputs — see config.delta_t_cap
-        # and ``pair_delta_t``. Runtime attribute (not a buffer): it is a decoding
-        # convention, and persisting it would let an old checkpoint silently override a
-        # corrected value.
+        # Δt cap / never-seen sentinel (config.delta_t_cap). Not a buffer, so a checkpoint
+        # cannot override it.
         self.delta_t_cap = _Cfg.delta_t_cap
 
-        # Ablation switches (runtime-only, not persisted): the normal model keeps them
-        # ON. Used by the ablation driver to isolate the contribution of the structural
-        # head, the hashed-identity embedding, the explicit history features and the
-        # kill-chain precursor prior. Serving never toggles these.
+        # Ablation switches (runtime only; the full model keeps them on).
         self.use_struct_head = True
         self.use_hash_identity = True
         self.use_hist_feats = True
@@ -225,17 +218,10 @@ class ZTATemporalGraphNetwork(nn.Module):
         ``hist_t`` / ``hist_msg`` are the corresponding *historical* edge attributes
         supplied by the neighbour loader — not the event currently being scored.
 
-        The GNN's relative-time encoding reads ``last_update`` straight from the memory
-        buffer rather than from the value ``TGNMemory.forward`` returns. PyG branches on
-        ``self.training``: in train mode it recomputes ``last_update`` as
-        ``scatter(t, idx, reduce='max')``, which is **0** for every node with no pending
-        message — i.e. almost the whole multi-hop neighbourhood. That zero flows into
-        ``rel_t = last_update[src] - t`` in the GNN, so with timestamps reaching ~1e7 the
-        model would train on ``rel_t ~ -1e7`` and serve on small values, through a
-        *periodic* (cosine) time encoding that maps the two regimes to uncorrelated
-        vectors. Reading the buffer keeps train and serve on the same distribution.
-        (The memory state ``z`` itself still uses PyG's train-mode update, which is
-        intended: that is the standard TGN "updated memory" trick.)
+        The GNN's relative time reads ``last_update`` from the memory buffer, not from
+        ``TGNMemory.forward``: in train mode PyG returns 0 for nodes without pending
+        messages, which would train on ``rel_t ≈ -1e7`` and serve on small values through a
+        periodic encoding. The memory state ``z`` keeps PyG's train-mode update (standard TGN).
         """
         z, _last_update_train = self.memory(n_id)
         last_update = self.memory.last_update[n_id]
@@ -249,19 +235,11 @@ class ZTATemporalGraphNetwork(nn.Module):
         return z
 
     def pair_delta_t(self, src_ids, dst_ids, t_vals, device):
-        """Recency of each ``src→dst`` pair, capped, with a never-seen sentinel.
+        """Recency of each ``src→dst`` pair, capped at ``delta_t_cap``; never-seen pairs get the cap.
 
-        A pair with no committed contact gets exactly ``delta_t_cap`` — *not* the
-        absolute clock, which is what a ``last_contact.get(..., 0)`` default produces.
-        The absolute-clock encoding drifted along the stream (train, val and test each
-        saw a different "never seen" value for the same state, and a long-lived server
-        drifted away from all three) and handed the InfoNCE objective a one-scalar
-        shortcut, since every random negative is by construction a never-seen pair.
-        Capping also collapses "silent for a week" onto "never seen", which is the
-        operational claim we actually want the encoder to make.
-
-        Shared by the training replay, the training objective and the serving path so
-        the three cannot drift; the same cap applies to ``src_delta_t``.
+        A constant sentinel (not the absolute clock) keeps train, val, test and long-running
+        serving on the same encoding and gives InfoNCE no one-scalar shortcut (random
+        negatives are never-seen by construction). Shared by training, replay and serving.
         """
         cap = float(self.delta_t_cap)
         out = []
@@ -271,12 +249,7 @@ class ZTATemporalGraphNetwork(nn.Module):
         return torch.tensor(out, dtype=torch.float, device=device)
 
     def src_delta_t(self, src_ids, t_vals, device=None):
-        """Recency of each src entity's own memory, capped, with the same sentinel.
-
-        ``last_update == 0`` is the cold-start marker of ``TGNMemory``: an entity that
-        has never been committed. Without the sentinel it produced Δt = t_now, the same
-        drifting encoding ``pair_delta_t`` documents.
-        """
+        """Recency of each src's memory, capped; ``last_update == 0`` (never committed) gets the cap."""
         cap = float(self.delta_t_cap)
         if not torch.is_tensor(src_ids):
             src_ids = torch.as_tensor(list(src_ids), dtype=torch.long,
@@ -300,23 +273,14 @@ class ZTATemporalGraphNetwork(nn.Module):
         return torch.stack([torch.log1p(pc), torch.log1p(sc), pc / (sc + 1.0)], dim=-1)
 
     def compute_hist_feats(self, src_ids, dst_ids, device, aux_src_ids=None):
-        """Per-event interaction-history features for the directed ``src→dst`` pairs (6-dim).
+        """6-dim interaction-history features of the directed ``src→dst`` pairs (global ids).
 
-        First triplet: how often this exact pair was seen, how active the src is, and the
-        fraction of the src's traffic that habitually targets this dst. A never-seen pair
-        from an active src (ratio≈0) is the novelty cue for lateral movement — but benign
-        *exploration* shares it, so this signal is only discriminative in combination
-        with the temporal memory / structural head (that is the honest, non-degenerate
-        contribution). Counts come from benign-gated history only (anti-poisoning).
-
-        Second triplet: the same statistics for the auxiliary ``aux_src→dst`` pairs.
-        On the access edge (user→resource) the aux src is the DEVICE: its per-resource
-        habituality counters replace the direct device→resource temporal edge of the
-        v1 schema, so an infected machine's unusual reach stays visible without a 4th
-        edge per request. ``aux_src_ids=None`` (binding edges, datasets without a
-        device entity) zero-pads the second triplet.
-
-        ``src_ids`` / ``dst_ids`` / ``aux_src_ids`` are iterables of *global* node ids.
+        First triplet: pair count, src activity and the share of the src's traffic going to
+        this dst. A never-seen pair from an active src is the novelty cue for lateral
+        movement; benign exploration shares it, so it helps only with memory and structure.
+        Second triplet: the same for ``aux_src→dst``; on the access edge the aux src is the
+        device (per-device habituality without a device→resource edge). ``aux_src_ids=None``
+        zero-pads it. Counts are benign-gated.
         """
         base = self._hist_triplet(src_ids, dst_ids, device)
         if aux_src_ids is None:
@@ -375,4 +339,3 @@ class ZTATemporalGraphNetwork(nn.Module):
         nf = self.node_feat[n_id]
         h_idx = self.node_hash[n_id]
         return self.score(z, nf, h_idx, src_local, dst_local, cur_msg, delta_t, delta_t_src, hist_feats)
-

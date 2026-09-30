@@ -1,21 +1,15 @@
-"""Decision-threshold calibration for the streaming TGN.
+"""Decision-threshold calibration for the streaming TGN (pure numpy).
 
-The model *ranks* anomalies well (lateral-movement AUC ~0.72) but a single threshold
-picked only to hold a benign false-positive rate (``target_fpr``) sits above where the
-signal-clean lateral scores cluster, so operational recall collapses to a few percent.
+A threshold fitted only to hold the benign FPR (``target_fpr``) sits above most
+signal-clean lateral scores, so recall collapses. Two levers turn the ranking into recall:
 
-This module turns that ranking into recall with a **cost-sensitive** threshold: pick the
-operating point that minimises ``cost_ratio * FN + FP``. With ``cost_ratio = C_fn/C_fp``
-large (a missed lateral movement costs far more than a false alarm the orchestrator can
-re-challenge) the threshold drops to where the laterals are, trading a controlled amount
-of precision for recall. The functions are pure (numpy only) so both the training pipeline
-and the external-dataset evaluation (``tests/eval_lanl.py``) reuse them.
+- **cost-sensitive threshold** (:func:`cost_sensitive_threshold`): minimise
+  ``cost_ratio * FN + FP``, since a missed lateral costs more than a re-challenge;
+- **signal routing** (:func:`routed_predict`): the recall-oriented threshold applies only
+  to signal-clean events; signal-dirty ones (broken JA3 / sensor, already caught by the
+  rule baseline) keep the conservative ``target_fpr`` threshold.
 
-The companion serving lever is *signal routing*: at inference time the true class is
-unknown, but the edge signal (broken JA3 / Snort / sensors) is observable, so we apply the
-recall-oriented threshold only to the **signal-clean** stream — where benign and lateral
-are otherwise indistinguishable — and keep the conservative ``target_fpr`` threshold for
-signal-dirty events (already caught by the cheap rule baseline). See ``routed_predict``.
+Reused by the training pipeline and the external-dataset evaluations.
 """
 
 from __future__ import annotations
@@ -127,13 +121,8 @@ def recall_fpr_curve(scores, labels, *, n_points: int = 11):
 
 
 def routed_predict(scores, dirty_mask, threshold_clean, threshold_dirty):
-    """Signal-routed decision: clean events use ``threshold_clean``, dirty use ``dirty``.
-
-    ``dirty_mask`` marks events whose edge signal already fires (broken JA3 / Snort /
-    sensor). Those keep the conservative threshold; the recall-oriented clean threshold is
-    applied only where benign and lateral are otherwise indistinguishable. Returns a 0/1
-    prediction array. This mirrors what ``serve_tgn.score_event`` does online per event.
-    """
+    """0/1 predictions: ``threshold_dirty`` where ``dirty_mask`` (signal fires), else
+    ``threshold_clean``; the offline mirror of ``serve_tgn.score_event``."""
     scores = np.asarray(scores)
     dirty_mask = np.asarray(dirty_mask, dtype=bool)
     eff = np.where(dirty_mask, threshold_dirty, threshold_clean)

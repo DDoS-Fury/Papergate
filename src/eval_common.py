@@ -1,17 +1,12 @@
-"""Shared causal, runtime-derivable signals for FAIR baseline comparison + cold-start.
+"""Evaluation helpers shared by the TGN pipeline and the baselines.
 
-These mirror — in a simple, non-relational, batch form — the two tabular signals the
-streaming TGN maintains online:
-
-  * the interaction-history counters (per-pair / per-src access counts), and
-  * the kill-chain precursor (a per-entity, time-decayed "recently alerted" prior).
-
-Giving the baselines (Isolation Forest / One-Class SVM / static GNN) the same *family* of
-signals keeps the comparison from being a strawman — but they get strictly fewer than the
-TGN (device actor only: no user / source / config identity, no binding counters), so the
-remaining gap is not attributable to the temporal-graph machinery alone. Everything here
-is **causal** (uses only events strictly before each event) and **benign-gated** (only
-benign events advance the counts, up to a ``label_horizon``), like the TGN's online state.
+- :func:`causal_hist_features` / :func:`causal_precursor_factor`: batch mirrors of the TGN's
+  online history counters and kill-chain prior, so the baselines (Isolation Forest,
+  One-Class SVM, static GNN) get the same family of signals (device actor only, no binding
+  counters). Causal (events strictly before) and benign-gated up to ``label_horizon``.
+- :func:`causal_src_seen`: warmed / cold partition for the cold-start split.
+- :func:`tail_stream`: data-budget slicing of a stream.
+- :func:`binary_metrics`: precision / recall at a threshold.
 """
 
 from __future__ import annotations
@@ -59,13 +54,9 @@ def causal_hist_features(src, dst, y, *, label_horizon: int | None = None) -> np
     Counts only ground-truth-benign events strictly *before* each event — the batch,
     causal analogue of :meth:`ZTATemporalGraphNetwork.compute_hist_feats`.
 
-    ``label_horizon`` is the index past which ground-truth labels are no longer available
-    to the system — in practice ``val_end``. Beyond it every event is committed, attacks
-    included (the commit-everything gate: what the TGN does on a stream where
-    ``signal_dirty`` never fires). Without a horizon the whole array is walked against
-    ``y``, so the counters of a *test* event depend on the ground-truth labels of the test
-    events before it — an oracle the deployed system does not have: attack pairs stay
-    "never seen" forever, however often they repeat.
+    ``label_horizon`` (in practice ``val_end``) is where labels stop being available: past
+    it every event is committed, attacks included. Without a horizon the test counters use
+    test labels (an oracle).
     """
     src = np.asarray(src); dst = np.asarray(dst); y = np.asarray(y)
     n = len(src)
@@ -88,15 +79,9 @@ def causal_hist_features(src, dst, y, *, label_horizon: int | None = None) -> np
 def causal_src_seen(src, y, *, label_horizon: int | None = None, pred=None) -> np.ndarray:
     """Boolean (N,): has this src had >=1 benign event strictly before? (cold-start split).
 
-    ``label_horizon`` is the index past which ground-truth labels are no longer available
-    to the system — in practice ``val_end``. Beyond it the "was this benign" gate uses
-    ``pred`` (the model's own decision, 1 = flagged) instead of ``y``; with ``pred=None``
-    every event past the horizon counts as benign, i.e. the commit-everything gate.
-
-    Without a horizon the whole array is walked against ``y``, so membership of a *test*
-    event in the warmed vs cold partition depended on the ground-truth labels of the test
-    events before it — an oracle partition. The headline numbers never used it, but
-    ``recall_warmed`` / ``recall_cold`` were not deployable quantities.
+    Past ``label_horizon`` (in practice ``val_end``) the benign gate uses ``pred`` (the
+    model's decision, 1 = flagged) instead of ``y``; ``pred=None`` counts every such event as
+    benign. Without a horizon the partition uses test labels (an oracle).
     """
     src = np.asarray(src); y = np.asarray(y)
     pred = None if pred is None else np.asarray(pred)
@@ -118,13 +103,10 @@ def causal_src_seen(src, y, *, label_horizon: int | None = None, pred=None) -> n
 def causal_precursor_factor(src, t, msg, half_life: float, max_boost: float) -> np.ndarray:
     """Per-event multiplicative score factor (N,) from the kill-chain precursor.
 
-    Mirrors :func:`graphagate.serve_tgn.precursor_shift` causally so the baselines get the
-    SAME prior with the SAME half-life: ``1 + max_boost * 0.5**(Δt/half_life)`` while a
-    Snort alert on the same src is recent, else ``1.0``. Multiplicative where the TGN's is
-    an additive logit shift, because a baseline score is not a probability and an additive
-    shift is not defined on its scale. Armed by the observable Snort flag (``msg[:, 1] > 0.5``) — the
-    signal a recon event fires — computed before arming on the current event so an event is
-    never boosted by itself.
+    Causal mirror of :func:`graphagate.serve_tgn.precursor_shift` with the same half-life:
+    ``1 + max_boost * 0.5**(Δt/half_life)`` after a Snort alert (``msg[:, 1] > 0.5``) on the
+    same src, else ``1.0``. Multiplicative because baseline scores are not logits; an event
+    never boosts itself.
     """
     src = np.asarray(src); t = np.asarray(t)
     snort = np.asarray(msg)[:, 1] > 0.5

@@ -12,6 +12,9 @@ Requests unroll into a causal chain:
 accompanied by a ``config -> user`` binding. The access edge ``user -> resource``
 carries the 7-dimensional request message; structural binding edges carry zero messages.
 
+Who decides what is allowed: :mod:`graphagate.data.access_policy` (reference Bell-LaPadula
+model + resource catalogue). This module only simulates who sends which request.
+
 Entities and Open-World Dynamics:
   * **CONFIG**: client software identity (``conf:<ja3>`` or generic ``conf:guest``).
   * **Roaming** (``p_roam``): benign requests from non-home IPs (e.g. remote work / 5G).
@@ -24,7 +27,7 @@ Entities and Open-World Dynamics:
   * **Lateral Movement** (etype 3): pivot using harvested credentials (cached or foreign) or
     non-habitual accesses on compromised hosts.
 
-Anomaly Types (``types``):
+Anomaly Types (``types``, see :class:`EventType`):
   * 0 = Benign
   * 1 = Policy violation (denied by authorization rules)
   * 2 = Contextual anomaly (reconnaissance / scanner probes)
@@ -50,10 +53,18 @@ from __future__ import annotations
 
 import random
 from dataclasses import dataclass, field
+from enum import IntEnum
 
 import numpy as np
 import torch
 
+from graphagate.data import access_policy
+from graphagate.data.access_policy import (
+    NUM_BASE_ROUTES,
+    ROLE_CLEARANCE,
+    ROLES,
+    build_resource_universe,
+)
 from graphagate.netclass import GUEST_DEVICE, ip_is_internal
 
 
@@ -106,6 +117,7 @@ def stream_kwargs_from_cfg(cfg) -> dict:
         p_benign_new_config=cfg.p_benign_new_config,
     )
 
+
 # Configuration overrides reproducing the legacy closed-world baseline
 # (closed-world benign traffic, fresh attacker slots, role spoofing) for comparative audits.
 V4_KNOBS = dict(
@@ -120,152 +132,25 @@ V4_KNOBS = dict(
     p_benign_new_config=0.0,
 )
 
-ROLES = ["guest", "operator", "manager", "admin"]
-CLEARANCES = ["PUBLIC", "INTERNAL", "CONFIDENTIAL", "SECRET", "TOP_SECRET"]
-WRITE_METHODS = {1, 2, 3, 4}  # POST/PUT/DELETE/PATCH (0=GET is the only read)
 
-# --- Reference Authorization Model (Bell-LaPadula + Compartments) --------------------
-# Reference security policy model used for ground-truth authorization decisions:
-#   * Simple Security Property: no read-up on GET (clearance >= classification).
-#   * *-Property: no write-down on writes (clearance <= classification).
-#   * Compartments: required categories must be a subset of the subject's categories.
-#   * Trusted Guard: sanitized write-down exception allowing admin POST on TRUSTED_GUARD.
-# Note: Deployed OPA policies should mirror this reference model to keep the benign
-# manifold aligned with PDP decisions.
-SECURITY_LEVELS = {
-    "PUBLIC": 0, "INTERNAL": 1, "CONFIDENTIAL": 2, "SECRET": 3, "TOP_SECRET": 4,
-}
-ROLE_CLEARANCE = {  # Clearance derives directly from role
-    "guest": 0, "operator": 1, "manager": 2, "admin": 4,
-}
-ROLE_CATEGORIES = {  # Compartments granted per role
-    "guest": set(),
-    "operator": {"hr", "ops"},
-    "manager": {"hr", "ops", "finance"},
-    "admin": {"hr", "ops", "finance", "nuclear", "security"},
-}
+class EventType(IntEnum):
+    """Anomaly type of an event (``SyntheticStream.types``); 5 is reserved for external exfiltration."""
 
-TRUSTED_GUARD = "/api/v1/trusted-guard/sanitized-delete-personnel"
-
-# Protected routes: uri -> (classification, required categories)
-SECURITY_MATRIX = {
-    "/api/v1/personnel":          ("INTERNAL",     {"hr"}),
-    "/api/v1/documents":          ("CONFIDENTIAL", {"finance"}),
-    "/api/v1/nuclear-materials":  ("TOP_SECRET",   {"nuclear"}),
-    "/api/v1/reactor-parameters": ("TOP_SECRET",   {"nuclear", "security"}),
-    TRUSTED_GUARD:                ("SECRET",       {"security"}),
-}
-
-# Methods served per route (0=GET, 1=POST, 2=PUT, 3=DELETE, 4=PATCH).
-# Protected routes expose methods matching their security profile; public/auth routes
-# are accessible to all roles and gated by PDP risk evaluation.
-_GET, _POST = {0}, {1}
-ROUTE_METHODS = {
-    "/": _GET,
-    "/materials": _GET,
-    "/reserved": _GET,
-    "/login": _GET,
-    "/register": _GET,
-    "/static": _GET,
-    "/favicon.ico": _GET,
-    "/api/v1/auth/register": _POST,
-    "/api/v1/auth/login": _POST,
-    "/api/v1/auth/verify-otp": _POST,
-    "/api/v1/auth/register/begin": _POST,
-    "/api/v1/auth/register/finish": _POST,
-    "/api/v1/auth/login/begin": _POST,
-    "/api/v1/auth/login/finish": _POST,
-    "/api/v1/personnel": {0, 1},              # GET, POST
-    "/api/v1/documents": {0, 1, 3},           # GET, POST, DELETE
-    "/api/v1/nuclear-materials": {0, 1, 3},   # GET, POST, DELETE
-    "/api/v1/reactor-parameters": {0, 1, 3},  # GET, POST, DELETE
-    TRUSTED_GUARD: {1},                       # POST only
-}
-
-# Base orchestrator routes. Simulator instances expand this into a larger synthetic
-# resource catalogue in a seed-dependent manner (see build_resource_universe).
-_BASE_ROUTE_METHODS = dict(ROUTE_METHODS)
-_BASE_SECURITY_MATRIX = dict(SECURITY_MATRIX)
-
-_GENERATED_CATEGORIES = ("public", "hr", "finance", "nuclear", "ops", "security")
-_GENERATED_CLASSIFICATION = {
-    "hr": ("INTERNAL", {"hr"}),
-    "finance": ("CONFIDENTIAL", {"finance"}),
-    "ops": ("INTERNAL", {"ops"}),
-    "nuclear": ("TOP_SECRET", {"nuclear"}),
-    "security": ("SECRET", {"security"}),
-}
-
-# Inherent resource risk per security level (stored at node_features[:, 4]).
-_CLASSIFICATION_RISK = {
-    "INTERNAL": 0.5, "CONFIDENTIAL": 0.6, "SECRET": 0.8, "TOP_SECRET": 0.9,
-}
-# Risk overrides for base orchestrator routes.
-_RISK_OVERRIDES = {
-    "/api/v1/personnel": 0.6,
-    "/api/v1/documents": 0.7,
-    "/api/v1/nuclear-materials": 0.7,
-    "/api/v1/reactor-parameters": 1.0,
-    TRUSTED_GUARD: 1.0,
-}
+    BENIGN = 0
+    POLICY = 1
+    CONTEXT = 2
+    LATERAL = 3
+    CRED_THEFT = 4
+    BENIGN_DENIAL = 6
 
 
-def build_resource_universe(num_generated: int = 981, seed: int = 42):
-    """Build the resource catalogue combining base routes with synthetic endpoints.
+class KillPhase(IntEnum):
+    """Kill-chain phase of a compromised machine."""
 
-    Returns (route_methods, security_matrix, resource_uris, resource_risk).
-    Generation uses random.Random(seed) so each run obtains a distinct resource catalog.
-    Resource keys match normalized URI paths sent by the orchestrator.
-    """
-    route_methods = dict(_BASE_ROUTE_METHODS)
-    security_matrix = dict(_BASE_SECURITY_MATRIX)
+    RECON = 1
+    LATERAL = 2
+    DWELL = 4
 
-    rng = random.Random(seed)
-    for i in range(num_generated):
-        cat = rng.choice(_GENERATED_CATEGORIES)
-        if cat == "public":
-            uri = f"/api/v2/public/resource_{i}"
-            route_methods[uri] = {0, 1}
-        else:
-            uri = f"/internal/{cat}/doc_{i}"
-            route_methods[uri] = {0, 1, 3}
-            security_matrix[uri] = _GENERATED_CLASSIFICATION[cat]
-
-    resource_uris = list(route_methods)
-    resource_risk = {uri: 0.0 for uri in resource_uris}
-    for uri, (cls, _cats) in security_matrix.items():
-        resource_risk[uri] = _CLASSIFICATION_RISK[cls]
-    resource_risk.update(_RISK_OVERRIDES)
-    return route_methods, security_matrix, resource_uris, resource_risk
-
-
-# Module-level defaults (seed 42) for policy/netclass testing.
-ROUTE_METHODS, SECURITY_MATRIX, RESOURCE_URIS, RESOURCE_RISK = build_resource_universe()
-
-
-def policy_allows(role: str, method: int, uri: str) -> bool:
-    """Evaluate access authorization under the reference Bell-LaPadula policy.
-
-    Public routes allow all roles. Protected routes verify:
-      1. Route serves the requested HTTP method.
-      2. Role possesses all required compartments (categories).
-      3. Bell-LaPadula: no read-up on GET, no write-down on writes,
-         with trusted-guard sanitized write-down exception for admin.
-    """
-    if method not in ROUTE_METHODS.get(uri, set()):
-        return False
-    if uri not in SECURITY_MATRIX:
-        return True  # public / auth / static route
-    classification, categories = SECURITY_MATRIX[uri]
-    if not categories.issubset(ROLE_CATEGORIES[role]):
-        return False
-    clr = ROLE_CLEARANCE[role]
-    obj = SECURITY_LEVELS[classification]
-    if uri == TRUSTED_GUARD:
-        return role == "admin" and method == 1  # sanitized write-down (admin POST only)
-    if method == 0:  # GET — Simple Security Property (no read-up)
-        return clr >= obj
-    return clr <= obj  # writes — *-Property (no write-down)
 
 # Scenario bitmask annotations for benign-context evaluation.
 SCEN_ROAMING = 1   # Non-home IP (remote work / 5G)
@@ -276,8 +161,60 @@ SCEN_NEW_USER = 8  # Recently onboarded user (cold user node)
 _WIPE_COLD_EVENTS = 25      # Events until a re-keyed device is considered warm
 _NEW_USER_COLD_EVENTS = 25  # Events until a new user node is considered warm
 
-# Probability that a benign request uses an unfingerprinted client (conf:guest)
-_P_GUEST_CONFIG = 0.05
+# Per-request probabilities of the benign and attack branches of ``step``.
+_P_GUEST_CONFIG = 0.05          # benign request from an unfingerprinted client (conf:guest)
+_P_ANONYMOUS = 0.15             # benign request from an anonymous visitor
+_P_SERVICE_ACCOUNT = 0.05       # benign request is the service account's cronjob
+_P_BENIGN_DENIAL = 0.02         # registered user hits a denied route by mistake (etype 6)
+_P_ATTACK_ON_COMPROMISED = 0.3  # compromised host emits attack traffic (benign otherwise)
+_P_LEGACY_COMPROMISE = 0.005    # per-request compromise hazard when p_compromise is None
+
+_SERVICE_USER = 0     # user 0 is the service account
+_SERVICE_CONFIG = 1   # its fixed client config (conf:0001)
+_OFFICE_SUBNET = 30   # source slots [0, 30) are office NAT IPs (src:10.0.0.x)
+_ZIPF_EXPONENT = 1.2  # resource popularity ~ 1 / rank^1.2
+
+# Circadian inter-arrival scale (seconds between requests).
+_DAY_S = 86400
+_WORK_START_S, _WORK_END_S = 8 * 3600, 18 * 3600
+_SCALE_WORK, _SCALE_NIGHT, _SCALE_WEEKEND = 45.0, 600.0, 1200.0
+
+# Static node feature columns (node_features is [num_nodes, 16]).
+_NODE_FEAT_DIM = 16
+_NF_DEVICE_TIER = 2
+_NF_RESOURCE_RISK = 4
+_NF_SOURCE_INTERNAL = 5
+_NF_TRUST = 14
+
+
+def _zipf_weight(rank):
+    """Unnormalised popularity of the resource at ``rank`` (0 = most popular)."""
+    return 1.0 / ((rank + 1.0) ** _ZIPF_EXPONENT)
+
+
+@dataclass
+class _Request:
+    """Entities of the request being generated; branches may rewrite any of them."""
+
+    machine: int
+    device: int
+    user: int
+    role: str
+    clearance: int
+    source: int
+    config: int
+    scenario: int
+
+
+@dataclass
+class _TheftIncident:
+    """Active credential-theft session: attacker context replayed with the victim's identity."""
+
+    victim: int
+    device: int
+    source: int
+    config: int
+    remaining: int  # requests left in the session
 
 
 class ZTAStreamSimulator:
@@ -285,7 +222,7 @@ class ZTAStreamSimulator:
 
     Powers both the offline tensor stream (generate_streaming_data) and live API
     streaming. Simulates progressive device/entity admission, benign organizational
-    dynamics, and stealthy attack kill chains.
+    dynamics, and stealthy attack kill chains. ``step()`` returns one event dict.
     """
 
     def __init__(
@@ -309,9 +246,8 @@ class ZTAStreamSimulator:
         use_resource_risk: bool = True,
         use_source_internal: bool = False,
         guest_device_fallback: bool = False,
-        # --- v5 realism / difficulty knobs (see the "Open world" section of the module
-        # docstring). Every default below reproduces the v4 *process*; TGNConfig sets the
-        # published values.
+        # Open-world / difficulty knobs (module docstring). Defaults give the closed-world
+        # process (V4_KNOBS minus guest_device_fallback); TGNConfig sets the published values.
         num_new_sources: int = 0,
         num_new_configs: int = 0,
         p_new_source: float = 0.0,
@@ -338,24 +274,7 @@ class ZTAStreamSimulator:
             np.random.seed(seed)
             random.seed(seed)
 
-        # Per-instance resource catalogue drawn under this run's seed (see
-        # ``build_resource_universe``): the real routes plus a synthetic estate sized so
-        # the total matches ``num_resources``.
-        n_generated = num_resources - len(_BASE_ROUTE_METHODS)
-        assert n_generated >= 0, (
-            f"num_resources ({num_resources}) must be >= the {len(_BASE_ROUTE_METHODS)} "
-            f"real routes: set TGNConfig.num_resources accordingly"
-        )
-        (
-            self.route_methods,
-            self.security_matrix,
-            self.resource_uris,
-            self.resource_risk,
-        ) = build_resource_universe(n_generated, seed if seed is not None else 42)
-        assert num_resources == len(self.resource_uris), (
-            f"num_resources ({num_resources}) must equal the built catalogue size "
-            f"({len(self.resource_uris)})"
-        )
+        self._build_catalogue(num_resources, seed)
         self.num_registered_users = num_users
         self.num_guests = num_guests
         self.num_users = num_users + num_guests
@@ -365,6 +284,8 @@ class ZTAStreamSimulator:
         self.num_resources = num_resources
         self.num_wipe_slots = num_wipe_slots
         self.num_theft_slots = num_theft_slots
+        self.num_new_sources = num_new_sources
+        self.num_new_configs = num_new_configs
         self.guest_device_fallback = guest_device_fallback
         self.benign_explore_prob = benign_explore_prob
         self.p_roam = p_roam
@@ -372,8 +293,6 @@ class ZTAStreamSimulator:
         self.p_cred_theft = p_cred_theft
         self.admission_horizon = admission_horizon
         self.use_resource_risk = use_resource_risk
-        self.num_new_sources = num_new_sources
-        self.num_new_configs = num_new_configs
         self.p_new_source = p_new_source
         self.p_config_release = p_config_release
         self.p_config_adopt = p_config_adopt
@@ -391,47 +310,73 @@ class ZTAStreamSimulator:
         self.ramp_guests = ramp_guests
         self.p_benign_new_config = p_benign_new_config
 
-        # --- Resource Popularity (Decoupled from index) ---
-        # Popularity follows a Zipf distribution. Rank is a random permutation of the
-        # resource index space to prevent destination IDs from encoding frequency.
+        # Build order is fixed: every step below draws from the global RNGs.
+        # Popularity rank is a random permutation, so resource ids do not encode frequency.
         pop_rank = np.random.permutation(num_resources).astype(np.float64)
-        self._res_pop_weight = 1.0 / ((pop_rank + 1.0) ** 1.2)
+        self._res_pop_weight = _zipf_weight(pop_rank)
+        self._build_layout()
+        self._build_population(tier_mix, p_shared_device, num_new_users, num_service_machines)
+        self._build_network(num_service_machines)
+        self._build_keys()
+        self._build_node_features(use_source_internal)
+        self._build_behaviour()
+        self._init_state(start_time)
 
-        # --- Node Index Layout: [users][device slots][source slots][config slots][resources] ---
+    # --- Construction ---
+    def _build_catalogue(self, num_resources: int, seed: int | None) -> None:
+        """Per-run resource catalogue: the real routes plus a synthetic estate of the right size."""
+        n_generated = num_resources - NUM_BASE_ROUTES
+        assert n_generated >= 0, (
+            f"num_resources ({num_resources}) must be >= the {NUM_BASE_ROUTES} "
+            f"real routes: set TGNConfig.num_resources accordingly"
+        )
+        (
+            self.route_methods,
+            self.security_matrix,
+            self.resource_uris,
+            self.resource_risk,
+        ) = build_resource_universe(n_generated, seed if seed is not None else 42)
+        assert num_resources == len(self.resource_uris), (
+            f"num_resources ({num_resources}) must equal the built catalogue size "
+            f"({len(self.resource_uris)})"
+        )
+
+    def _build_layout(self) -> None:
+        """Node index layout: [users][device slots][source slots][config slots][resources]."""
         self.user_lo = 0
         self.dev_lo = self.num_users
-        self.dev_slots = num_devices + num_wipe_slots + num_theft_slots
+        self.dev_slots = self.num_devices + self.num_wipe_slots + self.num_theft_slots
         self.src_lo = self.dev_lo + self.dev_slots
         # Trailing slots form shared fresh pools for benign churn and attackers
-        self.src_slots = num_sources + num_theft_slots + num_new_sources
+        self.src_slots = self.num_sources + self.num_theft_slots + self.num_new_sources
         self.cfg_lo = self.src_lo + self.src_slots
-        self.cfg_slots = num_configs + num_theft_slots + num_new_configs
+        self.cfg_slots = self.num_configs + self.num_theft_slots + self.num_new_configs
         self.res_lo = self.cfg_lo + self.cfg_slots
-        self.num_nodes = self.res_lo + num_resources
+        self.num_nodes = self.res_lo + self.num_resources
 
-        # --- Users and Clearances ---
+    def _build_population(self, tier_mix, p_shared_device, num_new_users, num_service_machines) -> None:
+        """Roles, machine tiers, scheduled hires and the desk owners of each machine."""
         self.user_roles = [str(np.random.choice(ROLES)) for _ in range(self.num_registered_users)]
         self.user_roles.extend(["guest"] * self.num_guests)
         self.user_clearances = [ROLE_CLEARANCE[r] for r in self.user_roles]
 
-        # --- Physical Machines ---
         # Tier: 0=unmanaged, 1=cert-only, 2=TPM-backed.
         self.machine_tiers = [int(np.random.choice([0, 1, 2], p=tier_mix))
-                              for _ in range(num_devices)]
+                              for _ in range(self.num_devices)]
         # Desk owners (user 0 reserved as dedicated service account if service machines exist)
         self._humans = (
             list(range(1, self.num_registered_users))
             if num_service_machines is not None and self.num_registered_users > 1
             else list(range(self.num_registered_users))
         )
-        # Mid-stream hires: registered users arriving progressively across the admission horizon
+        # Mid-stream hires: (admission step, user) spread across the admission horizon
         self._pending_hires: list[tuple[int, int]] = []
-        if num_new_users > 0 and admission_horizon:
+        if num_new_users > 0 and self.admission_horizon:
             cand = [u for u in self._humans if u != 0]
             k = min(num_new_users, max(len(cand) - 1, 0))
             hires = [int(u) for u in np.random.permutation(cand)[:k]]
             self._pending_hires = [
-                (int((i + np.random.rand()) * admission_horizon / k), u)
+                (int((i + np.random.rand()) * self.admission_horizon / k), u)
                 for i, u in enumerate(hires)
             ]
             pending = set(hires)
@@ -440,7 +385,7 @@ class ZTAStreamSimulator:
         self._registered = [u for u in range(self.num_registered_users) if u not in pending]
         self._user_age: dict[int, int] = {}
         self.machine_users: list[list[int]] = []
-        for m in range(num_devices):
+        for m in range(self.num_devices):
             users = [self._humans[m % len(self._humans)]]
             if np.random.rand() < p_shared_device:
                 extra = np.random.randint(1, 4)
@@ -448,31 +393,34 @@ class ZTAStreamSimulator:
                 users += list(np.random.choice(pool, size=min(extra, len(pool)), replace=False))
             self.machine_users.append(users)
 
-        # Home IPs: office subnet (RFC1918 NAT) and remote/home subnet
-        num_office = min(30, num_sources)
-        self._office_locals = list(range(num_office))
+    def _build_network(self, num_service_machines) -> None:
+        """Per-machine home IPs and habitual client configs; service machines."""
+        # Home IPs: one office IP (RFC1918 NAT) plus one remote/home IP
+        self._num_office = min(_OFFICE_SUBNET, self.num_sources)
+        self._office_locals = list(range(self._num_office))
         self.machine_home_ips: list[set[int]] = []
-        for m in range(num_devices):
+        for m in range(self.num_devices):
             home = {int(np.random.choice(self._office_locals))}
-            if num_sources > num_office:
-                home.add(int(np.random.randint(num_office, num_sources)))
+            if self.num_sources > self._num_office:
+                home.add(int(np.random.randint(self._num_office, self.num_sources)))
             self.machine_home_ips.append(home)
 
-        # Habitual client configurations (TLS/JA3) per machine
-        cfg_pool = list(range(1, num_configs)) if num_configs > 1 else [0]
+        # Habitual client configurations (TLS/JA3) per machine; 0 is conf:guest
+        cfg_pool = list(range(1, self.num_configs)) if self.num_configs > 1 else [0]
         self.machine_configs: list[list[int]] = []
-        for m in range(num_devices):
+        for m in range(self.num_devices):
             k = min(int(np.random.randint(1, 3)), len(cfg_pool))
             cfgs = np.random.choice(cfg_pool, size=k, replace=False)
             self.machine_configs.append([int(c) for c in cfgs])
 
-        # Service machines for user 0 (automated tasks / cronjobs)
+        # Machines running the service account's cronjobs
         self.service_machines = (
             None if num_service_machines is None
-            else list(range(min(num_service_machines, num_devices)))
+            else list(range(min(num_service_machines, self.num_devices)))
         )
 
-        # --- External Keys per Node Slot ---
+    def _build_keys(self) -> None:
+        """External key of every node slot (what the orchestrator would send)."""
         self.keys: list[str | None] = [None] * self.num_nodes
         for u in range(self.num_registered_users):
             self.keys[self.user_lo + u] = f"user_{u:04d}"
@@ -480,44 +428,44 @@ class ZTAStreamSimulator:
             self.keys[self.user_lo + self.num_registered_users + g] = f"guest_{g:04d}"
         # Device keys: TPM-backed or random opaque cookies (ck:<hex>)
         self._used_cookies: set[str] = set()
-        for m in range(num_devices):
+        for m in range(self.num_devices):
             tier = self.machine_tiers[m]
             self.keys[self.dev_lo + m] = f"tpm:{m:04d}" if tier == 2 else self._new_cookie()
-        for k in range(num_wipe_slots + num_theft_slots):
-            self.keys[self.dev_lo + num_devices + k] = f"_spare_dev_{k}"
+        for k in range(self.num_wipe_slots + self.num_theft_slots):
+            self.keys[self.dev_lo + self.num_devices + k] = f"_spare_dev_{k}"
         # Source keys: internal office IPs (10.0.0.x) and external/CGNAT IPs (100.64.x.x)
-        for s in range(num_sources):
+        for s in range(self.num_sources):
             self.keys[self.src_lo + s] = (
-                f"src:10.0.0.{s}" if s < num_office else f"src:100.64.{s // 256}.{s % 256}"
+                f"src:10.0.0.{s}" if s < self._num_office else f"src:100.64.{s // 256}.{s % 256}"
             )
-        for k in range(num_theft_slots + num_new_sources):
-            self.keys[self.src_lo + num_sources + k] = self._fresh_ip_key(num_sources + k)
+        for k in range(self.num_theft_slots + self.num_new_sources):
+            self.keys[self.src_lo + self.num_sources + k] = self._fresh_ip_key(self.num_sources + k)
         # Config keys: 0=conf:guest, 1..num_configs=habitual, trailing=fresh pool
         self.keys[self.cfg_lo] = "conf:guest"
-        for c in range(1, num_configs):
+        for c in range(1, self.num_configs):
             self.keys[self.cfg_lo + c] = f"conf:{c:04d}"
-        for k in range(num_theft_slots + num_new_configs):
-            self.keys[self.cfg_lo + num_configs + k] = f"conf:{num_configs + k:04d}"
-        for r in range(num_resources):
+        for k in range(self.num_theft_slots + self.num_new_configs):
+            self.keys[self.cfg_lo + self.num_configs + k] = f"conf:{self.num_configs + k:04d}"
+        for r in range(self.num_resources):
             self.keys[self.res_lo + r] = self.resource_uris[r]
 
-        # --- Static Node Features (16-dim) ---
-        # Map: [2]=device tier, [3]=reserved (0.0), [4]=resource risk,
-        # [5]=internal source IP flag (1.0 internal, 0.0 external), [14]=trust score default (1.0).
-        nf = torch.zeros(self.num_nodes, 16)
-        nf[:, 14] = 1.0  # trust score default
-        for m in range(num_devices):
-            nf[self.dev_lo + m, 2] = self.machine_tiers[m] / 2.0
-        for r in range(num_resources):
-            if use_resource_risk:
-                nf[self.res_lo + r, 4] = self.resource_risk[self.resource_uris[r]]
+    def _build_node_features(self, use_source_internal: bool) -> None:
+        """Static node features: device tier, resource risk, internal-source flag, trust = 1.0."""
+        nf = torch.zeros(self.num_nodes, _NODE_FEAT_DIM)
+        nf[:, _NF_TRUST] = 1.0  # neutral constant
+        for m in range(self.num_devices):
+            nf[self.dev_lo + m, _NF_DEVICE_TIER] = self.machine_tiers[m] / 2.0
+        if self.use_resource_risk:
+            for r in range(self.num_resources):
+                nf[self.res_lo + r, _NF_RESOURCE_RISK] = self.resource_risk[self.resource_uris[r]]
         if use_source_internal:
             for s in range(self.src_slots):
-                nf[self.src_lo + s, 5] = 1.0 if ip_is_internal(self.keys[self.src_lo + s]) else 0.0
+                is_internal = ip_is_internal(self.keys[self.src_lo + s])
+                nf[self.src_lo + s, _NF_SOURCE_INTERNAL] = 1.0 if is_internal else 0.0
         self.node_features = nf
 
-        # --- Behaviour Model ---
-        # Valid actions per role under policy; habitual action subset per user
+    def _build_behaviour(self) -> None:
+        """Per-user habitual actions (half of what the role allows) and action caches."""
         self._valid_cache: dict[str, list[tuple[int, int]]] = {}
         self._violation_cache: dict[str, list[tuple[int, int]]] = {}
         self._user_action_cache: dict[int, tuple[list, list]] = {}
@@ -531,61 +479,49 @@ class ZTAStreamSimulator:
                 self.user_habitual.append({valid[j] for j in hab_idx})
             else:
                 self.user_habitual.append(set())
+        self._refresh_action_space()
 
-        # Complete candidate (resource, method) action space
-        self._all_actions = [
-            (r, m) for r, uri in enumerate(self.resource_uris) for m in self.route_methods[uri]
-        ]
-
-        # --- Mutable State ---
+    def _init_state(self, start_time: int) -> None:
+        """Mutable state: clock, device slots, fresh-slot pools, compromise bookkeeping."""
         self.t = start_time
         self.step_count = 0
-        self.machine_slot = {m: self.dev_lo + m for m in range(num_devices)}
+        self.machine_slot = {m: self.dev_lo + m for m in range(self.num_devices)}
         # Optional fallback: non-TPM machines share a single guest device node
         self._guest_dev_slot: int | None = None
         if self.guest_device_fallback:
-            non_tpm = [m for m in range(num_devices) if self.machine_tiers[m] < 2]
+            non_tpm = [m for m in range(self.num_devices) if self.machine_tiers[m] < 2]
             if non_tpm:
                 guest = self.dev_lo + non_tpm[0]
                 self._guest_dev_slot = guest
                 self.keys[guest] = GUEST_DEVICE
-                self.node_features[guest, 2] = 0.0
+                self.node_features[guest, _NF_DEVICE_TIER] = 0.0
                 for m in non_tpm:
                     self.machine_slot[m] = guest
                     if self.dev_lo + m != guest:
                         self.keys[self.dev_lo + m] = f"_guest_unused_dev_{m:04d}"
-                        self.node_features[self.dev_lo + m, 2] = 0.0
+                        self.node_features[self.dev_lo + m, _NF_DEVICE_TIER] = 0.0
         # Fresh-slot allocators (recycled round-robin upon pool exhaustion)
-        self._dev_pool = [self.dev_lo + num_devices + k for k in range(num_wipe_slots + num_theft_slots)]
-        self._src_pool = [self.src_lo + num_sources + k for k in range(num_theft_slots + num_new_sources)]
-        self._cfg_pool = [num_configs + k for k in range(num_theft_slots + num_new_configs)]
+        self._dev_pool = [self.dev_lo + self.num_devices + k
+                          for k in range(self.num_wipe_slots + self.num_theft_slots)]
+        self._src_pool = [self.src_lo + self.num_sources + k
+                          for k in range(self.num_theft_slots + self.num_new_sources)]
+        self._cfg_pool = [self.num_configs + k
+                          for k in range(self.num_theft_slots + self.num_new_configs)]
         self._next_dev = self._next_src = self._next_cfg = 0
         self._slot_age: dict[int, int] = {}
-        self.compromised_state: dict[int, int] = {}           # machine -> kill-chain phase
+        self.compromised_state: dict[int, int] = {}           # machine -> KillPhase
         self.compromised_chain_remaining: dict[int, int] = {} # machine -> steps left in phase
         self.compromised_dwell: dict[int, int] = {}           # machine -> dwell events before remediation
         self.harvested_creds: dict[int, list[int]] = {}       # machine -> dumped credentials
         self.machine_logons: dict[int, set[int]] = {}         # machine -> hot-desk users
-        self._active_thefts: list[dict] = []
+        self._active_thefts: list[_TheftIncident] = []
         self._cfg_upgrade: dict[int, int] = {}                # active JA3 release migrations
-        self._admitted = num_devices                          # admitted machines horizon
+        self._admitted = self.num_devices                     # machines admitted so far
 
-    # --- helpers ---
+    # --- Policy and action sampling ---
     def policy_allows(self, role: str, method: int, uri: str) -> bool:
-        if method not in self.route_methods.get(uri, set()):
-            return False
-        if uri not in self.security_matrix:
-            return True
-        classification, categories = self.security_matrix[uri]
-        if not categories.issubset(ROLE_CATEGORIES[role]):
-            return False
-        clr = ROLE_CLEARANCE[role]
-        obj = SECURITY_LEVELS[classification]
-        if uri == TRUSTED_GUARD:
-            return role == "admin" and method == 1
-        if method == 0:
-            return clr >= obj
-        return clr <= obj
+        """:func:`access_policy.policy_allows` against this simulator's catalogue."""
+        return access_policy.policy_allows(role, method, uri, self.route_methods, self.security_matrix)
 
     def _policy_valid_actions(self, role: str):
         """``(resource_idx, method)`` actions OPA would ALLOW for this role (cached)."""
@@ -620,6 +556,16 @@ class ZTAStreamSimulator:
             )
         return self._user_action_cache[user]
 
+    def _refresh_action_space(self) -> None:
+        """Every (resource, method) pair, and the public subset anonymous visitors use."""
+        self._all_actions = [
+            (r, m) for r, uri in enumerate(self.resource_uris) for m in self.route_methods[uri]
+        ]
+        self._anon_actions = [
+            (r, m) for r, uri in enumerate(self.resource_uris)
+            if uri not in self.security_matrix for m in self.route_methods[uri]
+        ]
+
     def _zipf_choice(self, choices: list, key: tuple):
         """Sample an action weighted by resource popularity rank (Zipf law).
 
@@ -636,8 +582,9 @@ class ZTAStreamSimulator:
         idx = int(np.random.choice(len(choices), p=p))
         return choices[idx]
 
-    # --- Fresh-Slot Allocation (shared by benign churn and attackers) ---
+    # --- Fresh-slot allocation (shared by benign churn and attackers) ---
     def _new_cookie(self) -> str:
+        """Unused opaque device cookie ``ck:<48-bit hex>``."""
         while True:
             key = f"ck:{random.getrandbits(48):012x}"
             if key not in self._used_cookies:
@@ -651,7 +598,7 @@ class ZTAStreamSimulator:
 
     def _alloc_dev(self, tier: int) -> int | None:
         """Allocate a fresh device slot with a new opaque cookie token."""
-        busy = set(self.machine_slot.values()) | {t["dev_slot"] for t in self._active_thefts}
+        busy = set(self.machine_slot.values()) | {t.device for t in self._active_thefts}
         for _ in range(len(self._dev_pool)):
             slot = self._dev_pool[self._next_dev % len(self._dev_pool)]
             self._next_dev += 1
@@ -660,7 +607,7 @@ class ZTAStreamSimulator:
         else:
             return None
         self.keys[slot] = self._new_cookie()
-        self.node_features[slot, 2] = tier / 2.0
+        self.node_features[slot, _NF_DEVICE_TIER] = tier / 2.0
         self._slot_age[slot] = 0
         return slot
 
@@ -671,11 +618,12 @@ class ZTAStreamSimulator:
         return slot
 
     def _alloc_cfg(self) -> int:
-        """Allocate a fresh client JA3 config slot (round-robin)."""
+        """Allocate a fresh client JA3 config slot (round-robin); returns the local index."""
         local = self._cfg_pool[self._next_cfg % len(self._cfg_pool)]
         self._next_cfg += 1
         return local
 
+    # --- Benign organisational dynamics ---
     def _maybe_wipe_cookie(self, machine: int) -> None:
         """Simulate cookie wipe: re-key cookie-identified machine to a fresh device slot."""
         if (
@@ -733,6 +681,13 @@ class ZTAStreamSimulator:
         self._registered.append(u)
         self._user_age[u] = 0
 
+    def _admitted_machines(self) -> int:
+        """Number of physical machines admitted by current step (all without a horizon)."""
+        if not self.admission_horizon:
+            return self.num_devices
+        return min(self.num_devices,
+                   int(self.step_count / self.admission_horizon * self.num_devices) + 1)
+
     def _admitted_guests(self) -> int:
         """Number of anonymous visitor identities admitted by current step."""
         if not (self.ramp_guests and self.admission_horizon):
@@ -740,9 +695,17 @@ class ZTAStreamSimulator:
         return min(self.num_guests,
                    int(self.step_count / self.admission_horizon * self.num_guests) + 1)
 
+    def _benign_sensors(self) -> tuple[float, float, float]:
+        """Generate baseline sensor probe values (s1, s2, s3) misfiring at p_sensor_fp."""
+        if self.p_sensor_fp <= 0:
+            return 0.0, 0.0, 0.0
+        s = (np.random.rand(3) < self.p_sensor_fp).astype(float)
+        return float(s[0]), float(s[1]), float(s[2])
+
+    # --- Compromise lifecycle ---
     def _compromise(self, machine: int) -> None:
         """Initialize compromise on machine: harvest cached or foreign credentials for pivot."""
-        self.compromised_state[machine] = 1
+        self.compromised_state[machine] = KillPhase.RECON
         cached = sorted(set(self.machine_users[machine]) | self.machine_logons.get(machine, set()))
         foreign = [u for u in self._registered if u not in cached]
         k = int(np.random.randint(1, 4))
@@ -756,38 +719,67 @@ class ZTAStreamSimulator:
             self.harvested_creds[machine] = creds
 
     def _remediate(self, machine: int) -> None:
+        """Clean the machine: drop all compromise bookkeeping."""
         for d in (self.compromised_state, self.compromised_chain_remaining,
                   self.compromised_dwell, self.harvested_creds):
             d.pop(machine, None)
 
-    def _benign_sensors(self) -> tuple[float, float, float]:
-        """Generate baseline sensor probe values (s1, s2, s3) misfiring at p_sensor_fp."""
-        if self.p_sensor_fp <= 0:
-            return 0.0, 0.0, 0.0
-        s = (np.random.rand(3) < self.p_sensor_fp).astype(float)
-        return float(s[0]), float(s[1]), float(s[2])
+    def _advance_kill_chain(self, machine: int) -> str:
+        """Advance the machine's kill chain by one request; return the anomaly kind to emit.
 
-    def _emit_theft_event(self, incident: dict) -> dict:
-        """Emit one credential-theft request: attacker IP/device/config with victim credentials."""
-        u = incident["victim"]
-        role, clr = self.user_roles[u], self.user_clearances[u]
-        # Destination drawn from valid actions for role to preserve destination marginal
-        valid = self._policy_valid_actions(role)
-        res_idx, method = (self._zipf_choice(valid, ("valid", role)) if valid else (0, 0))
-        # Credential theft is policy-clean and signal-clean; exposed only by broken binding
-        s1, s2, s3 = self._benign_sensors()
-        feat = [1.0, s1, s2, s3, float(method),
-                ROLES.index(role) / (len(ROLES) - 1), clr / 4.0]
-        incident["remaining"] -= 1
-        if incident["remaining"] <= 0:
-            self._active_thefts.remove(incident)
+        With ``p_compromise`` (multi-incident mode): recon 1-3 requests, lateral 5-11,
+        dwell 0-4, then remediation. Without it (legacy): one recon request, then lateral,
+        then dwell forever.
+        """
+        phase = self.compromised_state[machine]
+        multi = self.p_compromise is not None
+        if phase == KillPhase.RECON:
+            kind = "context"  # sensor probes
+            recon_left = self.compromised_chain_remaining.get(machine)
+            if multi and recon_left is None:
+                recon_left = int(np.random.randint(1, 4))
+            if not multi or recon_left <= 1:
+                self.compromised_state[machine] = KillPhase.LATERAL
+                self.compromised_chain_remaining[machine] = int(np.random.randint(5, 12))
+            else:
+                self.compromised_chain_remaining[machine] = recon_left - 1
+        elif phase == KillPhase.LATERAL:
+            kind = "lateral"
+            self.compromised_chain_remaining[machine] -= 1
+            if self.compromised_chain_remaining[machine] <= 0:
+                self.compromised_state[machine] = KillPhase.DWELL
+                if multi:
+                    self.compromised_dwell[machine] = int(np.random.randint(0, 5))
+        else:
+            kind = np.random.choice(["policy", "context", "lateral"])
+        if (
+            self.compromised_state.get(machine) == KillPhase.DWELL and multi
+            and self.compromised_dwell.get(machine, 0) <= 0
+        ):
+            self._remediate(machine)
+        elif phase == KillPhase.DWELL and multi:
+            self.compromised_dwell[machine] -= 1
+        return kind
+
+    # --- Event construction ---
+    @staticmethod
+    def _msg(ja3: float, sensors, method: int, role: str, clearance: int) -> list[float]:
+        """7-dim access-edge message ``[ja3, s1, s2, s3, method, role, clearance]``."""
+        s1, s2, s3 = sensors
+        return [ja3, float(s1), float(s2), float(s3), float(method),
+                ROLES.index(role) / (len(ROLES) - 1), clearance / 4.0]
+
+    def _emit(self, req: _Request, res_idx: int, method: int, ja3: float, sensors,
+              etype: EventType) -> dict:
+        """Event for ``req`` accessing ``res_idx``; label is 1 for every non-benign type."""
         return self._event(
-            source=incident["src_slot"], config=incident["cfg_slot"],
-            device=incident["dev_slot"], user=u,
-            res_idx=res_idx, feat=feat, label=1, etype=4, scenario=0,
+            source=req.source, config=req.config, device=req.device, user=req.user,
+            res_idx=res_idx, feat=self._msg(ja3, sensors, method, req.role, req.clearance),
+            label=int(etype != EventType.BENIGN), etype=etype, scenario=req.scenario,
         )
 
     def _event(self, *, source, config, device, user, res_idx, feat, label, etype, scenario):
+        """Event dict (global node ids + external keys); ages cold device/user nodes."""
         if device in self._slot_age:
             self._slot_age[device] += 1
         if user in self._user_age:
@@ -798,111 +790,139 @@ class ZTAStreamSimulator:
         dst = self.res_lo + res_idx
         return {
             "source": source, "config": config, "device": device, "user": user, "dst": dst,
-            "t": self.t, "features": feat, "label": label, "etype": etype,
+            "t": self.t, "features": feat, "label": label, "etype": int(etype),
             "scenario": scenario,
             "key_source": self.keys[source], "key_config": self.keys[config],
             "key_device": self.keys[device],
             "key_user": self.keys[user], "key_dst": self.keys[dst],
         }
 
-    # --- One Event Step ---
+    # --- One event step ---
+    def step(self) -> dict:
+        """Generate the next event: credential theft, benign request, or kill-chain attack."""
+        self._advance_clock()
+
+        theft = self._maybe_theft_event()
+        if theft is not None:
+            return theft
+
+        if self.p_compromise is not None and random.random() < self.p_compromise:
+            # Compromise a clean admitted machine at the global rate
+            victim_m = int(np.random.randint(0, self._admitted))
+            if victim_m not in self.compromised_state:
+                self._compromise(victim_m)
+        req = self._sample_request()
+        if (
+            self.p_compromise is None  # legacy per-request hazard
+            and np.random.rand() < _P_LEGACY_COMPROMISE and req.machine not in self.compromised_state
+        ):
+            self._compromise(req.machine)
+
+        # Compromised hosts blend in with benign traffic most of the time
+        if req.machine in self.compromised_state and np.random.rand() < _P_ATTACK_ON_COMPROMISED:
+            return self._attack_event(req)
+        return self._benign_event(req)
+
     def _current_interarrival_scale(self) -> float:
         """Scale parameter for exponential inter-arrival time reflecting circadian activity."""
-        day_sec = self.t % 86400
-        weekday = (self.t // 86400) % 7
-        is_weekend = weekday >= 5
-        
-        if is_weekend:
-            return 1200.0  # Slow weekend traffic
-            
-        # Work hours: 08:00 to 18:00
-        if 28800 <= day_sec <= 64800:
-            return 45.0  # High work hour traffic
-        else:
-            return 600.0  # Slow night traffic
+        day_sec = self.t % _DAY_S
+        weekday = (self.t // _DAY_S) % 7
+        if weekday >= 5:
+            return _SCALE_WEEKEND
+        if _WORK_START_S <= day_sec <= _WORK_END_S:
+            return _SCALE_WORK
+        return _SCALE_NIGHT
 
-    def step(self) -> dict:
+    def _advance_clock(self) -> None:
+        """Advance time and the admission horizon; apply fleet-wide churn (releases, hires)."""
         self.t += max(1, int(np.random.exponential(scale=self._current_interarrival_scale())))
         self.step_count += 1
-
-        # Interleave active credential theft requests to maintain natural user timing
-        if self.admission_horizon:
-            max_m = min(
-                self.num_devices,
-                int(self.step_count / self.admission_horizon * self.num_devices) + 1,
-            )
-        else:
-            max_m = self.num_devices
-        self._admitted = max_m
+        self._admitted = self._admitted_machines()
         self._maybe_release_config()
         self._maybe_onboard()
 
+    def _maybe_theft_event(self) -> dict | None:
+        """Continue an active theft session (interleaved with user traffic) or start a new one."""
         if self._active_thefts and random.random() < self.p_theft_interleave:
             return self._emit_theft_event(random.choice(self._active_thefts))
         if (
             random.random() < self.p_cred_theft and self._src_pool and self._cfg_pool
             and (self._dev_pool or self._guest_dev_slot is not None)
         ):
-            victim = self._registered[int(np.random.randint(0, len(self._registered)))]
-            victim_machines = [
-                m for m in range(self._admitted) if victim in self.machine_users[m]
-                and self.machine_tiers[m] < 2  # TPM-bound identities cannot be stolen
-            ]
-            replay_m = None
-            if victim_machines and random.random() < self.p_theft_session_replay:
-                # Pass-the-cookie: replay victim device cookie
-                replay_m = int(random.choice(victim_machines))
-                dev_slot = self.machine_slot[replay_m]
-            elif self.guest_device_fallback and self._guest_dev_slot is not None:
-                dev_slot = self._guest_dev_slot
-            else:
-                cert = any(self.machine_tiers[m] == 1 for m in victim_machines)
-                dev_slot = self._alloc_dev(
-                    tier=1 if cert and random.random() < self.p_theft_mimic_config else 0
-                )
-                if dev_slot is None:
-                    dev_slot = self.machine_slot[int(np.random.randint(0, max_m))]
-            # Attacker network and client mimicry
-            if random.random() < self.p_theft_known_source:
-                src_slot = self.src_lo + int(np.random.randint(min(30, self.num_sources), self.num_sources))
-            else:
-                src_slot = self._alloc_src()
-            if random.random() < self.p_theft_mimic_config:
-                # Replay victim client config or sample common fleet client
-                cfg_slot = (
-                    self.cfg_lo + int(random.choice(self.machine_configs[replay_m]))
-                    if replay_m is not None else self._fleet_config()
-                )
-            else:
-                cfg_slot = self.cfg_lo + self._alloc_cfg()
-            incident = {
-                "victim": victim,
-                "dev_slot": dev_slot,
-                "src_slot": src_slot,
-                "cfg_slot": cfg_slot,
-                "remaining": int(np.random.randint(3, 7)),
-            }
+            incident = self._start_theft()
             self._active_thefts.append(incident)
             return self._emit_theft_event(incident)
+        return None
 
-        # Pick physical machine (progressively admitted), user and source IP
-        if self.p_compromise is not None and random.random() < self.p_compromise:
-            # Compromise clean admitted machine at global rate
-            victim_m = int(np.random.randint(0, max_m))
-            if victim_m not in self.compromised_state:
-                self._compromise(victim_m)
-        machine = int(np.random.randint(0, max_m))
+    def _start_theft(self) -> _TheftIncident:
+        """Pick a victim and the attacker's device, IP and client (fresh or mimicked)."""
+        victim = self._registered[int(np.random.randint(0, len(self._registered)))]
+        victim_machines = [
+            m for m in range(self._admitted) if victim in self.machine_users[m]
+            and self.machine_tiers[m] < 2  # TPM-bound identities cannot be stolen
+        ]
+        replay_m = None
+        if victim_machines and random.random() < self.p_theft_session_replay:
+            # Pass-the-cookie: replay victim device cookie
+            replay_m = int(random.choice(victim_machines))
+            dev_slot = self.machine_slot[replay_m]
+        elif self.guest_device_fallback and self._guest_dev_slot is not None:
+            dev_slot = self._guest_dev_slot
+        else:
+            cert = any(self.machine_tiers[m] == 1 for m in victim_machines)
+            dev_slot = self._alloc_dev(
+                tier=1 if cert and random.random() < self.p_theft_mimic_config else 0
+            )
+            if dev_slot is None:
+                dev_slot = self.machine_slot[int(np.random.randint(0, self._admitted))]
+        # Attacker network: fleet egress IP or fresh IP
+        if random.random() < self.p_theft_known_source:
+            src_slot = self.src_lo + int(np.random.randint(self._num_office, self.num_sources))
+        else:
+            src_slot = self._alloc_src()
+        if random.random() < self.p_theft_mimic_config:
+            # Replay victim client config or sample common fleet client
+            cfg_slot = (
+                self.cfg_lo + int(random.choice(self.machine_configs[replay_m]))
+                if replay_m is not None else self._fleet_config()
+            )
+        else:
+            cfg_slot = self.cfg_lo + self._alloc_cfg()
+        return _TheftIncident(victim=victim, device=dev_slot, source=src_slot, config=cfg_slot,
+                              remaining=int(np.random.randint(3, 7)))
+
+    def _emit_theft_event(self, incident: _TheftIncident) -> dict:
+        """Emit one credential-theft request: attacker IP/device/config with victim credentials."""
+        u = incident.victim
+        role, clr = self.user_roles[u], self.user_clearances[u]
+        # Destination drawn from valid actions for role to preserve destination marginal
+        valid = self._policy_valid_actions(role)
+        res_idx, method = (self._zipf_choice(valid, ("valid", role)) if valid else (0, 0))
+        # Credential theft is policy-clean and signal-clean; exposed only by broken binding
+        feat = self._msg(1.0, self._benign_sensors(), method, role, clr)
+        incident.remaining -= 1
+        if incident.remaining <= 0:
+            self._active_thefts.remove(incident)
+        return self._event(
+            source=incident.source, config=incident.config, device=incident.device, user=u,
+            res_idx=res_idx, feat=feat, label=1, etype=EventType.CRED_THEFT, scenario=0,
+        )
+
+    def _set_user(self, req: _Request, user: int) -> None:
+        """Make ``user`` the requester, with the role and clearance of their account."""
+        req.user = user
+        req.role, req.clearance = self.user_roles[user], self.user_clearances[user]
+
+    def _sample_request(self) -> _Request:
+        """Pick machine (progressively admitted), user, source IP and client config."""
+        machine = int(np.random.randint(0, self._admitted))
         self._maybe_wipe_cookie(machine)
         dev_slot = self.machine_slot[machine]
         user = int(random.choice(self.machine_users[machine]))
-        if (
-            self.p_hotdesk > 0
-            and random.random() < self.p_hotdesk
-        ):
+        if self.p_hotdesk > 0 and random.random() < self.p_hotdesk:
             # Hot-desking: registered user signing in on another machine
             user = int(random.choice(self._humans))
             self.machine_logons.setdefault(machine, set()).add(user)
-        u_role, u_clearance = self.user_roles[user], self.user_clearances[user]
 
         scenario = 0
         if len(self.machine_users[machine]) > 1:
@@ -929,219 +949,179 @@ class ZTAStreamSimulator:
         if self.p_benign_new_config > 0 and self._cfg_pool and random.random() < self.p_benign_new_config:
             config = self.cfg_lo + self._alloc_cfg()
 
-        # APT kill chain on compromised host (recon -> lateral -> dwell -> remediation)
-        if (
-            self.p_compromise is None  # Legacy hazard rate fallback
-            and np.random.rand() < 0.005 and machine not in self.compromised_state
-        ):
-            self._compromise(machine)
-        is_anomalous = (
-            machine in self.compromised_state and np.random.rand() < 0.3
-        )  # Compromised hosts blend in with benign traffic ~70% of the time
+        return _Request(machine=machine, device=dev_slot, user=user,
+                        role=self.user_roles[user], clearance=self.user_clearances[user],
+                        source=source, config=config, scenario=scenario)
 
-        is_anonymous = not is_anomalous and random.random() < 0.15
+    # --- Benign branch ---
+    def _benign_event(self, req: _Request) -> dict:
+        """Benign request: service cronjob, user mistake (etype 6), visitor or habitual access."""
+        is_anonymous = random.random() < _P_ANONYMOUS
 
-        if not is_anomalous:
-            # Benign Service Account (cronjob) deterministic access pattern
-            if random.random() < 0.05:
-                user = 0
-                u_role, u_clearance = self.user_roles[user], self.user_clearances[user]
-                config = self.cfg_lo + 1
-                if self.service_machines is not None:
-                    sm = int(random.choice(self.service_machines))
-                    machine, dev_slot = sm, self.machine_slot[sm]
-                    source = self.src_lo + random.choice(sorted(self.machine_home_ips[sm]))
-                    scenario = SCEN_SHARED if len(self.machine_users[sm]) > 1 else 0
-                valid = self._policy_valid_actions(u_role)
-                if valid:
-                    res_idx, method = valid[0]
-                    feat = [1.0, *self._benign_sensors(), float(method),
-                            ROLES.index(u_role) / (len(ROLES) - 1), u_clearance / 4.0]
-                    return self._event(source=source, config=config, device=dev_slot, user=user,
-                                       res_idx=res_idx, feat=feat, label=0, etype=0, scenario=scenario)
+        if random.random() < _P_SERVICE_ACCOUNT:
+            event = self._service_account_event(req)
+            if event is not None:
+                return event
+            # No allowed action: continue as a regular request of the service account
 
-            # Benign user mistake (OPA denial, etype=6)
-            if not is_anonymous and random.random() < 0.02:
-                invalid = self._policy_violations(u_role)
-                if invalid:
-                    res_idx, method = self._zipf_choice(invalid, ("viol", u_role))
-                    feat = [1.0, *self._benign_sensors(), float(method),
-                            ROLES.index(u_role) / (len(ROLES) - 1), u_clearance / 4.0]
-                    return self._event(source=source, config=config, device=dev_slot, user=user,
-                                       res_idx=res_idx, feat=feat, label=1, etype=6, scenario=scenario)
+        if not is_anonymous and random.random() < _P_BENIGN_DENIAL:
+            invalid = self._policy_violations(req.role)
+            if invalid:
+                res_idx, method = self._zipf_choice(invalid, ("viol", req.role))
+                return self._emit(req, res_idx, method, 1.0, self._benign_sensors(),
+                                  EventType.BENIGN_DENIAL)
 
-            if is_anonymous:
-                user = self.num_registered_users + int(np.random.randint(0, self._admitted_guests()))
-                u_role, u_clearance = "guest", 0
-                config = self.cfg_lo  # conf:guest
-                dev_slot = self._guest_dev_slot if self._guest_dev_slot is not None else dev_slot
-                if not hasattr(self, "_anon_actions"):
-                    self._anon_actions = [
-                        (r, m) for r, uri in enumerate(self.resource_uris)
-                        if uri not in self.security_matrix for m in self.route_methods[uri]
-                    ]
-                res_idx, method = self._zipf_choice(self._anon_actions, ("anon",))
-            else:
-                valid = self._policy_valid_actions(u_role)
-                habit, non_habit = self._user_actions(user, u_role)
-                # Benign exploration: authorized non-habitual access
-                if non_habit and random.random() < self.benign_explore_prob:
-                    res_idx, method = self._zipf_choice(non_habit, ("nonhabit", user))
-                elif habit:
-                    res_idx, method = self._zipf_choice(habit, ("habit", user))
-                elif valid:
-                    res_idx, method = self._zipf_choice(valid, ("valid", u_role))
-                else:
-                    res_idx, method = 0, 0  # public-path fallback
-
-            ja3, (s1, s2, s3) = 1.0, self._benign_sensors()
-            label, etype = 0, 0
+        if is_anonymous:
+            req.user = self.num_registered_users + int(np.random.randint(0, self._admitted_guests()))
+            req.role, req.clearance = "guest", 0
+            req.config = self.cfg_lo  # conf:guest
+            if self._guest_dev_slot is not None:
+                req.device = self._guest_dev_slot
+            res_idx, method = self._zipf_choice(self._anon_actions, ("anon",))
         else:
-            state = self.compromised_state[machine]
-            multi = self.p_compromise is not None
-            if state == 1:
-                anomaly_type = "context"  # Recon phase (sensor probes)
-                recon_left = self.compromised_chain_remaining.get(machine)
-                if multi and recon_left is None:
-                    recon_left = int(np.random.randint(1, 4))
-                if not multi or recon_left <= 1:
-                    self.compromised_state[machine] = 2
-                    self.compromised_chain_remaining[machine] = int(np.random.randint(5, 12))
-                else:
-                    self.compromised_chain_remaining[machine] = recon_left - 1
-            elif state == 2:
-                anomaly_type = "lateral"  # Lateral movement phase
-                self.compromised_chain_remaining[machine] -= 1
-                if self.compromised_chain_remaining[machine] <= 0:
-                    self.compromised_state[machine] = 4  # Post-exploitation dwell
-                    if multi:
-                        self.compromised_dwell[machine] = int(np.random.randint(0, 5))
+            valid = self._policy_valid_actions(req.role)
+            habit, non_habit = self._user_actions(req.user, req.role)
+            # Benign exploration: authorized non-habitual access
+            if non_habit and random.random() < self.benign_explore_prob:
+                res_idx, method = self._zipf_choice(non_habit, ("nonhabit", req.user))
+            elif habit:
+                res_idx, method = self._zipf_choice(habit, ("habit", req.user))
+            elif valid:
+                res_idx, method = self._zipf_choice(valid, ("valid", req.role))
             else:
-                anomaly_type = np.random.choice(["policy", "context", "lateral"])
-            if (
-                self.compromised_state.get(machine) == 4 and self.p_compromise is not None
-                and self.compromised_dwell.get(machine, 0) <= 0
-            ):
-                self._remediate(machine)
-            elif state == 4 and self.p_compromise is not None:
-                self.compromised_dwell[machine] -= 1
+                res_idx, method = 0, 0  # public-path fallback
+        return self._emit(req, res_idx, method, 1.0, self._benign_sensors(), EventType.BENIGN)
 
-            if anomaly_type == "lateral":
-                creds = [u for u in self.harvested_creds.get(machine, ()) if u != user]
-                pivot = bool(creds) and random.random() < self.p_lateral_foreign_cred
-                if pivot:
-                    # Pivot using harvested credentials (cached or foreign identity)
-                    user = int(random.choice(creds))
-                    u_role, u_clearance = self.user_roles[user], self.user_clearances[user]
-                    valid = self._policy_valid_actions(u_role)
-                    target = (
-                        self._zipf_choice(valid, ("valid", u_role)) if valid else None
-                    )
-                else:
-                    # Own-identity lateral movement (authorized non-habitual access)
-                    _habit, non_habit = self._user_actions(user, u_role)
-                    target = (
-                        self._zipf_choice(non_habit, ("nonhabit", user)) if non_habit else None
-                    )
-                if target is not None:
-                    res_idx, method = target
-                    ja3 = 1.0
-                    # Lateral movement: stealth — legitimate credentials and protocols,
-                    # rarely triggers the IDS (the network must study the graph).
-                    # --- OLD PARAMS ---
-                    #s1 = 0.0
-                    #s2 = 1.0 if np.random.rand() > 0.98 else 0.0  # 2%
-                    #s3 = 1.0 if np.random.rand() > 0.90 else 0.0  # 10%
+    def _service_account_event(self, req: _Request) -> dict | None:
+        """Deterministic cronjob of the service account (its first allowed action).
 
-                    # --- NEW PARAMS ---
-                    s1, s2, s3 = self._benign_sensors()
+        Rewrites ``req`` to the service identity (and a service machine, if any) even
+        when no event is emitted, so the caller continues as the service account.
+        """
+        self._set_user(req, _SERVICE_USER)
+        req.config = self.cfg_lo + _SERVICE_CONFIG
+        if self.service_machines is not None:
+            sm = int(random.choice(self.service_machines))
+            req.machine, req.device = sm, self.machine_slot[sm]
+            req.source = self.src_lo + random.choice(sorted(self.machine_home_ips[sm]))
+            req.scenario = SCEN_SHARED if len(self.machine_users[sm]) > 1 else 0
+        valid = self._policy_valid_actions(req.role)
+        if not valid:
+            return None
+        res_idx, method = valid[0]
+        return self._emit(req, res_idx, method, 1.0, self._benign_sensors(), EventType.BENIGN)
 
-                    etype = 3
-                    if not pivot and random.random() < self.p_lateral_role_spoof:
-                        # Role claim disagreement (tested via p_lateral_role_spoof)
-                        allowed_roles = [
-                            r for r in ROLES
-                            if r != u_role and self.policy_allows(r, method, self.resource_uris[res_idx])
-                        ]
-                        if allowed_roles:
-                            u_role = random.choice(allowed_roles)
-                            u_clearance = ROLE_CLEARANCE[u_role]
-                    if random.random() < self.p_lateral_new_config:
-                        # New tool execution on host
-                        config = self._new_tool_config(machine)
-                else:
-                    anomaly_type = "policy"
+    # --- Attack branch ---
+    def _attack_event(self, req: _Request) -> dict:
+        """Kill-chain request from a compromised machine: lateral, policy or context anomaly.
 
-            if anomaly_type == "policy":
-                # Policy denial for this role (read-up, write-down, missing compartment)
-                invalid = self._policy_violations(u_role)
-                if not invalid:
-                    anomaly_type = "context"
-            if anomaly_type == "policy":
-                res_idx, method = self._zipf_choice(invalid, ("viol", u_role))
-                ja3, (s1, s2, s3) = 1.0, self._benign_sensors()
-                etype = 1
-            elif anomaly_type == "context":
-                # Contextual anomaly (scanner probes / recon)
-                valid = self._policy_valid_actions(u_role)
-                if valid:
-                    res_idx, method = self._zipf_choice(valid, ("valid", u_role))
-                else:
-                    res_idx, method = self._zipf_choice(self._all_actions, ("all",))
-                ja3 = 0.0 if np.random.rand() > 0.5 else 1.0
-                # Sensor probe trigger rates on external scan
-                s1 = 1.0 if np.random.rand() > 0.2 else 0.0
-                s2 = 1.0 if np.random.rand() > 0.5 else 0.0
-                s3 = 1.0 if np.random.rand() > 0.8 else 0.0
-                etype = 2
+        Falls back lateral -> policy (no target) -> context (no denied route for the role).
+        """
+        kind = self._advance_kill_chain(req.machine)
 
-            label = 1
+        if kind == "lateral":
+            event = self._lateral_event(req)
+            if event is not None:
+                return event
+            kind = "policy"
 
-        feat = [ja3, float(s1), float(s2), float(s3), float(method),
-                ROLES.index(u_role) / (len(ROLES) - 1), u_clearance / 4.0]
-        return self._event(source=source, config=config, device=dev_slot, user=user,
-                           res_idx=res_idx, feat=feat, label=label, etype=etype,
-                           scenario=scenario)
+        if kind == "policy":
+            # Policy denial for this role (read-up, write-down, missing compartment)
+            invalid = self._policy_violations(req.role)
+            if invalid:
+                res_idx, method = self._zipf_choice(invalid, ("viol", req.role))
+                return self._emit(req, res_idx, method, 1.0, self._benign_sensors(),
+                                  EventType.POLICY)
 
-    def add_resource(self, uri: str, methods: set[int], classification: str = None, categories: set[str] = None, risk: float = 0.5):
-        """Dynamically add a new resource to the generator."""
+        # Contextual anomaly (scanner probes / recon)
+        valid = self._policy_valid_actions(req.role)
+        if valid:
+            res_idx, method = self._zipf_choice(valid, ("valid", req.role))
+        else:
+            res_idx, method = self._zipf_choice(self._all_actions, ("all",))
+        ja3 = 0.0 if np.random.rand() > 0.5 else 1.0
+        # Sensor probe trigger rates on external scan
+        s1 = 1.0 if np.random.rand() > 0.2 else 0.0
+        s2 = 1.0 if np.random.rand() > 0.5 else 0.0
+        s3 = 1.0 if np.random.rand() > 0.8 else 0.0
+        return self._emit(req, res_idx, method, ja3, (s1, s2, s3), EventType.CONTEXT)
+
+    def _lateral_event(self, req: _Request) -> dict | None:
+        """Lateral movement: pivot on harvested credentials or own non-habitual access.
+
+        Returns None when there is no target; ``req`` keeps any pivot identity.
+        """
+        creds = [u for u in self.harvested_creds.get(req.machine, ()) if u != req.user]
+        pivot = bool(creds) and random.random() < self.p_lateral_foreign_cred
+        if pivot:
+            # Pivot using harvested credentials (cached or foreign identity)
+            self._set_user(req, int(random.choice(creds)))
+            valid = self._policy_valid_actions(req.role)
+            target = self._zipf_choice(valid, ("valid", req.role)) if valid else None
+        else:
+            # Own-identity lateral movement (authorized non-habitual access)
+            _habit, non_habit = self._user_actions(req.user, req.role)
+            target = self._zipf_choice(non_habit, ("nonhabit", req.user)) if non_habit else None
+        if target is None:
+            return None
+
+        res_idx, method = target
+        ja3 = 1.0
+        # Lateral movement: stealth — legitimate credentials and protocols,
+        # rarely triggers the IDS (the network must study the graph).
+        # --- OLD PARAMS ---
+        #s1 = 0.0
+        #s2 = 1.0 if np.random.rand() > 0.98 else 0.0  # 2%
+        #s3 = 1.0 if np.random.rand() > 0.90 else 0.0  # 10%
+
+        # --- NEW PARAMS ---
+        s1, s2, s3 = self._benign_sensors()
+
+        if not pivot and random.random() < self.p_lateral_role_spoof:
+            # Role claim disagreement (tested via p_lateral_role_spoof)
+            allowed_roles = [
+                r for r in ROLES
+                if r != req.role and self.policy_allows(r, method, self.resource_uris[res_idx])
+            ]
+            if allowed_roles:
+                req.role = random.choice(allowed_roles)
+                req.clearance = ROLE_CLEARANCE[req.role]
+        if random.random() < self.p_lateral_new_config:
+            # New tool execution on host
+            req.config = self._new_tool_config(req.machine)
+        return self._emit(req, res_idx, method, ja3, (s1, s2, s3), EventType.LATERAL)
+
+    # --- Live API ---
+    def add_resource(self, uri: str, methods: set[int], classification: str | None = None,
+                     categories: set[str] | None = None, risk: float = 0.5) -> None:
+        """Append a resource node at runtime (lowest popularity); refreshes the action caches."""
         if uri in self.resource_uris:
             return
-        
+
         self.route_methods[uri] = methods
         if classification and categories:
             self.security_matrix[uri] = (classification, categories)
         self.resource_risk[uri] = risk
         self.resource_uris.append(uri)
-        
         self.keys.append(uri)
-        
-        new_feat = torch.zeros(1, 16)
-        new_feat[0, 14] = 1.0  # trust score
-        new_feat[0, 3] = 0.0  # slot [3] left at 0.0 to prevent label leakage (regression invariant)
+
+        new_feat = torch.zeros(1, _NODE_FEAT_DIM)
+        new_feat[0, _NF_TRUST] = 1.0
         if self.use_resource_risk:
-            new_feat[0, 4] = risk
-            
+            new_feat[0, _NF_RESOURCE_RISK] = risk
         self.node_features = torch.cat([self.node_features, new_feat], dim=0)
-        
-        # Expand Zipf popularity weights for the newly added resource
-        new_rank = float(len(self._res_pop_weight))
-        new_weight = np.array([1.0 / ((new_rank + 1.0) ** 1.2)], dtype=np.float64)
+
+        new_weight = np.array([_zipf_weight(float(len(self._res_pop_weight)))], dtype=np.float64)
         self._res_pop_weight = np.concatenate([self._res_pop_weight, new_weight])
-        
+
         self.num_resources += 1
         self.num_nodes += 1
-        
-        # Invalidate caches so the new resource is picked up
+
         self._valid_cache.clear()
         self._violation_cache.clear()
         self._user_action_cache.clear()
         self._zipf_probs.clear()
-        self._all_actions = [
-            (r, m) for r, u in enumerate(self.resource_uris) for m in self.route_methods[u]
-        ]
-        if hasattr(self, "_anon_actions"):
-            del self._anon_actions
+        self._refresh_action_space()
 
 
 @dataclass
@@ -1156,8 +1136,7 @@ class SyntheticStream:
     t: torch.Tensor             # [N] timestamps
     msg: torch.Tensor           # [N, msg_dim=7] edge messages (access edge)
     y: torch.Tensor             # [N] binary labels
-    types: torch.Tensor         # [N] 0=benign, 1=policy, 2=contextual, 3=lateral,
-                                #     4=cred-theft, 6=benign human error (denied); 5 reserved
+    types: torch.Tensor         # [N] EventType values
     scenario: torch.Tensor      # [N] benign-context bitmask (SCEN_*)
     node_features: torch.Tensor  # [num_nodes, 16]
     keys: list = field(repr=False)
@@ -1174,38 +1153,13 @@ class SyntheticStream:
     res_num: int = 0
 
 
-def generate_streaming_data(
-    num_users=1000,
-    num_guests=1000,
-    num_devices=2000,
-    num_sources=1500,
-    num_configs=400,
-    num_resources=19,
-    num_events=50000,
-    *,
-    num_wipe_slots=16,
-    num_theft_slots=64,
-    benign_explore_prob=0.15,
-    p_roam=0.10,
-    p_shared_device=0.20,
-    p_cookie_wipe=0.0003,
-    p_cred_theft=0.0012,
-    seed=None,
-    use_resource_risk=True,
-    use_source_internal=False,
-    guest_device_fallback=False,
-    **realism,
-) -> SyntheticStream:
-    """Generate a reproducible offline synthetic stream using ZTAStreamSimulator."""
-    sim = ZTAStreamSimulator(
-        num_users=num_users, num_guests=num_guests, num_devices=num_devices, num_sources=num_sources,
-        num_configs=num_configs, num_resources=num_resources, num_wipe_slots=num_wipe_slots,
-        num_theft_slots=num_theft_slots, benign_explore_prob=benign_explore_prob,
-        p_roam=p_roam, p_shared_device=p_shared_device, p_cookie_wipe=p_cookie_wipe,
-        p_cred_theft=p_cred_theft, admission_horizon=num_events, seed=seed,
-        use_resource_risk=use_resource_risk, use_source_internal=use_source_internal,
-        guest_device_fallback=guest_device_fallback, **realism,
-    )
+def generate_streaming_data(num_events: int = 50000, **sim_kwargs) -> SyntheticStream:
+    """Run a :class:`ZTAStreamSimulator` for ``num_events`` steps and tensorise the stream.
+
+    ``sim_kwargs`` are simulator arguments (build them with :func:`stream_kwargs_from_cfg`);
+    the admission horizon is the stream length.
+    """
+    sim = ZTAStreamSimulator(admission_horizon=num_events, **sim_kwargs)
     events = [sim.step() for _ in range(num_events)]
 
     def col(name, dtype=torch.long):

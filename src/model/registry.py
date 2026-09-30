@@ -18,6 +18,8 @@ from typing import Callable, Hashable, Iterable, Optional, Sequence
 
 
 class NodeRegistry:
+    """External key <-> memory slot map with least-recently-updated eviction."""
+
     def __init__(self, capacity: int):
         if capacity <= 0:
             raise ValueError("capacity must be a positive integer")
@@ -73,6 +75,7 @@ class NodeRegistry:
         return idx, True
 
     def _select_eviction(self, recency: Optional[Sequence[float]]) -> int:
+        """Slot to evict: least recent by ``recency``, else the lowest index."""
         used = list(self._idx_to_key.keys())
         if recency is None:
             return min(used)
@@ -80,8 +83,7 @@ class NodeRegistry:
 
     # --- (de)serialisation -------------------------------------------------
     def to_dict(self) -> dict:
-        # Store entries as [key, idx] pairs to preserve key types (JSON object
-        # keys would coerce ints to strings).
+        """JSON-safe form; entries are ``[key, idx]`` pairs so int keys stay ints."""
         return {
             "capacity": self.capacity,
             "next_idx": self._next_idx,
@@ -90,6 +92,7 @@ class NodeRegistry:
 
     @classmethod
     def from_dict(cls, data: dict) -> "NodeRegistry":
+        """Inverse of :meth:`to_dict`."""
         reg = cls(int(data["capacity"]))
         reg._next_idx = int(data["next_idx"])
         for key, idx in data["entries"]:

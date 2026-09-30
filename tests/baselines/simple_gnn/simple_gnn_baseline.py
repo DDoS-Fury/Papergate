@@ -167,9 +167,7 @@ def run(cfg: TGNConfig = TGNConfig()):
     num_pos = p_src.shape[0]
     bs = cfg.batch_size
 
-    # Resource id range for sampling structural negatives: uses the STREAM range
-    # (as the TGN), not cfg.total_nodes, which does not count guests and would
-    # sample negatives onto source/config/user slots.
+    # Structural negatives are drawn from the stream's resource id range, as in the TGN.
     num_res = stream.res_num
     res_lo = stream.res_lo
 

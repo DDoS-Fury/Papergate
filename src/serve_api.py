@@ -13,9 +13,10 @@ Endpoints
 ---------
 - ``GET  /health``  — readiness + loaded parameters. Returns 503 while the
   checkpoint is still loading, so container healthchecks gate on real readiness.
-- ``POST /infer``   — score an event **without advancing memory** (admits unseen
-  entity keys into the registry, which is state by design; step 1 of the
-  anti-poisoning flow: orchestrator scores, asks OPA, then commits only on ALLOW).
+- ``POST /infer``   — score an event **without advancing memory** (step 1 of the
+  anti-poisoning flow: score, ask OPA, commit only on ALLOW). It still admits unseen
+  keys into the registry (possibly evicting the LRU entity) and writes the supplied
+  static node features.
 - ``POST /update``  — commit an event the caller already judged benign (post-ALLOW).
 - ``POST /deny``    — record a DENYed event's alarm in the kill-chain alert state; never
   touches memory or neighbour history. Every ``/infer`` ends in exactly one of
@@ -48,21 +49,6 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 import torch
 
-try:
-    import psutil
-    HAS_PSUTIL = True
-except ImportError:
-    HAS_PSUTIL = False
-
-
-def get_sys_stats():
-    if HAS_PSUTIL:
-        return {
-            "cpu_percent": psutil.cpu_percent(),
-            "ram_gb": psutil.virtual_memory().used / (1024**3),
-        }
-    return {"cpu_percent": 0.0, "ram_gb": 0.0}
-
 from graphagate.config import TGN_CHECKPOINT_PATH, TGN_STATS_PATH
 from graphagate.serve_tgn import (
     commit_event,
@@ -72,6 +58,23 @@ from graphagate.serve_tgn import (
     save_model,
     score_event,
 )
+
+try:
+    import psutil
+    HAS_PSUTIL = True
+except ImportError:
+    HAS_PSUTIL = False
+
+
+def get_sys_stats():
+    """CPU percent and used RAM (GiB) for the dashboard; zeros without psutil."""
+    if HAS_PSUTIL:
+        return {
+            "cpu_percent": psutil.cpu_percent(),
+            "ram_gb": psutil.virtual_memory().used / (1024**3),
+        }
+    return {"cpu_percent": 0.0, "ram_gb": 0.0}
+
 
 # External entity keys arrive as JSON scalars; accept str or int (the orchestrator
 # owns its key space — see the integration doc's note on key continuity).
@@ -101,7 +104,9 @@ class _State:
 
 STATE = _State()
 
+
 async def _broadcast_task(event_data: dict):
+    """Send ``event_data`` to every dashboard websocket, dropping the dead ones."""
     if not STATE.active_websockets:
         return
     dead = []
@@ -113,6 +118,7 @@ async def _broadcast_task(event_data: dict):
     for ws in dead:
         if ws in STATE.active_websockets:
             STATE.active_websockets.remove(ws)
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -199,6 +205,7 @@ class ScoreOut(BaseModel):
 
 
 def _alarm(ev: "EventIn", score: float, is_anomaly: bool) -> bool:
+    """:func:`event_alarm` of a scored request under the loaded arm threshold."""
     return event_alarm(score, flagged=is_anomaly, threshold_arm=STATE.model.threshold_arm,
                        features=ev.features)
 
@@ -228,9 +235,10 @@ def _validate_dims(ev: EventIn) -> None:
 
 @app.websocket("/stream")
 async def websocket_endpoint(websocket: WebSocket):
+    """Dashboard stream: system info on connect, stats every 2 s, then every scored event."""
     await websocket.accept()
     STATE.active_websockets.append(websocket)
-    
+
     host_name = socket.gethostname()
     cpu_count = os.cpu_count() or 1
     arch_name = platform.machine()
@@ -249,7 +257,7 @@ async def websocket_endpoint(websocket: WebSocket):
         })
     except Exception:
         pass
-        
+
     async def _periodic_stats():
         try:
             while True:
@@ -272,12 +280,16 @@ async def websocket_endpoint(websocket: WebSocket):
         while True:
             await websocket.receive_text()
     except WebSocketDisconnect:
+        pass
+    finally:  # any exit, not only a clean disconnect, must stop the stats task
         stats_task.cancel()
         if websocket in STATE.active_websockets:
             STATE.active_websockets.remove(websocket)
 
+
 @app.get("/health")
 def health():
+    """Readiness and loaded parameters; 503 until the checkpoint is loaded."""
     body = {
         "status": "ok" if STATE.loaded else "loading",
         "model_loaded": STATE.loaded,
@@ -291,9 +303,6 @@ def health():
         "node_feat_dim": int(STATE.hp.get("node_feat_dim", 0)),
         "schema_version": int(STATE.hp.get("schema_version", 1)),
     }
-    # 503 until the checkpoint is loaded: a 200-while-loading let the compose
-    # healthcheck (and any service_healthy dependency) pass before the model was
-    # actually ready.
     if not STATE.loaded:
         return JSONResponse(status_code=503, content=body)
     return body
@@ -301,7 +310,7 @@ def health():
 
 @app.post("/infer", response_model=ScoreOut)
 def infer(ev: EventIn, background_tasks: BackgroundTasks) -> ScoreOut:
-    """Score an event without advancing memory (admits the entities)."""
+    """Score an event without advancing memory (admits unseen keys, writes static features)."""
     _validate_dims(ev)
     t0 = time.perf_counter()
     with STATE.lock:

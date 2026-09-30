@@ -25,16 +25,13 @@ import torch
 from graphagate.config import TGN_CHECKPOINT_PATH, TGN_STATS_PATH
 from graphagate.serve_tgn import load_model, score_event
 
-KEY_USER = "user_0000"  # a preregistered user entity
-KEY_DEVICE = "ck:verify-device"                # admitted dynamically on first use
-KEY_SOURCE = "src:10.99.99.1"                  # namespaced source key, admitted on first use
-KEY_DST = "/api/v1/reactor-parameters"         # a preregistered resource entity URI
-TS = 10**9            # a timestamp far beyond any training time
+KEY_USER = "user_0000"                  # preregistered user
+KEY_DEVICE = "ck:verify-device"         # admitted on first use
+KEY_SOURCE = "src:10.99.99.1"           # admitted on first use
+KEY_DST = "/api/v1/reactor-parameters"  # preregistered resource URI
+TS = 10**9                              # far beyond any training time
 
-# Message layout: [ja3, s1, s2, s3, method, role, clearance]. An older checkpoint's longer
-# message is zero-padded to its own msg_dim rather than hardcoded — a
-# fixed-length literal here silently rotted every time the schema changed and made this
-# verification harness crash instead of reporting.
+# [ja3, s1, s2, s3, method, role, clearance], padded to the checkpoint's msg_dim.
 _BENIGN_PREFIX = [1.0, 0.0, 0.0, 0.0, 0.0, 0.5, 0.5]
 
 
@@ -46,16 +43,17 @@ def benign_feat(msg_dim: int) -> list[float]:
 
 
 def _check(name: str, ok: bool, detail: str = "") -> bool:
+    """Print a PASS/FAIL line and return ``ok``."""
     print(f"[{'PASS' if ok else 'FAIL'}] {name}" + (f" — {detail}" if detail else ""))
     return ok
 
 
 def main() -> int:
+    """Run the checks; exit status 0 iff all pass."""
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     def load():
-        # load_model returns (model, registry, threshold, threshold_dirty, hp); the
-        # harness exercises the single-threshold path, so it ignores the latter two.
+        # Single-threshold path: threshold_dirty is not used.
         model, registry, threshold, _, hp = load_model(
             TGN_CHECKPOINT_PATH, TGN_STATS_PATH, device
         )

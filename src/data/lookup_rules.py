@@ -30,6 +30,8 @@ GATES = ("label", "all", "proto-self", "proto-all")
 def lookup_flags(s, gate: str = "proto-self", test_start: int = 0) -> dict[str, np.ndarray]:
     """Per-event boolean flags for every rule in :data:`FLAGS`, plus two scores:
     ``stateful`` (sum of :data:`BINDING`) and ``combined`` (``stateful`` + ``sensor``)."""
+    if gate not in GATES:
+        raise ValueError(f"unknown gate {gate!r}; expected one of {GATES}")
     y = s.y.numpy()
     msg = s.msg.numpy()
     cf, src, dev, usr = (x.numpy() for x in (s.config, s.source, s.device, s.user))

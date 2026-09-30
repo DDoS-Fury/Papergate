@@ -104,7 +104,7 @@ flowchart TD
 > (`score ≥ threshold`) and the *commit gate* are two distinct things. In the reported numbers
 > the commit happens on the events OPA would admit (proxy: `not signal_dirty`), not on the ones
 > the model deems benign — a model that decides for itself what to memorize lets the FPR run
-> away (see the docstring of `train_tgn._replay`). The self-decided path exists
+> away (see the `train_tgn` module docstring). The self-decided path exists
 > (`score_event(update=True)`, endpoint `/score`) and is the *OPA-less* mode, but it is **not**
 > the protocol under which the measurements were produced.
 

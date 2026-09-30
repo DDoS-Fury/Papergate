@@ -1,13 +1,12 @@
-"""Async event generator for the live API test client (v4 schema).
+"""Async event generator for the live API test client.
 
-Thin wrapper around :class:`graphagate.data.stream_synthetic.ZTAStreamSimulator` —
-the SAME simulator the offline training stream is built from, so the live test
-traffic follows the trained baseline by construction (no duplicated behaviour
-model, as the previous copy of the generator logic was).
+Thin wrapper around :class:`graphagate.data.stream_synthetic.ZTAStreamSimulator`, the
+same simulator the offline training stream is built from, so live traffic follows the
+trained baseline by construction.
 
-``warmup_steps`` replays the exact training-time event sequence (same seed) before
-yielding, so the live stream continues directly from where training stopped:
-same clock, same kill-chain state, same device admission.
+With the training seed, ``warmup_steps`` defaults to ``cfg.num_events``: the training
+sequence is replayed before yielding, so the live stream continues where training stopped
+(same clock, kill-chain state and device admission).
 """
 
 import asyncio
@@ -16,19 +15,25 @@ from graphagate.config import TGNConfig
 from graphagate.data.stream_synthetic import ZTAStreamSimulator, stream_kwargs_from_cfg
 
 
-async def event_generator(seed=None, warmup_steps=None, cfg: TGNConfig | None = None, omit_device: bool = False):
-    if cfg is None:
-        cfg = TGNConfig()
-    # All generator parameters come from cfg via the shared mapping, so the live stream
-    # is guaranteed to live in the same entity space as the trained checkpoint.
-    # The mapping targets generate_streaming_data: drop ``num_events`` (a stream length, not
-    # a simulator argument) and let ``seed`` override the configured one.
+def make_simulator(seed=None, cfg: TGNConfig | None = None, replay: bool = False) -> ZTAStreamSimulator:
+    """Simulator in the checkpoint's entity space.
+
+    ``replay=True`` uses the training admission horizon (as generate_streaming_data), so
+    stepping it reproduces the training stream; otherwise every entity is admitted at once.
+    """
+    cfg = cfg or TGNConfig()
     kw = stream_kwargs_from_cfg(cfg)
-    kw.pop("num_events")
-    kw.update(admission_horizon=warmup_steps if warmup_steps else None, seed=seed)
-    sim = ZTAStreamSimulator(**kw)
+    horizon = kw.pop("num_events")
+    kw.update(admission_horizon=horizon if replay else None, seed=seed)
+    return ZTAStreamSimulator(**kw)
+
+
+async def event_generator(seed=None, warmup_steps=None, cfg: TGNConfig | None = None, omit_device: bool = False):
+    """Yield API event dicts forever; ``warmup_steps`` events are generated and discarded first."""
+    cfg = cfg or TGNConfig()
     if warmup_steps is None:
         warmup_steps = cfg.num_events if seed == cfg.seed else 0
+    sim = make_simulator(seed, cfg, replay=bool(warmup_steps))
     for _ in range(warmup_steps):
         sim.step()
     if warmup_steps:
@@ -53,6 +58,5 @@ async def event_generator(seed=None, warmup_steps=None, cfg: TGNConfig | None = 
         }
         if omit_device:
             event_dict.pop("key_device", None)
-            
         yield event_dict
         await asyncio.sleep(0)

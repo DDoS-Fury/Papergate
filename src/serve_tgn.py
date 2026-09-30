@@ -1,40 +1,26 @@
-"""Serving / persistence layer for the streaming TGN.
+"""Serving and persistence layer of the streaming TGN: the real-time code path.
 
-This module is the single source of truth for the *real-time* code path.
+Scoring and memory:
+- :func:`infer_logit`: score one edge (read-only), the per-edge reference.
+- :func:`chain_edge_logits` / :func:`combine_edge_logits` / :func:`chain_logits`: score all
+  edges of a block of events from one shared expansion; the event logit is the max of the
+  per-edge logits, each calibrated on its own benign reference when the artifact has one.
+- :func:`update_memory`: commit one edge into memory, neighbours and history counters.
+- :func:`event_alarm`: per-event alarm rule (flagged, armed or sensor), shared by the
+  offline replay and every serving path.
 
-Relationship to the offline evaluation: ``train_tgn._replay`` and :func:`score_event` share
-the fused scorer :func:`chain_logits` (one neighbour expansion + GNN forward for all edges
-of a block of events, scored per edge group); ``_replay`` re-implements the commits in batch.
-:func:`infer_logit` / :func:`update_memory` stay as the independent per-edge reference:
-``tests/verify_replay_batching.py`` replays the same stream through them event by event and
-asserts agreement with ``_replay(batch_size=1)`` to 1e-5, on both the v4 five-edge chain and
-the legacy v3 one, and ``tests/test_fusion_parity.py`` does the same for ``score_event``.
-Treat both harnesses as part of the contract: any change to one path must keep them green.
+Online API (entity keys mapped through a :class:`NodeRegistry`):
+- :func:`score_event`: score; with ``update``, commit only events judged benign.
+- :func:`commit_event`: unconditional commit when the decision is taken outside (OPA ALLOW).
+- :func:`deny_event`: OPA DENY: record the alarm only, never the baseline.
 
-One divergence is deliberate and is *not* a bug: the offline replay commits on the
-OPA-ALLOW proxy (``not signal_dirty``), whereas :func:`score_event` with ``update=True``
-commits on the model's own score. See the ``_replay`` docstring for why measuring under
-the OPA-in-the-loop gate is the conservative choice.
+Persistence: :func:`save_model` / :func:`load_model`.
 
-- :func:`infer_logit` — score one edge (read memory, no mutation); the per-edge reference.
-- :func:`chain_logits` — score all edges of a block of events from one shared expansion
-  (:func:`chain_edge_logits`) and combine them (:func:`combine_edge_logits`: max of the
-  per-edge logits, each calibrated on its own benign reference when the artifact has one).
-- :func:`update_memory` — commit one event into the TGN memory.
-- :func:`score_event`  — the high-level online API: map external entity keys
-  through a :class:`NodeRegistry`, score, and update memory **only for events that
-  look benign** (anti-poisoning gate). Anomalous events are reported but never
-  written into the baseline.
-- :func:`commit_event` — the unconditional commit used when the benign/anomalous
-  decision is made outside the model (e.g. OPA): map keys and advance memory +
-  neighbour history without re-scoring.
-- :func:`deny_event` — the DENY counterpart of :func:`commit_event`: records the event's
-  alarm in the kill-chain alert state and touches nothing else.
-- :func:`event_alarm` — the per-event alarm rule (flagged, armed, or sensor), shared by
-  the offline replay and every serving path.
-- :func:`save_model` / :func:`load_model` — persist and restore weights, the TGN
-  memory buffers, the (non-state_dict) raw-message store, the entity registry and
-  the calibrated decision threshold.
+Parity contract: ``train_tgn._replay`` shares :func:`chain_edge_logits` and re-implements
+the commits in batch; ``tests/verify_replay_batching.py`` and ``tests/test_fusion_parity.py``
+check the replay and :func:`score_event` against the per-edge reference (keep them green).
+Deliberate divergence: the offline replay commits on the OPA-ALLOW proxy, while
+``score_event(update=True)`` commits on the model's own score.
 """
 
 from __future__ import annotations
@@ -53,7 +39,7 @@ from graphagate.model.tgn import ZTATemporalGraphNetwork, stable_hash
 from graphagate.netclass import ip_is_internal, to_guest_device
 
 
-SCHEMA_VERSION = 4  # 5-node schema: config (JA3) node — source→config→device→user→resource (+ config→user)
+SCHEMA_VERSION = 4  # 5-node schema: source→config→device→user→resource (+ config→user)
 
 
 def build_model(hp: dict, device: torch.device) -> ZTATemporalGraphNetwork:
@@ -79,35 +65,24 @@ def build_model(hp: dict, device: torch.device) -> ZTATemporalGraphNetwork:
         gnn_heads=int(hp.get("gnn_heads", 4)),
         link_pred_hidden_layers=int(hp.get("link_pred_hidden_layers", 2)),
     ).to(device)
-    # Kill-chain precursor prior knobs (serving-time; not in the state_dict).
-    # Fallbacks track TGNConfig, not the historical 100000.0 / 3.0 that saturated scores.
+    # Kill-chain precursor knobs (serving-time, not in the state_dict); fallbacks = TGNConfig.
     model.precursor_half_life = float(hp.get("precursor_half_life", TGNConfig.precursor_half_life))
     model.precursor_max_shift = float(hp.get("precursor_max_shift", TGNConfig.precursor_max_shift))
-    # Plain-attribute toggles are not in the state_dict: restore them from hp so the
-    # serving path behaves exactly like the training run that produced the checkpoint
-    # (before this, use_precursor silently fell back to False after a checkpoint
-    # round-trip and the kill-chain prior was dead in deployment). The default is True:
-    # the default training entrypoint trains with the prior on, so pre-fix artifacts
-    # keep the behaviour their numbers were produced under.
+    # Plain-attribute toggles are not in the state_dict: restore them from hp
+    # (default True = the training default).
     model.use_precursor = bool(hp.get("use_precursor", True))
-    # v3 static-feature toggles: must match the values the checkpoint was trained with,
-    # else the source node would carry a feature the model never learned from.
+    # Must match training, else source nodes carry a feature the model never learned.
     model.use_source_internal = bool(hp.get("use_source_internal", False))
-    # The bounded neighbour loader lives outside the state_dict; build it on the
-    # serving device so its buffers match the model's. Its contents are restored
-    # from the checkpoint in load_model.
+    # Neighbour loader lives outside the state_dict; load_model restores its contents.
     model.init_neighbor_loader(int(hp.get("neighbor_size", 10)), device)
-    # Switch to eval *before* the caller restores buffers. PyG's TGNMemory flushes
-    # its pending message store into the memory buffer on the train->eval transition
-    # (see TGNMemory.train). If we let that happen *after* load_state_dict has already
-    # restored the (fully materialised) memory + the saved message store, the messages
-    # are applied a second time and the reloaded memory diverges from the original.
-    # Evaluating here, while the store is still empty, makes the later restore exact.
+    # eval() before the caller restores buffers: TGNMemory flushes its message store into
+    # memory on train->eval, so a later switch would apply the restored messages twice.
     model.eval()
     return model
 
 
 def _event_tensors(src_idx: int, dst_idx: int, t_val: int, msg_vec, device):
+    """Single-event ``(src, dst, t, msg)`` tensors on ``device``."""
     b_src = torch.tensor([src_idx], dtype=torch.long, device=device)
     b_dst = torch.tensor([dst_idx], dtype=torch.long, device=device)
     # TGNMemory.last_update is int64 — timestamps stay integer end-to-end.
@@ -119,35 +94,25 @@ def _event_tensors(src_idx: int, dst_idx: int, t_val: int, msg_vec, device):
 @torch.no_grad()
 def infer_logit(model, src_idx: int, dst_idx: int, t_val: int, msg_vec, device,
                 aux_src_idx: int | None = None) -> float:
-    """Return the anomaly *logit* (``-logit P(benign)``) for a single edge.
+    """Anomaly *logit* (``-logit P(benign)``) of a single edge; mutates nothing.
 
-    Logit rather than probability because ``1 - sigmoid(logit)`` saturates to exactly 1.0
-    in float32 for ``logit < -16``, which ties the top of the ranking together and leaves
-    no room above it for the kill-chain prior. ``anomaly_score`` converts to the
-    probability the thresholds are expressed in; both are monotone, so the ordering (and
-    every AUC) is identical.
-
-    Does **not** mutate memory or the neighbour loader. The two endpoints are
-    expanded to their stored temporal neighbourhood so the embedding reflects each
-    entity's recent interaction history (the structural signal for lateral movement);
-    a cold-start node with no neighbours falls back to its memory state alone.
-
-    ``aux_src_idx`` feeds the second interaction-history triplet (the per-device
-    habituality counters on the access edge — see ``compute_hist_feats``); ``None``
-    zero-pads it (binding edges / device-less datasets).
+    A logit because ``1 - sigmoid`` saturates to 1.0 in float32 below -16, tying the head
+    of the ranking; :func:`anomaly_score` converts it to the thresholds' probability
+    (monotone). Both endpoints are expanded to their stored temporal neighbourhood; a cold
+    node falls back to its memory. ``aux_src_idx`` feeds the per-device history triplet of
+    the access edge (``compute_hist_feats``); ``None`` zero-pads it.
     """
     b_src, b_dst, _b_t, b_msg = _event_tensors(src_idx, dst_idx, t_val, msg_vec, device)
     nodes = torch.unique(torch.cat([b_src, b_dst]))
     n_id, edge_index, hist_t, hist_msg = model.neighbor_loader(nodes)
     assoc = model.neighbor_loader._assoc
-    
+
     # Both recencies go through the model's shared encoder (cap + never-seen sentinel),
     # which is what keeps the serving path on the same Δt distribution as training.
     delta_t = model.pair_delta_t([src_idx], [dst_idx], [t_val], device)
     delta_t_src = model.src_delta_t([src_idx], [float(t_val)], device)
 
-    # Explicit interaction-history features for this src→dst pair (read-only; counts are
-    # advanced in update_memory, exactly mirroring the train-time predict-then-update order).
+    # Interaction-history features of the pair (read-only; update_memory advances them).
     aux_ids = None if aux_src_idx is None else [aux_src_idx]
     hist_feats = model.compute_hist_feats([src_idx], [dst_idx], device, aux_src_ids=aux_ids)
 
@@ -165,7 +130,7 @@ EDGE_DEV_USER = "dev>user"
 EDGE_CFG_USER = "cfg>user"
 EDGE_CFG_DEV = "cfg>dev"
 EDGE_SRC_CFG = "src>cfg"
-EDGE_SRC_DEV = "src>dev"  # legacy v3 chain (config-node ablation)
+EDGE_SRC_DEV = "src>dev"  # config-node ablation only
 
 
 def fit_edge_calibration(benign_logits, *, tail_q: float) -> dict:
@@ -190,13 +155,10 @@ def calibrated_edge_logit(model, kind: str, logit: torch.Tensor) -> torch.Tensor
     """Map raw anomaly logits of edge ``kind`` onto ``log((1-p)/p)``, ``p`` their upper-tail
     p-value under the benign reference of that kind (float64).
 
-    The raw logits of the five edges live on different scales (benign access ≈ -10, benign
-    bindings ≈ -15), so a max over them is decided by the access edge almost always and
-    the binding edges, where lateral movement and credential theft show, are drowned.
-    On the p-value scale every edge is equally surprising at the same benign quantile.
-    ``p`` is floored at ``1/(n+1)`` below the grid and extrapolated in log space above it,
-    so the map is monotone and finite everywhere; a kind without a reference (or a model
-    without ``edge_calib``) passes through unchanged.
+    Raw edge logits live on different scales (benign access ≈ -10, bindings ≈ -15); on the
+    p-value scale every edge is equally surprising at the same benign quantile. ``p`` is
+    floored at ``1/(n+1)`` and extrapolated in log space above the grid, so the map is
+    monotone and finite; a kind without a reference passes through unchanged.
     """
     spec = (getattr(model, "edge_calib", None) or {}).get(kind)
     if spec is None:
@@ -270,8 +232,7 @@ def chain_edge_logits(model, groups, t, device) -> dict:
 def combine_edge_logits(model, edge_logits: dict) -> torch.Tensor:
     """Event anomaly logit: the max over its edges of the (benign-calibrated) edge logits.
 
-    Without ``model.edge_calib`` (artifacts trained before the calibration, or
-    ``edge_calibration=False``) this is the plain max of the raw logits.
+    Without ``model.edge_calib`` (``edge_calibration=False``) this is the plain max.
     """
     out = None
     for kind, logit in edge_logits.items():
@@ -290,17 +251,11 @@ def chain_logits(model, groups, t, device) -> torch.Tensor:
 @torch.no_grad()
 def update_memory(model, src_idx: int, dst_idx: int, t_val: int, msg_vec, device,
                   aux_pair: tuple[int, int] | None = None) -> None:
-    """Commit a single edge into the TGN memory and the neighbour store.
+    """Commit one edge into memory, neighbour store, recency and history counters.
 
-    Inserting into the neighbour loader only here (and only for events the caller
-    has judged benign) keeps the anti-poisoning gate intact: anomalous events never
-    enter an entity's history.
-
-    ``aux_pair`` advances an extra ``pair_count`` entry without a temporal edge: on
-    the access-edge commit it is ``(device_idx, dst_idx)``, the per-device resource
-    habituality counter read back by ``compute_hist_feats``'s second triplet (the
-    device's own activity count is kept by its binding-edge commit, so only the pair
-    counter is bumped here).
+    Callers commit only benign events (anti-poisoning gate). ``aux_pair`` bumps one more
+    ``pair_count`` entry without a temporal edge: ``(device, dst)`` on the access edge, the
+    per-device habituality counter read by ``compute_hist_feats``.
     """
     b_src, b_dst, b_t, b_msg = _event_tensors(src_idx, dst_idx, t_val, msg_vec, device)
     model.memory.update_state(b_src, b_dst, b_t, b_msg)
@@ -309,8 +264,7 @@ def update_memory(model, src_idx: int, dst_idx: int, t_val: int, msg_vec, device
     if not hasattr(model, "last_contact"):
         model.last_contact = {}
     model.last_contact[(src_idx, dst_idx)] = t_val
-    # Advance the interaction-history counters (benign-gated: update_memory is only
-    # called for events judged benign, so anomalies never inflate an entity's history).
+    # Interaction-history counters.
     if not hasattr(model, "pair_count"):
         model.pair_count, model.src_count = {}, {}
     model.pair_count[(src_idx, dst_idx)] = model.pair_count.get((src_idx, dst_idx), 0) + 1
@@ -335,18 +289,12 @@ def anomaly_score(anom_logit) -> float:
 def precursor_shift(model, src_idx: int, t_val: int) -> float:
     """Additive anomaly-*logit* shift (>= 0.0) from the kill-chain precursor.
 
-    Lateral movement is signal-clean and feature-identical to a benign non-habitual
-    access; the one tell is that it follows a recon alert (Snort / detected anomaly) on
-    the SAME entity. The predict-then-update memory gate drops that anomalous precursor
-    from the TGN memory, so we carry it in a separate, time-decayed per-entity
-    ``recent_alert`` state and apply it as a SERVING-TIME prior — never a trained input
-    (benign-only training would leave it a dead feature).
-
-    Additive on the logit because a prior belongs on the odds: it moves every event by the
-    same evidence in nats wherever it sits on the curve. The earlier multiplicative form
-    scaled ``1 - sigmoid(logit)`` and then clipped to 1.0, so it did nothing to the
-    saturated head and almost nothing to the tail. Returns
-    ``max_shift * 0.5**(Δt / half_life)`` while an alert is recent, else ``0.0``.
+    Lateral movement is signal-clean; its one tell is a recent recon alert on the same
+    entity. The memory gate drops that alert, so it lives in the time-decayed
+    ``recent_alert`` state and acts as a serving-time prior (not a trained input:
+    benign-only training would leave it dead). Additive on the logit, i.e. a fixed amount
+    of evidence on the odds. Returns ``max_shift * 0.5**(Δt / half_life)`` while an alert
+    is recent, else ``0.0``.
     """
     if not getattr(model, "use_precursor", False):
         return 0.0
@@ -378,32 +326,24 @@ def sensor_alarm(features) -> bool:
 
 
 def event_alarm(score: float, *, flagged: bool, threshold_arm: float | None, features) -> bool:
-    """The per-event alarm that arms the kill-chain precursor (see :func:`precursor_shift`).
+    """Per-event alarm that arms the kill-chain precursor (see :func:`precursor_shift`).
 
-    An event alarms when it was flagged (``score`` at or above its decision threshold),
-    when it is *armed* (``score >= threshold_arm``: recon sits below the decision threshold
-    by construction, so arming needs its own, lower threshold), or when its sensor fired.
-    ``threshold_arm=None`` (no arm threshold, e.g. artifacts that predate it) leaves the
-    decision alone. One rule for the offline replay and every serving path, so the
-    reported numbers describe the deployed system.
+    True when the event was flagged (at or above its decision threshold), armed
+    (``score >= threshold_arm``: recon sits below the decision threshold, hence a lower
+    one) or its sensor fired; ``threshold_arm=None`` disables arming. One rule for the
+    offline replay and every serving path.
     """
     armed = threshold_arm is not None and score >= threshold_arm
     return bool(flagged) or armed or sensor_alarm(features)
 
 
 def signal_dirty(features) -> bool:
-    """Whether an event's edge signal already fires (the observable, class-free split).
+    """True when the edge signal already fires: broken TLS trust (``ja3 == 0``) or a sensor.
 
-    ``features`` is the 7-dim message vector ``[ja3, s1, s2, s3, method, role,
-    clearance]``: the signal is "dirty" when TLS
-    trust is broken (``ja3==0``) or any Snort/sensor probe fires — the same condition as
-    the rule baseline. (``features[4]`` is the HTTP method, NOT a sensor: including it —
-    as an earlier revision did — silently routed every non-GET request to the
-    conservative threshold.) The true anomaly class is unknown at serving time, but this
-    *is* observable, so the decision threshold is routed on it: dirty events keep the
-    conservative FPR threshold (the cheap rule already catches them), while signal-clean
-    events — where lateral movement is indistinguishable from benign except by temporal
-    pattern — get the recall-oriented cost-sensitive threshold. See ``score_event``.
+    Observable at serving time, unlike the anomaly class, so the decision threshold is
+    routed on it: dirty events keep the conservative FPR threshold (the rule baseline
+    catches them), signal-clean ones get the recall-oriented threshold. ``features`` is
+    ``[ja3, s1, s2, s3, method, role, clearance]``; ``features[4]`` is not a sensor.
     """
     ja3, s1, s2, s3 = (float(features[i]) for i in range(4))
     return ja3 <= 0.5 or s1 > 0.5 or s2 > 0.5 or s3 > 0.5
@@ -415,13 +355,10 @@ def _reset_slot(model, idx: int) -> None:
         model.memory.memory[idx].zero_()
         model.memory.last_update[idx] = 0
         model.node_feat[idx].zero_()
-        model.node_feat[idx, 14] = 1.0  # Reset Trust Score to max
+        model.node_feat[idx, 14] = 1.0  # trust: neutral constant
         model.node_hash[idx].zero_()
-    # Reset (do NOT delete) the slot's PyG message store. TGNMemory seeds *every*
-    # node id with an empty-message tuple and `_compute_msg` does `msg_store[i]` for
-    # every node it touches — so popping the entry makes a reused (post-eviction)
-    # slot raise `KeyError: idx` on its first event. Re-seed the empty tuple in the
-    # exact format of TGNMemory._reset_message_store: (src, dst, t, msg).
+    # Re-seed (do not delete) the slot's PyG message store: TGNMemory reads msg_store[i]
+    # for every node it touches. Same format as TGNMemory._reset_message_store.
     mem = model.memory
     empty_i = mem.memory.new_empty((0,), dtype=torch.long)
     empty_msg = mem.memory.new_empty((0, mem.raw_msg_dim))
@@ -431,8 +368,7 @@ def _reset_slot(model, idx: int) -> None:
         keys_to_delete = [k for k in model.last_contact if k[0] == idx or k[1] == idx]
         for k in keys_to_delete:
             del model.last_contact[k]
-    # Purge the recycled slot's interaction-history counters too, so a reused index
-    # cannot inherit the evicted entity's habituality.
+    # A reused index must not inherit the evicted entity's counters, alerts or neighbours.
     if hasattr(model, "pair_count"):
         for k in [k for k in model.pair_count if k[0] == idx or k[1] == idx]:
             del model.pair_count[k]
@@ -440,13 +376,11 @@ def _reset_slot(model, idx: int) -> None:
         model.src_count.pop(idx, None)
     if hasattr(model, "recent_alert"):
         model.recent_alert.pop(idx, None)
-    # Scrub the reused slot's temporal neighbourhood so a recycled index can't
-    # inherit the evicted entity's interaction history.
     model.neighbor_loader.reset_node(idx)
 
 
 def _set_node_features(model, idx: int, feat, device) -> None:
-    """Write a node's static attributes (role / clearance / tier) into its slot."""
+    """Write a node's static features into its slot, keeping its trust column (14)."""
     with torch.no_grad():
         trust = model.node_feat[idx, 14].item()
         model.node_feat[idx] = torch.as_tensor(
@@ -456,12 +390,10 @@ def _set_node_features(model, idx: int, feat, device) -> None:
 
 
 def _set_source_network_feature(model, idx: int, key_source) -> None:
-    """Write the source network's internal/external bit into node_feat index 5.
+    """Set the internal/external bit (``node_feat[5]``) of a runtime-admitted source node.
 
-    Derived from the (``src:``-namespaced) client IP — a model feature, never an authz
-    gate. Source nodes are admitted at runtime, so unlike the preregistered resources
-    their static features must be set here on each event rather than baked at train time.
-    No-op when the checkpoint was trained without the source-internal feature.
+    A model feature derived from the ``src:`` IP, never an authz gate; no-op when the
+    checkpoint was trained without it.
     """
     if not getattr(model, "use_source_internal", False):
         return
@@ -500,36 +432,20 @@ def score_event(
     update: bool = True,
     guest_device_fallback: bool = False,
 ) -> tuple[float, bool, float]:
-    """Score one streaming access event (v4 schema: up to 5 edges per request).
+    """Score one access event; with ``update``, commit it only if judged benign.
 
-    Maps the (possibly unseen) entity keys through ``registry`` and scores the causal
-    chain ``key_source -> key_config -> key_device -> key_user -> key_dst`` plus the
-    ``key_config -> key_user`` binding: the four binding edges carry zero messages, the
-    access edge carries ``features``; the anomaly score is the max over the edges of
-    their benign-calibrated logits (see :func:`combine_edge_logits`).
-    ``key_source`` (the client IP) and ``key_device`` are optional — a missing one skips
-    only its own binding edges (a key is never aliased onto two roles). ``key_config``
-    (the client's TLS/JA3 fingerprint) defaults to the generic ``"conf:guest"`` when the
-    collector cannot resolve it, so the config node is always present. When ``update`` is
-    set the event is written into memory **only if it is classified benign**
-    (``score < threshold``), keeping the baseline free of attacker-controlled events.
+    Keys are mapped through ``registry`` (unseen ones admitted). Scored chain:
+    ``source -> config -> device -> user -> dst`` plus ``config -> user``; binding edges
+    carry zero messages, the access edge carries ``features``, and the event logit is the
+    max of the benign-calibrated edge logits. ``key_source`` and ``key_device`` are optional
+    (a missing one drops its own edges); ``key_config`` defaults to ``"conf:guest"``.
 
-    ``user_feat`` / ``device_feat`` / ``dst_feat`` are the per-node static
-    attributes, written into the matching node slot. They are kept **separate by
-    node type** because the training feature contract is type-specific: the device
-    tier lives in ``node_feat[2]`` of DEVICE nodes only, while user nodes carry no
-    static attributes (role / clearance travel in the edge message, never the node
-    features). Collapsing them onto a single ``src_feat`` applied to both endpoints
-    pushes the user node out of distribution — the train/serve skew that this split
-    fixes. In a ZTA deployment the orchestrator/OPA already holds these per request,
-    so they are supplied per event — no extra data store is required. When a vector
-    is omitted, that slot keeps whatever features it already has (e.g. those learned
-    for preregistered entities at train time).
+    ``user_feat`` / ``device_feat`` / ``dst_feat`` overwrite that node's static features
+    (type-specific: the device tier lives on device nodes, user nodes carry none, role and
+    clearance travel in the message); ``None`` keeps the slot's current features.
 
-    Returns ``(anomaly_score, is_anomaly, effective_threshold)`` — the third element is
-    the threshold actually used for the decision (``threshold_dirty`` for signal-dirty
-    events, ``threshold`` otherwise), so callers can report a consistent
-    (score, verdict, threshold) triple.
+    Returns ``(anomaly_score, is_anomaly, effective_threshold)``: ``threshold_dirty`` for
+    signal-dirty events, ``threshold`` otherwise.
     """
     model.eval()
     if key_config is None:
@@ -571,7 +487,7 @@ def score_event(
         groups.append((EDGE_SRC_CFG, _ids(source_idx), b_cfg, zeros, None))
 
     raw_logit = float(chain_logits(model, groups, _ids(int(timestamp)), device))
-    # Kill-chain precursor prior — keyed on the DEVICE node (if present), else on USER
+    # Kill-chain precursor prior: keyed on the device node if present, else on the user
     boost_idx = device_idx if device_idx is not None else user_idx
     score = float(anomaly_score(raw_logit + precursor_shift(model, boost_idx, timestamp)))
     eff_threshold = threshold
@@ -617,22 +533,13 @@ def commit_event(
     guest_device_fallback: bool = False,
     alarm: bool = False,
 ) -> None:
-    """Commit an event the caller has already judged benign (e.g. OPA returned ALLOW).
+    """Commit an event the caller judged benign (e.g. OPA ALLOW), without re-scoring.
 
-    This is the *unconditional* counterpart of :func:`score_event`: it maps the entity
-    keys through ``registry`` (admitting unseen entities, evicting LRU on overflow),
-    optionally refreshes their static attributes, and advances both the TGN memory and
-    the neighbour history along the same up-to-5-edge chain (``key_config`` defaults to
-    ``"conf:guest"`` when omitted). Use it for the two-step anti-poisoning flow where the
-    benign/anomalous decision is made *outside* the model (score with
-    :func:`infer_logit` / :func:`score_event` ``update=False`` first, then commit here
-    only on approval).
-
-    ``alarm`` carries back the :func:`event_alarm` of the scoring step (``/infer`` returns
-    it): OPA may ALLOW an event the model still flagged or armed on, and that is precisely
-    the case the kill-chain precursor exists for. Every scored event must end in exactly
-    one of this function or :func:`deny_event`, so the alert state sees every event — as
-    the offline replay does.
+    Admits keys (evicting LRU on overflow), refreshes the given static features and
+    advances memory and neighbour history along the same chain as :func:`score_event`.
+    ``alarm`` is the :func:`event_alarm` of the scoring step: OPA may ALLOW an event the
+    model flagged, which is exactly the case the precursor exists for. Every scored event
+    ends in this function or in :func:`deny_event`.
     """
     model.eval()
     if key_config is None:
@@ -681,16 +588,11 @@ def deny_event(
     guest_device_fallback: bool = False,
     alarm: bool = False,
 ) -> None:
-    """Record an event the caller DENYed: the alert state only, never the baseline.
+    """Record an event the caller DENYed: alert state only, never the baseline.
 
-    The DENY counterpart of :func:`commit_event`. The offline replay applies the per-event
-    alarm to *every* scored event, whatever the commit gate decides; without this call a
-    DENYed event — typically the Snort-flagged recon that should arm the kill-chain
-    precursor — would leave no trace. It is a delivery channel, not evidence: the DENY
-    itself does not alarm, only ``alarm`` (the :func:`event_alarm` returned by ``/infer``)
-    or the event's sensor does. Memory, neighbour history and the interaction counters are
-    untouched, so the anti-poisoning gate is unchanged. Only the alerted entity (device,
-    else user) is admitted, and only when there is an alarm to record.
+    Without it a denied recon event would never arm the kill-chain precursor. The DENY is
+    not evidence by itself: only ``alarm`` (from ``/infer``) or the sensor records an alert,
+    and only the alerted entity (device, else user) is admitted.
     """
     if not (alarm or sensor_alarm(features)):
         return
@@ -703,12 +605,13 @@ def deny_event(
 def save_model(model, registry: NodeRegistry, threshold: float, hp: dict,
                checkpoint_path, stats_path, *, threshold_dirty=None,
                calibration=None, operating_point=None) -> None:
-    """Persist the deployable artifact (weights + memory + registry + threshold).
+    """Persist the deployable artifact: weights, memory and message stores, recency and
+    history counters, alert state, neighbour buffers, edge calibration (checkpoint) and
+    registry plus thresholds (stats JSON).
 
-    ``threshold`` is the primary (signal-clean / cost-sensitive) decision threshold;
-    ``threshold_dirty`` is the conservative threshold for events whose edge signal already
-    fires (defaults to ``threshold`` when omitted, so old single-threshold artifacts stay
-    valid). ``calibration`` / ``operating_point`` are optional provenance for observability.
+    ``threshold`` is the signal-clean (cost-sensitive) threshold, ``threshold_dirty`` the
+    conservative one for signal-dirty events (defaults to ``threshold``).
+    ``calibration`` / ``operating_point`` are optional provenance.
     """
     checkpoint_path = Path(checkpoint_path)
     stats_path = Path(stats_path)

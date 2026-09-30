@@ -138,3 +138,9 @@ def test_schema_is_what_the_report_consumes(stream):
     assert set(out) == {"per_type"}                      # no aggregate for the rules
     for entry in out["per_type"].values():
         assert set(entry) == {"auc", "ap", "recall", "fpr", "threshold", "n"}
+
+
+def test_unknown_gate_is_rejected(stream):
+    # A typo must not silently fall through to "commit every event".
+    with pytest.raises(ValueError, match="unknown gate"):
+        lookup_flags(stream, "proto_self")

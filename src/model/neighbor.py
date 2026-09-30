@@ -22,6 +22,8 @@ from torch_geometric.nn.models.tgn import LastNeighborLoader
 
 
 class MessageNeighborLoader(LastNeighborLoader):
+    """Last-``size`` neighbours per node, with each edge's timestamp and raw message."""
+
     def __init__(self, num_nodes: int, size: int, msg_dim: int, k_hops: int = 1, device=None):
         # Allocate the parallel attribute buffers before super().__init__ (which
         # calls reset_state) so reset_state can clear them too.
@@ -33,16 +35,19 @@ class MessageNeighborLoader(LastNeighborLoader):
         super().__init__(num_nodes, size, device=device)
 
     def reset_state(self):
+        """Empty every node's buffers (neighbours, edge ids, times, messages)."""
         super().reset_state()
-        # ``hasattr`` guard: super().__init__ calls this before our attrs in a plain
-        # LastNeighborLoader, but here they are set first, so this always runs.
+        # Defensive: our buffers are allocated before super().__init__ calls this.
         if hasattr(self, "last_t"):
             self.last_t.zero_()
             self.last_msg.zero_()
 
     def insert(self, src, dst, t, msg):
-        # Mirror of LastNeighborLoader.insert, threading (t, msg) through the same
-        # sort / dense-placement / top-k bookkeeping so they stay aligned with e_id.
+        """Record edges ``src[i] <-> dst[i]`` at ``t[i]`` with ``msg[i]`` (both directions).
+
+        Mirrors ``LastNeighborLoader.insert``, carrying ``(t, msg)`` through the same
+        sort / dense placement / top-k so they stay aligned with ``e_id``.
+        """
         neighbors = torch.cat([src, dst], dim=0)
         nodes = torch.cat([dst, src], dim=0)
         e_id = torch.arange(self.cur_e_id, self.cur_e_id + src.size(0),
@@ -93,11 +98,8 @@ class MessageNeighborLoader(LastNeighborLoader):
     def __call__(self, n_id):
         """k-hop expansion: every node within ``k_hops - 1`` hops contributes its stored edges once.
 
-        The frontier excludes nodes already expanded. Re-expanding them (the pre-2026-09-25
-        behaviour) emitted each of their edges once per visit: the same edge *set* with a uniform
-        per-node multiplicity, which leaves the attention softmax and therefore every embedding
-        unchanged in eval, at up to ``k_hops``× the edge count. In training only the number of
-        attention-dropout draws changes.
+        Each node is expanded once: re-expanding would only duplicate its edges.
+        Returns ``(n_id, edge_index, hist_t, hist_msg)`` with ``edge_index`` in local ids.
         """
         nodes_list, neighbors_list, hist_t_list, hist_msg_list = [], [], [], []
         current_n_id = n_id
@@ -109,22 +111,22 @@ class MessageNeighborLoader(LastNeighborLoader):
             hist_t = self.last_t[current_n_id]
             hist_msg = self.last_msg[current_n_id]
             nodes = current_n_id.view(-1, 1).repeat(1, self.size)
-            
+
             mask = e_id >= 0
             neighbors, nodes = neighbors[mask], nodes[mask]
             hist_t, hist_msg = hist_t[mask], hist_msg[mask]
-            
+
             nodes_list.append(nodes)
             neighbors_list.append(neighbors)
             hist_t_list.append(hist_t)
             hist_msg_list.append(hist_msg)
-            
+
             current_n_id = neighbors.unique()
             current_n_id = current_n_id[~torch.isin(current_n_id, expanded)]
             if current_n_id.numel() == 0:
                 break
             expanded = torch.cat([expanded, current_n_id])
-                
+
         all_nodes = torch.cat(nodes_list) if nodes_list else torch.empty(0, dtype=torch.long, device=n_id.device)
         all_neighbors = torch.cat(neighbors_list) if neighbors_list else torch.empty(0, dtype=torch.long, device=n_id.device)
         all_hist_t = torch.cat(hist_t_list) if hist_t_list else torch.empty(0, dtype=torch.long, device=n_id.device)
@@ -151,6 +153,7 @@ class MessageNeighborLoader(LastNeighborLoader):
 
     # --- persistence (plain tensors, saved alongside the model checkpoint) ----
     def state(self) -> dict:
+        """Buffers to persist (see ``serve_tgn.save_model``)."""
         return {
             "neighbors": self.neighbors,
             "e_id": self.e_id,
@@ -160,6 +163,7 @@ class MessageNeighborLoader(LastNeighborLoader):
         }
 
     def load_state(self, s: dict) -> None:
+        """Restore buffers produced by :meth:`state`."""
         self.neighbors = s["neighbors"]
         self.e_id = s["e_id"]
         self.last_t = s["last_t"]
