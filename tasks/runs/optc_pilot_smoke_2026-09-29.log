@@ -1,52 +1,0 @@
- Container papergate-eval-optc-run-5c300aa01b2a Creating 
- Container papergate-eval-optc-run-5c300aa01b2a Created 
---- LOADING OpTC FLOWS ---
-[optc] nodes=lmdeval eventi=202834 (train=123499 val=21883 test=57452) nodi=310 LM=18 Other=283
-
---- TRAIN + EVALUATE (OpTC, LMDEval) ---
-Using injected dataset stream...
-Using device: cuda
---- ONE-CLASS TRAINING START (benign traffic only) ---
-Epoch 01/3 [train]:   0%|          | 0/617 [00:00<?, ?it/s]Epoch 01/3 [train]: 100%|##########| 617/617 [00:08<00:00, 76.96it/s, loss=1.4919]
-Epoch 01 | Train Loss: 1.6186
-Epoch 02/3 [train]:   0%|          | 0/617 [00:00<?, ?it/s]Epoch 02 | Train Loss: 1.1068
-Epoch 02/3 [train]: 100%|##########| 617/617 [00:07<00:00, 81.57it/s, loss=0.4366]
-Epoch 03/3 [train]:   0%|          | 0/617 [00:00<?, ?it/s]Epoch 03/3 [train]: 100%|##########| 617/617 [00:07<00:00, 81.99it/s, loss=0.0859]
-Epoch 03 | Train Loss: 0.2614
-
---- THRESHOLD CALIBRATION (on the benign validation stream) ---
-Calibration pass A (val replay, no threshold):   0%|          | 0/21883 [00:00<?, ?it/s]Calibration pass A (val replay, no threshold): 100%|##########| 21883/21883 [00:00<00:00, 146599.36it/s]
-Per-edge benign calibration fitted on 21883 clean benign val events (user>res)
-Calibration pass B (val replay, test gate):   0%|          | 0/21883 [00:00<?, ?it/s]Calibration pass B (val replay, test gate): 100%|##########| 21883/21883 [00:00<00:00, 131302.63it/s]
-Benign val score: mean=0.7759 p95=0.9982
-
-[!] eval_batch_size=1024 > 1: the scores are the BATCHED APPROXIMATION (fast, but NOT identical to sequential serving: intra-batch staleness). For final / publishable numbers use eval_batch_size=1.
-threshold@cost_ratio=20.0: 0.9998 [PRIMARY — persisted and used by serving for signal-clean events; requires labelled lateral movement in the validation window; clean cal: n_benign=21883 n_lateral=0] | threshold_dirty@FPR=0.01: 0.9998 [signal-dirty events] | threshold_clean_unsup@FPR=0.01: 0.9998 [label-free alternative; persisted as the precursor arm threshold]
-
---- INFERENCE / ANOMALY DETECTION PHASE START (batch=1024) ---
-Inferenza (replay test):   0%|          | 0/57452 [00:00<?, ?it/s]Inferenza (replay test): 100%|##########| 57452/57452 [00:00<00:00, 140724.67it/s]
-Test Stream | AUC: 0.9998 | AP: 0.9205
-Routed decision | Precision: 0.5902 | Recall: 1.0000
-
---- LATERAL RECALL: GLOBAL-FPR THRESHOLD  vs  COST-SENSITIVE ROUTING ---
-  before (global @FPR=0.01): lateral_recall=1.0000 | benign_fpr=0.0037
-  after  (routed cost-sensitive)       : lateral_recall=1.0000 | benign_fpr=0.0037
-  aggregate recall (global @FPR=0.01): 1.0000
-
---- PER-ANOMALY-TYPE METRICS ---
-  lateral    | rule-blind  | n=  18 | AUC: 0.9996 | AP: 0.5534 | Recall@thr: 1.0000
-
---- LATERAL: COLD-START CONDITIONING ---
-  warmed src (has benign history): n=   8 | recall@thr=1.0000 | AUC=0.9999
-  cold   src (no history yet)     : n=  10 | recall@thr=1.0000  (detection not yet possible)
-
---- BASELINE A REGOLE (signal-only) ---
-  Precision: 0.0000 | Recall: 0.0000 | Recall policy: 0.0000 | Recall contextual: 0.0000 | Recall lateral: 0.0000
-  NOTE: the rule baseline catches contextual anomalies almost entirely (edge signals only) but is blind to policy/lateral — that gap is the TGN's value-add.
-punteggi grezzi -> /data/optc/pilot/scores_smoke.npz
-
---- OpTC / LMDEval SUMMARY (nodes=lmdeval, seed=42, eval_batch_size=1024, test=57452 eventi, 0.50 giorni) ---
-  LM only (Other=neg)    n_pos=   18 n=    57452 prev=3.13e-04 AUC=0.9970 AP=0.2653 (x846.8 sul caso) TPR@1%=1.000 TPR@0.1%=0.278
-  all malicious          n_pos=  301 n=    57452 prev=5.24e-03 AUC=0.9998 AP=0.9205 (x175.7 sul caso) TPR@1%=1.000 TPR@0.1%=0.960
-  LM vs benign           n_pos=   18 n=    57169 prev=3.15e-04 AUC=0.9996 AP=0.5534 (x1757.7 sul caso) TPR@1%=1.000 TPR@0.1%=0.722
-  soglia val FPR 1% = 0.999815: allarmi benigni=209 (418/giorno), LM rilevati=18/18

@@ -1,9 +1,0 @@
- Container papergate-verify-tgn-run-22538f3d9d1a Creating 
- Container papergate-verify-tgn-run-22538f3d9d1a Created 
-[PASS] reload determinism — s1=0.999607 s2=0.999607
-[PASS] benign event updates memory — is_anom=False last_update=1000000000
-[PASS] anomaly does NOT poison memory — is_anom=True before=26468001 after=26468001
-[PASS] dynamic node admitted — new_idx=9944 score=0.9996 registry 9944->9945
-[PASS] key_source=None fallback — score=0.9996 source_admitted=False registry 9944->9945
-
-ALL CHECKS PASSED (5/5)

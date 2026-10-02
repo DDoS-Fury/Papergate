@@ -1,53 +1,0 @@
- Container papergate-eval-optc-run-724d3bc485e4 Creating 
- Container papergate-eval-optc-run-724d3bc485e4 Created 
---- LOADING OpTC FLOWS ---
-[optc] copertura principal=94.6% image_path=99.8%
-[optc] nodes=enriched eventi=150788 (train=123499 val=21883 test=5406) nodi=211 LM=0 Other=0
-
---- TRAIN + EVALUATE (OpTC, LMDEval) ---
-Using injected dataset stream...
-Using device: cuda
---- ONE-CLASS TRAINING START (benign traffic only) ---
-Epoch 01/1 [train]:   0%|          | 0/617 [00:00<?, ?it/s]Epoch 01/1 [train]:  48%|####8     | 298/617 [00:10<00:10, 29.76it/s, loss=3.4473]Epoch 01/1 [train]:  98%|#########7| 604/617 [00:20<00:00, 30.22it/s, loss=2.7064]Epoch 01 | Train Loss: 4.2296
-
---- THRESHOLD CALIBRATION (on the benign validation stream) ---
-Epoch 01/1 [train]: 100%|##########| 617/617 [00:20<00:00, 30.15it/s, loss=3.8519]
-Calibration pass A (val replay, no threshold):   0%|          | 0/21883 [00:00<?, ?it/s]Calibration pass A (val replay, no threshold):   4%|4         | 901/21883 [00:10<03:53, 90.01it/s]Calibration pass A (val replay, no threshold):   8%|8         | 1805/21883 [00:20<03:42, 90.22it/s]Calibration pass A (val replay, no threshold):  12%|#2        | 2710/21883 [00:30<03:32, 90.32it/s]Calibration pass A (val replay, no threshold):  17%|#6        | 3615/21883 [00:40<03:22, 90.30it/s]Calibration pass A (val replay, no threshold):  21%|##        | 4518/21883 [00:50<03:12, 90.28it/s]Calibration pass A (val replay, no threshold):  25%|##4       | 5421/21883 [01:00<03:02, 90.15it/s]Calibration pass A (val replay, no threshold):  29%|##8       | 6323/21883 [01:10<02:52, 90.14it/s]Calibration pass A (val replay, no threshold):  33%|###3      | 7225/21883 [01:20<02:42, 90.02it/s]Calibration pass A (val replay, no threshold):  37%|###7      | 8128/21883 [01:30<02:32, 90.09it/s]Calibration pass A (val replay, no threshold):  41%|####1     | 9031/21883 [01:40<02:22, 90.01it/s]Calibration pass A (val replay, no threshold):  45%|####5     | 9931/21883 [01:50<02:12, 90.00it/s]Calibration pass A (val replay, no threshold):  49%|####9     | 10832/21883 [02:00<02:02, 90.00it/s]Calibration pass A (val replay, no threshold):  54%|#####3    | 11735/21883 [02:10<01:52, 90.07it/s]Calibration pass A (val replay, no threshold):  58%|#####7    | 12641/21883 [02:20<01:42, 90.22it/s]Calibration pass A (val replay, no threshold):  62%|######1   | 13547/21883 [02:30<01:32, 90.24it/s]Calibration pass A (val replay, no threshold):  66%|######6   | 14454/21883 [02:40<01:22, 90.37it/s]Calibration pass A (val replay, no threshold):  70%|#######   | 15362/21883 [02:50<01:12, 90.49it/s]Calibration pass A (val replay, no threshold):  74%|#######4  | 16273/21883 [03:00<01:01, 90.65it/s]Calibration pass A (val replay, no threshold):  79%|#######8  | 17184/21883 [03:10<00:51, 90.61it/s]Calibration pass A (val replay, no threshold):  83%|########2 | 18090/21883 [03:20<00:41, 90.60it/s]Calibration pass A (val replay, no threshold):  87%|########6 | 18996/21883 [03:30<00:31, 90.46it/s]Calibration pass A (val replay, no threshold):  91%|######### | 19898/21883 [03:40<00:21, 90.32it/s]Calibration pass A (val replay, no threshold):  95%|#########5| 20799/21883 [03:50<00:12, 90.14it/s]Calibration pass A (val replay, no threshold):  99%|#########9| 21697/21883 [04:00<00:02, 90.04it/s]Calibration pass A (val replay, no threshold): 100%|##########| 21883/21883 [04:02<00:00, 90.23it/s]
-Per-edge benign calibration fitted on 21883 clean benign val events (user>res, dev>user, cfg>user, cfg>dev, src>cfg)
-Calibration pass B (val replay, test gate):   0%|          | 0/21883 [00:00<?, ?it/s]Calibration pass B (val replay, test gate):   4%|3         | 859/21883 [00:10<04:05, 85.81it/s]Calibration pass B (val replay, test gate):   8%|7         | 1719/21883 [00:20<03:54, 85.92it/s]Calibration pass B (val replay, test gate):  12%|#1        | 2582/21883 [00:30<03:44, 86.09it/s]Calibration pass B (val replay, test gate):  16%|#5        | 3445/21883 [00:40<03:34, 86.02it/s]Calibration pass B (val replay, test gate):  20%|#9        | 4305/21883 [00:50<03:24, 86.00it/s]Calibration pass B (val replay, test gate):  24%|##3       | 5165/21883 [01:00<03:14, 85.82it/s]Calibration pass B (val replay, test gate):  28%|##7       | 6021/21883 [01:10<03:04, 85.74it/s]Calibration pass B (val replay, test gate):  31%|###1      | 6877/21883 [01:20<02:55, 85.70it/s]Calibration pass B (val replay, test gate):  35%|###5      | 7733/21883 [01:30<02:45, 85.60it/s]Calibration pass B (val replay, test gate):  39%|###9      | 8587/21883 [01:40<02:35, 85.49it/s]Calibration pass B (val replay, test gate):  43%|####3     | 9444/21883 [01:50<02:25, 85.54it/s]Calibration pass B (val replay, test gate):  47%|####7     | 10301/21883 [02:00<02:15, 85.45it/s]Calibration pass B (val replay, test gate):  51%|#####     | 11154/21883 [02:10<02:05, 85.35it/s]Calibration pass B (val replay, test gate):  55%|#####4    | 12012/21883 [02:20<01:55, 85.46it/s]Calibration pass B (val replay, test gate):  59%|#####8    | 12870/21883 [02:30<01:45, 85.45it/s]Calibration pass B (val replay, test gate):  63%|######2   | 13730/21883 [02:40<01:35, 85.59it/s]Calibration pass B (val replay, test gate):  67%|######6   | 14591/21883 [02:50<01:25, 85.74it/s]Calibration pass B (val replay, test gate):  71%|#######   | 15456/21883 [03:00<01:14, 85.94it/s]Calibration pass B (val replay, test gate):  75%|#######4  | 16322/21883 [03:10<01:04, 86.11it/s]Calibration pass B (val replay, test gate):  79%|#######8  | 17188/21883 [03:20<00:54, 86.10it/s]Calibration pass B (val replay, test gate):  82%|########2 | 18049/21883 [03:30<00:44, 86.10it/s]Calibration pass B (val replay, test gate):  86%|########6 | 18910/21883 [03:40<00:34, 85.90it/s]Calibration pass B (val replay, test gate):  90%|######### | 19765/21883 [03:50<00:24, 85.74it/s]Calibration pass B (val replay, test gate):  94%|#########4| 20620/21883 [04:00<00:14, 85.64it/s]Calibration pass B (val replay, test gate):  98%|#########8| 21475/21883 [04:10<00:04, 85.53it/s]Calibration pass B (val replay, test gate): 100%|##########| 21883/21883 [04:15<00:00, 85.71it/s]
-Benign val score: mean=0.9754 p95=0.9998
-threshold@cost_ratio=20.0: 1.0000 [PRIMARY — persisted and used by serving for signal-clean events; requires labelled lateral movement in the validation window; clean cal: n_benign=21883 n_lateral=0] | threshold_dirty@FPR=0.01: 1.0000 [signal-dirty events] | threshold_clean_unsup@FPR=0.01: 1.0000 [label-free alternative; persisted as the precursor arm threshold]
-
---- INFERENCE / ANOMALY DETECTION PHASE START (per-event) ---
-Inferenza (replay test):   0%|          | 0/5406 [00:00<?, ?it/s]Inferenza (replay test):  16%|#5        | 858/5406 [00:10<00:53, 85.71it/s]Inferenza (replay test):  32%|###1      | 1716/5406 [00:20<00:43, 85.57it/s]Inferenza (replay test):  48%|####7     | 2571/5406 [00:30<00:33, 85.46it/s]Inferenza (replay test):  63%|######3   | 3432/5406 [00:40<00:23, 85.68it/s]Inferenza (replay test):  79%|#######9  | 4293/5406 [00:50<00:12, 85.75it/s]Inferenza (replay test):  95%|#########5| 5154/5406 [01:00<00:02, 85.87it/s]Inferenza (replay test): 100%|##########| 5406/5406 [01:03<00:00, 85.76it/s]
-/opt/venv/lib/python3.12/site-packages/sklearn/metrics/_ranking.py:469: UndefinedMetricWarning: Only one class is present in y_true. ROC AUC score is not defined in that case.
-  warnings.warn(
-/opt/venv/lib/python3.12/site-packages/sklearn/metrics/_ranking.py:1192: UserWarning: No positive class found in y_true, recall is set to one for all thresholds.
-  warnings.warn(
-Test Stream | AUC: nan | AP: 0.0000
-Routed decision | Precision: 0.0000 | Recall: 0.0000
-
---- LATERAL RECALL: GLOBAL-FPR THRESHOLD  vs  COST-SENSITIVE ROUTING ---
-  before (global @FPR=0.01): lateral_recall=nan | benign_fpr=0.0004
-  after  (routed cost-sensitive)       : lateral_recall=nan | benign_fpr=0.0004
-  aggregate recall (global @FPR=0.01): nan
-
---- PER-ANOMALY-TYPE METRICS ---
-
---- LATERAL: COLD-START CONDITIONING ---
-  warmed src (has benign history): n=   0 | recall@thr=nan | AUC=nan
-  cold   src (no history yet)     : n=   0 | recall@thr=nan  (detection not yet possible)
-
---- BASELINE A REGOLE (signal-only) ---
-  Precision: 0.0000 | Recall: 0.0000 | Recall policy: 0.0000 | Recall contextual: 0.0000 | Recall lateral: 0.0000
-  NOTE: the rule baseline catches contextual anomalies almost entirely (edge signals only) but is blind to policy/lateral — that gap is the TGN's value-add.
-
---- OpTC / LMDEval SUMMARY (nodes=enriched, seed=42, eval_batch_size=1, test=5406 eventi, 0.02 giorni) ---
-  LM only (Other=neg)    n_pos=0: metriche non definite
-  all malicious          n_pos=0: metriche non definite
-  LM vs benign           n_pos=0: metriche non definite
-  baseline 1/(1+occorrenze precedenti della coppia src->dst), stessi eventi:
-  rarità LM only         n_pos=0: metriche non definite
-  rarità all malicious   n_pos=0: metriche non definite
-  rarità LM vs benign    n_pos=0: metriche non definite
-  soglia val FPR 1% = 0.999959: allarmi benigni=2 (96/giorno), LM rilevati=0/0

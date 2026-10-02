@@ -1,60 +1,0 @@
- Container papergate-eval-optc-run-ee24ac4e4759 Creating 
- Container papergate-eval-optc-run-ee24ac4e4759 Created 
---- LOADING OpTC FLOWS ---
-[optc] nodes=lmdeval eventi=2620467 (train=926386 val=178020 test=1516061) nodi=784 LM=84 Other=952
-
---- TRAIN + EVALUATE (OpTC, LMDEval) ---
-Using injected dataset stream...
-Using device: cuda
---- ONE-CLASS TRAINING START (benign traffic only) ---
-Epoch 01/5 [train]:   0%|          | 0/4631 [00:00<?, ?it/s]Epoch 01/5 [train]:  12%|#1        | 552/4631 [00:10<01:13, 55.15it/s, loss=1.3557]Epoch 01/5 [train]:  24%|##3       | 1104/4631 [00:21<01:08, 51.65it/s, loss=0.1583]Epoch 01/5 [train]:  35%|###4      | 1599/4631 [00:31<00:59, 50.65it/s, loss=0.3862]Epoch 01/5 [train]:  45%|####5     | 2093/4631 [00:41<00:50, 50.05it/s, loss=0.1108]Epoch 01/5 [train]:  56%|#####5    | 2584/4631 [00:51<00:41, 49.69it/s, loss=0.0796]Epoch 01/5 [train]:  66%|######6   | 3076/4631 [01:01<00:31, 49.51it/s, loss=0.0633]Epoch 01/5 [train]:  77%|#######7  | 3568/4631 [01:11<00:21, 49.33it/s, loss=0.0057]Epoch 01/5 [train]:  88%|########7 | 4058/4631 [01:21<00:11, 49.21it/s, loss=0.0399]Epoch 01/5 [train]:  98%|#########8| 4548/4631 [01:31<00:01, 49.10it/s, loss=0.0486]Epoch 01 | Train Loss: 0.3048
-Epoch 01/5 [train]: 100%|##########| 4631/4631 [01:33<00:00, 49.76it/s, loss=0.0624]
-Epoch 02/5 [train]:   0%|          | 0/4631 [00:00<?, ?it/s]Epoch 02/5 [train]:  12%|#2        | 569/4631 [00:10<01:11, 56.88it/s, loss=0.0411]Epoch 02/5 [train]:  25%|##4       | 1138/4631 [00:21<01:06, 52.56it/s, loss=0.0461]Epoch 02/5 [train]:  35%|###5      | 1638/4631 [00:31<00:58, 51.13it/s, loss=0.1425]Epoch 02/5 [train]:  46%|####6     | 2132/4631 [00:41<00:49, 50.35it/s, loss=0.0355]Epoch 02/5 [train]:  57%|#####6    | 2624/4631 [00:51<00:40, 49.88it/s, loss=0.0357]Epoch 02/5 [train]:  67%|######7   | 3115/4631 [01:01<00:30, 49.57it/s, loss=0.1438]Epoch 02/5 [train]:  78%|#######7  | 3611/4631 [01:11<00:20, 49.58it/s, loss=0.0111]Epoch 02/5 [train]:  89%|########8 | 4107/4631 [01:21<00:10, 49.36it/s, loss=0.0086]Epoch 02/5 [train]:  99%|#########9| 4598/4631 [01:31<00:00, 49.27it/s, loss=0.0643]Epoch 02/5 [train]: 100%|##########| 4631/4631 [01:32<00:00, 50.06it/s, loss=0.0281]
-Epoch 02 | Train Loss: 0.0745
-Epoch 03/5 [train]:   0%|          | 0/4631 [00:00<?, ?it/s]Epoch 03/5 [train]:  12%|#2        | 569/4631 [00:10<01:11, 56.86it/s, loss=0.0267]Epoch 03/5 [train]:  25%|##4       | 1138/4631 [00:21<01:06, 52.50it/s, loss=0.0352]Epoch 03/5 [train]:  35%|###5      | 1637/4631 [00:31<00:58, 51.10it/s, loss=0.0166]Epoch 03/5 [train]:  46%|####6     | 2131/4631 [00:41<00:49, 50.40it/s, loss=0.0227]Epoch 03/5 [train]:  57%|#####6    | 2624/4631 [00:51<00:40, 49.94it/s, loss=0.0146]Epoch 03/5 [train]:  67%|######7   | 3116/4631 [01:01<00:30, 49.69it/s, loss=0.0111]Epoch 03/5 [train]:  78%|#######7  | 3610/4631 [01:11<00:20, 49.57it/s, loss=0.0108]Epoch 03/5 [train]:  89%|########8 | 4105/4631 [01:21<00:10, 49.53it/s, loss=0.0138]Epoch 03/5 [train]:  99%|#########9| 4600/4631 [01:31<00:00, 49.50it/s, loss=0.0195]Epoch 03 | Train Loss: 0.0465
-Epoch 03/5 [train]: 100%|##########| 4631/4631 [01:32<00:00, 50.18it/s, loss=0.0330]
-Epoch 04/5 [train]:   0%|          | 0/4631 [00:00<?, ?it/s]Epoch 04/5 [train]:  12%|#2        | 578/4631 [00:10<01:10, 57.73it/s, loss=0.0582]Epoch 04/5 [train]:  25%|##4       | 1156/4631 [00:21<01:05, 53.07it/s, loss=0.0048]Epoch 04/5 [train]:  36%|###5      | 1659/4631 [00:31<00:57, 51.69it/s, loss=0.0238]Epoch 04/5 [train]:  47%|####6     | 2159/4631 [00:41<00:48, 50.67it/s, loss=0.0187]Epoch 04/5 [train]:  57%|#####7    | 2651/4631 [00:51<00:39, 50.13it/s, loss=0.0278]Epoch 04/5 [train]:  68%|######7   | 3147/4631 [01:01<00:29, 49.94it/s, loss=0.1882]Epoch 04/5 [train]:  68%|######7   | 3147/4631 [01:11<00:29, 49.94it/s, loss=0.0291]Epoch 04/5 [train]:  79%|#######8  | 3640/4631 [01:11<00:19, 49.60it/s, loss=0.0074]Epoch 04/5 [train]:  89%|########9 | 4131/4631 [01:21<00:10, 49.43it/s, loss=0.0333]Epoch 04/5 [train]: 100%|#########9| 4622/4631 [01:31<00:00, 49.26it/s, loss=0.0469]Epoch 04/5 [train]: 100%|##########| 4631/4631 [01:32<00:00, 50.27it/s, loss=0.0050]
-Epoch 04 | Train Loss: 0.0361
-Epoch 05/5 [train]:   0%|          | 0/4631 [00:00<?, ?it/s]Epoch 05/5 [train]:  12%|#2        | 568/4631 [00:10<01:11, 56.79it/s, loss=0.0255]Epoch 05/5 [train]:  25%|##4       | 1136/4631 [00:21<01:06, 52.49it/s, loss=0.0202]Epoch 05/5 [train]:  35%|###5      | 1635/4631 [00:31<00:58, 50.95it/s, loss=0.0180]Epoch 05/5 [train]:  46%|####5     | 2126/4631 [00:41<00:49, 50.17it/s, loss=0.0440]Epoch 05/5 [train]:  56%|#####6    | 2616/4631 [00:51<00:40, 49.62it/s, loss=0.0069]Epoch 05/5 [train]:  67%|######7   | 3106/4631 [01:01<00:30, 49.39it/s, loss=0.0646]Epoch 05/5 [train]:  78%|#######7  | 3596/4631 [01:11<00:21, 49.24it/s, loss=0.0623]Epoch 05/5 [train]:  88%|########8 | 4086/4631 [01:21<00:11, 48.99it/s, loss=0.0338]Epoch 05/5 [train]:  99%|#########8| 4572/4631 [01:31<00:01, 48.87it/s, loss=0.0085]Epoch 05/5 [train]: 100%|##########| 4631/4631 [01:33<00:00, 49.77it/s, loss=0.0123]
-Epoch 05 | Train Loss: 0.0342
-
---- THRESHOLD CALIBRATION (on the benign validation stream) ---
-Calibration pass A (val replay, no threshold):   0%|          | 0/178020 [00:00<?, ?it/s]Calibration pass A (val replay, no threshold): 100%|##########| 178020/178020 [00:01<00:00, 126030.74it/s]
-Per-edge benign calibration fitted on 178020 clean benign val events (user>res)
-Calibration pass B (val replay, test gate):   0%|          | 0/178020 [00:00<?, ?it/s]Calibration pass B (val replay, test gate): 100%|##########| 178020/178020 [00:01<00:00, 119066.64it/s]
-Benign val score: mean=0.8138 p95=0.9987
-threshold@cost_ratio=20.0: 0.9998 [PRIMARY — persisted and used by serving for signal-clean events; requires labelled lateral movement in the validation window; clean cal: n_benign=178020 n_lateral=0] | threshold_dirty@FPR=0.01: 0.9998 [signal-dirty events] | threshold_clean_unsup@FPR=0.01: 0.9998 [label-free alternative; persisted as the precursor arm threshold]
-
---- INFERENCE / ANOMALY DETECTION PHASE START (batch=1024) ---
-
-[!] eval_batch_size=1024 > 1: the scores are the BATCHED APPROXIMATION (fast, but NOT identical to sequential serving: intra-batch staleness). For final / publishable numbers use eval_batch_size=1.
-Inferenza (replay test):   0%|          | 0/1516061 [00:00<?, ?it/s]Inferenza (replay test):  75%|#######4  | 1135616/1516061 [00:10<00:03, 113503.38it/s]Inferenza (replay test): 100%|##########| 1516061/1516061 [00:13<00:00, 114225.80it/s]
-Test Stream | AUC: 0.9368 | AP: 0.1267
-Routed decision | Precision: 0.0409 | Recall: 0.8359
-
---- LATERAL RECALL: GLOBAL-FPR THRESHOLD  vs  COST-SENSITIVE ROUTING ---
-  before (global @FPR=0.01): lateral_recall=0.7500 | benign_fpr=0.0134
-  after  (routed cost-sensitive)       : lateral_recall=0.7500 | benign_fpr=0.0134
-  aggregate recall (global @FPR=0.01): 0.8359
-
---- PER-ANOMALY-TYPE METRICS ---
-  lateral    | rule-blind  | n=  84 | AUC: 0.9466 | AP: 0.0346 | Recall@thr: 0.7500
-
---- LATERAL: COLD-START CONDITIONING ---
-  warmed src (has benign history): n=  45 | recall@thr=0.5556 | AUC=0.9025
-  cold   src (no history yet)     : n=  39 | recall@thr=0.9744  (detection not yet possible)
-
---- BASELINE A REGOLE (signal-only) ---
-  Precision: 0.0000 | Recall: 0.0000 | Recall policy: 0.0000 | Recall contextual: 0.0000 | Recall lateral: 0.0000
-  NOTE: the rule baseline catches contextual anomalies almost entirely (edge signals only) but is blind to policy/lateral — that gap is the TGN's value-add.
-punteggi grezzi -> /data/optc/sample/scores_s44.npz
-
---- OpTC / LMDEval SUMMARY (nodes=lmdeval, seed=44, eval_batch_size=1024, test=1516061 eventi, 2.61 giorni) ---
-  LM only (Other=neg)    n_pos=   84 n=  1516061 prev=5.54e-05 AUC=0.9463 AP=0.0273 (x493.0 sul caso) TPR@1%=0.750 TPR@0.1%=0.405
-  all malicious          n_pos= 1036 n=  1516061 prev=6.83e-04 AUC=0.9368 AP=0.1267 (x185.4 sul caso) TPR@1%=0.819 TPR@0.1%=0.178
-  LM vs benign           n_pos=   84 n=  1515109 prev=5.54e-05 AUC=0.9466 AP=0.0346 (x624.1 sul caso) TPR@1%=0.750 TPR@0.1%=0.405
-  baseline 1/(1+occorrenze precedenti della coppia src->dst), stessi eventi:
-  rarità LM only         n_pos=   84 n=  1516061 prev=5.54e-05 AUC=0.9025 AP=0.0059 (x106.2 sul caso) TPR@1%=0.845 TPR@0.1%=0.000
-  rarità all malicious   n_pos= 1036 n=  1516061 prev=6.83e-04 AUC=0.9282 AP=0.1906 (x279.0 sul caso) TPR@1%=0.883 TPR@0.1%=0.000
-  rarità LM vs benign    n_pos=   84 n=  1515109 prev=5.54e-05 AUC=0.9030 AP=0.0070 (x125.7 sul caso) TPR@1%=0.845 TPR@0.1%=0.000
-  soglia val FPR 1% = 0.999809: allarmi benigni=20328 (7789/giorno), LM rilevati=63/84
