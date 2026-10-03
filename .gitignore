@@ -27,7 +27,7 @@ public/*.json
 CLAUDE.md
 AGENTS.md
 WORKFLOW.md
-tasks/*.md
+tasks/
 
 # Datasets (LANL, ...) at the repo root only: src/data/ is code
 /data/

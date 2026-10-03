@@ -15,6 +15,7 @@ improve beyond the across-seed std.
     docker compose --profile arch-sweep up
 """
 
+import argparse
 import dataclasses
 
 import numpy as np
@@ -24,12 +25,13 @@ from graphagate.config import TGNConfig
 from graphagate.train_tgn import train_tgn
 
 SEEDS = [42, 7, 123]
-EVENTS = 40000
-EPOCHS = 12
+_CFG_DEFAULT = TGNConfig()
+DEFAULT_EVENTS = _CFG_DEFAULT.num_events  # 200000
+DEFAULT_EPOCHS = _CFG_DEFAULT.epochs      # 15
 
 # Architecture sweep order: MLP depth, then memory dimension and attention heads.
 VARIANTS = [
-    ("baseline v4",        dict()),
+    ("baseline",           dict()),
     ("+1 MLP layer",       dict(link_pred_hidden_layers=3)),
     ("+memory (384)",      dict(memory_dim=384)),
     ("+heads (8)",         dict(gnn_heads=8)),
@@ -49,28 +51,37 @@ def _ms(vals):
 
 
 def main():
-    base = dataclasses.replace(TGNConfig(), num_events=EVENTS, epochs=EPOCHS)
-    results = {name: [] for name, _ in VARIANTS}
+    ap = argparse.ArgumentParser(description="Architecture sweep for the TGN model")
+    ap.add_argument("--seeds", type=int, nargs="+", default=SEEDS, help="Seeds for multi-seed run")
+    ap.add_argument("--events", type=int, default=DEFAULT_EVENTS, help="Number of stream events")
+    ap.add_argument("--epochs", type=int, default=DEFAULT_EPOCHS, help="Training epochs")
+    ap.add_argument("--variants", nargs="+", choices=[n for n, _ in VARIANTS],
+                    default=[n for n, _ in VARIANTS], help="Variants to evaluate")
+    args = ap.parse_args()
 
-    for seed in SEEDS:
-        for name, over in VARIANTS:
+    base = dataclasses.replace(TGNConfig(), num_events=args.events, epochs=args.epochs)
+    selected_variants = [(n, f) for n, f in VARIANTS if n in args.variants]
+    results = {name: [] for name, _ in selected_variants}
+
+    for seed in args.seeds:
+        for name, over in selected_variants:
             cfg = dataclasses.replace(base, seed=seed, **over)
             print("\n" + "=" * 78)
-            print(f"=== ARCH-SWEEP: {name}  (seed={seed}) ===")
+            print(f"=== ARCH-SWEEP: {name}  (seed={seed}, events={args.events}, epochs={args.epochs}) ===")
             print("=" * 78)
             m = train_tgn(cfg, save=False)
             la, lp, lr = _lat(m)
             results[name].append((la, lp, lr, m["agg_auc"]))
 
     print("\n" + "=" * 92)
-    print(f"ARCH SWEEP SUMMARY — {len(SEEDS)} seeds {SEEDS}, {EVENTS} events / {EPOCHS} epochs")
+    print(f"ARCH SWEEP SUMMARY — {len(args.seeds)} seeds {args.seeds}, {args.events} events / {args.epochs} epochs")
     print("=" * 92)
     header = (f"{'variant':18s} | {'lateral AUC':>15s} | {'lateral AP':>15s} | "
               f"{'lateral Rec@thr':>17s} | {'agg AUC':>13s}")
     print(header)
     print("-" * len(header))
     base_lat = None
-    for name, _ in VARIANTS:
+    for name, _ in selected_variants:
         arr = np.array(results[name], dtype=float)
         if base_lat is None:
             base_lat = np.nanmean(arr[:, 0])

@@ -278,7 +278,7 @@ services:
       - ./src:/app/src
       - ./tests:/app/tests
     entrypoint: ["python"]
-    command: ["/app/tests/ablations/run_arch_sweep.py"]
+    command: ["/app/tests/ablations/run_arch_sweep.py", "--seeds", "42", "7", "123", "--epochs", "15", "--events", "200000"]
 
   # Reproducible regeneration of the report's lean evaluation (generator v5), multi-seed
   # (save=False, does not touch public/). Writes the metric JSONs to tasks/runs/ and the
@@ -300,7 +300,7 @@ services:
       - ./tasks:/app/tasks
       - ./docs:/app/docs
     entrypoint: ["python"]
-    command: ["/app/tests/regen_report_tables.py"]
+    command: ["/app/tests/regen_report_tables.py", "--seeds", "42", "7", "123"]
 
   # Ablation study to assess the model's effectiveness without the device edge.
   # Uses the test client to stream requests to serve-tgn omitting the key_device parameter.
