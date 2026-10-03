@@ -138,7 +138,7 @@ class TGNConfig:
     # Attention heads per TransformerConv (persisted in the checkpoint).
     gnn_heads: int = 4
     # Hidden Linear layers of the feature head before the output (persisted).
-    link_pred_hidden_layers: int = 2
+    link_pred_hidden_layers: int = 3
     hash_buckets: int = 100000
     hash_dim: int = 16
     # Temporal neighbours kept per node by the bounded in-memory neighbour loader.
@@ -166,8 +166,10 @@ class TGNConfig:
 
     # Optimisation.
     batch_size: int = 200
-    epochs: int = 15
+    epochs: int = 15    # Training epochs (all network)
+    ft_epochs: int = 5  # Finetune epochs (only linkPredictor)
     learning_rate: float = 1e-3
+    ft_learning_rate: float = 1e-4
     # Offline replay batch size (calibration + test, never serving). 1 = exact per-event;
     # larger blocks score against the start-of-batch memory (train_tgn._replay).
     eval_batch_size: int = 1

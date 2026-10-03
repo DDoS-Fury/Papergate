@@ -304,22 +304,48 @@ def _rule_baseline(test_msg):
     ).astype(int)
 
 
-def _sample_structural_negatives(num_events, num_res, res_lo, device, *, avoid=None):
-    """Uniformly random resource destinations (standard temporal link-prediction negatives).
+# TODO: checks if it works as expected
+def _sample_structural_negatives(num_events, num_res, res_lo, device, *, avoid=None, hard_pool=None, hard_ratio=0.4):
+    """Campionamento di negativi InfoNCE con Hard Negative Mining (senza label leakage).
 
-    Uses only the resource id-range, never the generator's habitual/authorization sets, so
-    the objective learns each entity's access distribution rather than the evaluation's
-    anomaly definition.
+    hard_ratio (es. 0.4): il 40% dei negativi viene campionato dal pool di risorse
+    attualmente attive nel batch (hard negatives); il restante 60% è uniforme (exploration).
     """
     neg = torch.randint(0, num_res, (num_events,), device=device) + res_lo
+
+    # Sostituisci una frazione dei negativi con campioni dal pool del batch corrente
+    if hard_pool is not None and len(hard_pool) > 1 and hard_ratio > 0.0:
+        num_hard = int(num_events * hard_ratio)
+        if num_hard > 0:
+            rand_idx = torch.randint(0, len(hard_pool), (num_hard,), device=device)
+            hard_draws = hard_pool[rand_idx]
+            neg[:num_hard] = hard_draws
+
+    # Evita il collisione con la vera destinazione (evita falsi negativi)
     if avoid is not None:
-        # Re-roll draws equal to the true dst (false negatives); once suffices at num_res >> 1.
-        collide = neg == avoid
+        collide = (neg == avoid)
         if collide.any():
-            neg[collide] = (
-                torch.randint(0, num_res, (int(collide.sum()),), device=device) + res_lo
-            )
+            neg[collide] = torch.randint(0, num_res, (int(collide.sum()),), device=device) + res_lo
+
     return neg
+
+
+# def _sample_structural_negatives(num_events, num_res, res_lo, device, *, avoid=None):
+#     """Uniformly random resource destinations (standard temporal link-prediction negatives).
+#
+#     Uses only the resource id-range, never the generator's habitual/authorization sets, so
+#     the objective learns each entity's access distribution rather than the evaluation's
+#     anomaly definition.
+#     """
+#     neg = torch.randint(0, num_res, (num_events,), device=device) + res_lo
+#     if avoid is not None:
+#         # Re-roll draws equal to the true dst (false negatives); once suffices at num_res >> 1.
+#         collide = neg == avoid
+#         if collide.any():
+#             neg[collide] = (
+#                 torch.randint(0, num_res, (int(collide.sum()),), device=device) + res_lo
+#             )
+#     return neg
 
 
 @dataclass
@@ -531,9 +557,11 @@ def train_tgn(cfg: TGNConfig | None = None, *, dataset: "StreamData | None" = No
             P = len(p_user)
             K = cfg.infonce_k
             neg_res = _sample_structural_negatives(
-                P * K, neg_num, neg_lo, device, avoid=p_dst.repeat_interleave(K)
+                P * K, neg_num, neg_lo, device, avoid=p_dst.repeat_interleave(K),
+                hard_pool=p_dst, hard_ratio=0.4
             )
             user_rep = p_user.repeat_interleave(K)
+
             has_bind = p_device is not None and data.dev_num > 0
             # A missing device skips only the device's own edges (score_event parity).
             has_src = p_source is not None
@@ -704,6 +732,240 @@ def train_tgn(cfg: TGNConfig | None = None, *, dataset: "StreamData | None" = No
 
         print(f"Epoch {epoch:02d} | Train Loss: {total_loss / max(num_train_batches, 1):.4f}")
     train_seconds = time.perf_counter() - _t_train0
+
+    # ============= FineTuning ==============
+    if getattr(cfg, "ft_epochs", 0) > 0:
+        print(f"\n--- TWO-STAGE TRAINING: FASE 2 (Finetuning MLP per {cfg.ft_epochs} epoche, GNN congelata) ---")
+
+        # Freezing layers
+        model.gnn.requires_grad_(False)
+        model.memory.requires_grad_(False)
+        model.hash_emb.requires_grad_(False)
+        if hasattr(model, "struct_proj"):
+            model.struct_proj.requires_grad_(False)
+
+        model.link_pred.requires_grad_(True)
+        ft_lr = getattr(cfg, "ft_learning_rate", 1e-4)
+        optimizer_ft = AdamW(model.link_pred.parameters(), lr=ft_lr)
+
+        for ft_epoch in range(1, cfg.ft_epochs +1):
+            model.memory.reset_state()
+            model.neighbor_loader.reset_state()
+            model.last_contact.clear()
+            model.pair_count.clear()
+            model.src_count.clear()
+            model.train()
+
+            total_ft_loss=0.0
+            ft_bar = _pbar(range(num_train_batches), desc=f"Stage2 Epoch {ft_epoch:02d}/{cfg.ft_epochs} [MLP]")
+            for i in ft_bar:
+                optimizer_ft.zero_grad()
+                start_idx, end_idx = i * bs, i * bs + bs
+
+                b_user = user_arr[start_idx:end_idx].to(device)
+                b_dst = dst[start_idx:end_idx].to(device)
+                b_t = t[start_idx:end_idx].to(device)
+                b_msg = msg[start_idx:end_idx].to(device)
+                b_y = y[start_idx:end_idx].to(device)
+                b_device = device_arr[start_idx:end_idx].to(device) if device_arr is not None else None
+                b_source = source_arr[start_idx:end_idx].to(device) if source_arr is not None else None
+                b_config = config_arr[start_idx:end_idx].to(device) if config_arr is not None else None
+
+                # Trust (node_feat[:, 14]) stays at the neutral 1.0: never derived from labels.
+                benign_mask = b_y == 0
+                if not benign_mask.any():
+                    continue
+
+                p_user = b_user[benign_mask]
+                p_dst = b_dst[benign_mask]
+                p_t = b_t[benign_mask]
+                p_msg = b_msg[benign_mask]
+                p_device = b_device[benign_mask] if b_device is not None else None
+                p_source = b_source[benign_mask] if b_source is not None else None
+                p_config = b_config[benign_mask] if b_config is not None else None
+
+                # Structural negatives: K uniform random alternatives per positive, per edge:
+                #   user→resource   random resources  (habitual accesses: lateral movement)
+                #   device→user     random users      (hosted users: credential theft)
+                #   config→user     random users      (a thief's client differs from the victim's)
+                #   config→device   random devices    (a new tool on a known device)
+                #   source→config   random configs    (clients behind an IP; roaming = tolerance)
+                # The bindings are required: a thief reaching the victim's habitual resources
+                # looks benign on the access edge; the anomaly lives in the bindings.
+                P = len(p_user)
+                K = cfg.infonce_k
+                neg_res = _sample_structural_negatives(
+                    P * K, neg_num, neg_lo, device, avoid=p_dst.repeat_interleave(K),
+                    hard_pool=p_dst, hard_ratio=0.4
+                )
+                user_rep = p_user.repeat_interleave(K)
+                has_bind = p_device is not None and data.dev_num > 0
+                # A missing device skips only the device's own edges (score_event parity).
+                has_src = p_source is not None
+                has_config = p_config is not None and data.cfg_num > 0
+                if has_bind:
+                    neg_usr = _sample_structural_negatives(
+                        P * K, data.usr_num, data.usr_lo, device, avoid=user_rep
+                    )
+                    dev_rep = p_device.repeat_interleave(K)
+                if has_src:
+                    src_rep = p_source.repeat_interleave(K)
+                if has_config:
+                    cfg_rep = p_config.repeat_interleave(K)
+                    neg_cusr = _sample_structural_negatives(  # config→user negatives
+                        P * K, data.usr_num, data.usr_lo, device, avoid=user_rep
+                    )
+                    if has_bind:
+                        neg_cdev = _sample_structural_negatives(  # config→device negatives
+                            P * K, data.dev_num, data.dev_lo, device, avoid=dev_rep
+                        )
+                    if has_src:
+                        neg_scfg = _sample_structural_negatives(  # source→config negatives
+                            P * K, data.cfg_num, data.cfg_lo, device, avoid=cfg_rep
+                        )
+                if has_src and has_bind and not has_config:
+                    # source→device binding (config-node ablation)
+                    neg_dev = _sample_structural_negatives(
+                        P * K, data.dev_num, data.dev_lo, device, avoid=dev_rep
+                    )
+
+                # Expand every involved node to its stored temporal neighbourhood and embed
+                # once; the heads below differ only in which endpoints / message they score,
+                # sharing the same history-conditioned embeddings.
+                parts = [p_user, p_dst, neg_res]
+                if has_bind:
+                    parts += [p_device, neg_usr]
+                if has_config:
+                    parts += [p_config, neg_cusr]
+                    if has_bind:
+                        parts += [neg_cdev]
+                    if has_src:
+                        parts += [p_source, neg_scfg]
+                if has_src and has_bind and not has_config:
+                    parts += [p_source, neg_dev]
+                nodes = torch.cat(parts).unique()
+                n_id, edge_index, hist_t, hist_msg = model.neighbor_loader(nodes)
+                z = model.embed(n_id, edge_index, hist_t, hist_msg)
+                assoc = model.neighbor_loader._assoc
+                nf = model.node_feat[n_id]
+                h_idx = model.node_hash[n_id]
+
+                tv_l, u_l, dpos_l = p_t.tolist(), p_user.tolist(), p_dst.tolist()
+                dev_l = p_device.tolist() if has_bind else None
+                src_l = p_source.tolist() if has_src else None
+                cfg_l = p_config.tolist() if has_config else None
+                tv_rep = p_t.repeat_interleave(K)
+
+                def _edge_logits(src_nodes, dst_nodes, t_nodes, msgs, hist_feats):
+                    """Score one edge group: Δt(pair recency), Δt(src activity), then heads."""
+                    s_list, d_list, t_list = src_nodes.tolist(), dst_nodes.tolist(), t_nodes.tolist()
+                    d_pair = model.pair_delta_t(s_list, d_list, t_list, device)
+                    d_src = model.src_delta_t(src_nodes, t_nodes, device)
+                    return model.score(
+                        z, nf, h_idx, assoc[src_nodes], assoc[dst_nodes], msgs, d_pair, d_src, hist_feats
+                    )
+
+                zeros_msg = torch.zeros_like(p_msg)
+                zeros_msg_rep = torch.zeros(P * K, p_msg.size(1), device=device)
+                msg_rep = p_msg.repeat_interleave(K, dim=0)
+
+                # --- ACCESS EDGE user→resource (full message + device-aux history) ---
+                hist_acc_pos = model.compute_hist_feats(u_l, dpos_l, device, aux_src_ids=dev_l)
+                hist_acc_neg = model.compute_hist_feats(
+                    user_rep.tolist(), neg_res.tolist(), device,
+                    aux_src_ids=dev_rep.tolist() if has_bind else None,
+                )
+                pos_access = _edge_logits(p_user, p_dst, p_t, p_msg, hist_acc_pos)
+                neg_access = _edge_logits(user_rep, neg_res, tv_rep, msg_rep, hist_acc_neg).view(P, K)
+
+                # --- CONTEXTUAL NEGATIVES: Gaussian noise on the message, a different mechanism
+                # from the eval's discrete signal flips; keeps the feature head using the message.
+                neg_msg = p_msg + torch.randn_like(p_msg) * 0.5
+                neg_out_ctx = _edge_logits(p_user, p_dst, p_t, neg_msg, hist_acc_pos)
+
+                # --- SELF-SUPERVISED LOSS ---
+                #   * InfoNCE ranking per edge: among {true endpoint, K random alternatives}
+                #     the true one must score most-benign given the src's history. AP-aligned
+                #     (a relative/soft target, unlike a hard 0/1 negative).
+                #   * positive BCE anchors: keep benign logits high so the FPR-calibrated
+                #     threshold is meaningful (InfoNCE alone fixes only relative order).
+                #   * contextual BCE: off-manifold message ⇒ anomalous.
+                target = torch.zeros(P, dtype=torch.long, device=device)
+                loss = (
+                        F.cross_entropy(torch.cat([pos_access.unsqueeze(1), neg_access], dim=1), target)
+                        + F.binary_cross_entropy_with_logits(pos_access, torch.ones_like(pos_access))
+                        + F.binary_cross_entropy_with_logits(neg_out_ctx, torch.zeros_like(neg_out_ctx))
+                )
+
+                def _binding_loss(p_src, p_dst_b, src_rep_b, neg_b, src_list, dst_list):
+                    """InfoNCE + positive-BCE for one zero-message binding edge group."""
+                    hist_pos = model.compute_hist_feats(src_list, dst_list, device)
+                    hist_neg = model.compute_hist_feats(src_rep_b.tolist(), neg_b.tolist(), device)
+                    pos = _edge_logits(p_src, p_dst_b, p_t, zeros_msg, hist_pos)
+                    neg = _edge_logits(src_rep_b, neg_b, tv_rep, zeros_msg_rep, hist_neg).view(P, K)
+                    return (
+                            F.cross_entropy(torch.cat([pos.unsqueeze(1), neg], dim=1), target)
+                            + F.binary_cross_entropy_with_logits(pos, torch.ones_like(pos))
+                    )
+
+                if has_bind:  # device → user
+                    loss = loss + _binding_loss(p_device, p_user, dev_rep, neg_usr, dev_l, u_l)
+                if has_config:
+                    loss = loss + _binding_loss(p_config, p_user, cfg_rep, neg_cusr, cfg_l, u_l)  # config → user
+                    if has_bind:
+                        loss = loss + _binding_loss(p_config, p_device, cfg_rep, neg_cdev, cfg_l,
+                                                    dev_l)  # config → device
+                    if has_src:
+                        loss = loss + _binding_loss(p_source, p_config, src_rep, neg_scfg, src_l,
+                                                    cfg_l)  # source → config
+                if has_src and has_bind and not has_config:  # source → device (ablation)
+                    loss = loss + _binding_loss(p_source, p_device, src_rep, neg_dev, src_l, dev_l)
+                loss.backward()
+                optimizer_ft.step()  # <--- AGGIORNA SOLO I PESI DELL'MLP!
+                total_ft_loss += loss.item()
+                ft_bar.set_postfix(loss=f"{loss.item():.4f}", refresh=False)
+
+                # Predict-then-update dello stato temporale (righe 668-704)
+                # Predict-then-update: commit the benign events (memory, neighbours, recency,
+                # counters) in serving edge order: source→config, config→device, config→user,
+                # device→user, user→resource.
+                def _commit_edge(p_src, p_dst_e, e_msg):
+                    model.memory.update_state(p_src, p_dst_e, p_t, e_msg)
+                    model.memory.detach()
+                    model.neighbor_loader.insert(p_src, p_dst_e, p_t, e_msg)
+
+                if has_config and has_src:
+                    _commit_edge(p_source, p_config, zeros_msg)
+                if has_config and has_bind:
+                    _commit_edge(p_config, p_device, zeros_msg)
+                if has_config:
+                    _commit_edge(p_config, p_user, zeros_msg)
+                if has_src and has_bind and not has_config:
+                    _commit_edge(p_source, p_device, zeros_msg)
+                if has_bind:
+                    _commit_edge(p_device, p_user, zeros_msg)
+                _commit_edge(p_user, p_dst, p_msg)
+                for j in range(P):
+                    u, d, tv_j = u_l[j], dpos_l[j], tv_l[j]
+                    pairs = [(u, d)]
+                    if has_config and has_src:
+                        pairs.append((src_l[j], cfg_l[j]))
+                    if has_config and has_bind:
+                        pairs.append((cfg_l[j], dev_l[j]))
+                    if has_config:
+                        pairs.append((cfg_l[j], u))
+                    if has_src and has_bind and not has_config:
+                        pairs.append((src_l[j], dev_l[j]))
+                    if has_bind:
+                        pairs.append((dev_l[j], u))
+                    for a, b in pairs:
+                        model.last_contact[(a, b)] = tv_j
+                        model.pair_count[(a, b)] = model.pair_count.get((a, b), 0) + 1
+                        model.src_count[a] = model.src_count.get(a, 0) + 1
+                    if has_bind:
+                        # aux (device, resource) habituality counter — no temporal edge.
+                        model.pair_count[(dev_l[j], d)] = model.pair_count.get((dev_l[j], d), 0) + 1
+            print(f"Stage 2 Epoch {ft_epoch:02d} | MLP Loss: {total_ft_loss / max(num_train_batches, 1):.4f}")
 
     # --- THRESHOLD CALIBRATION (held-out benign slice) -----------------------
     print("\n--- THRESHOLD CALIBRATION (on the benign validation stream) ---")

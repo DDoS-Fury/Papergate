@@ -72,18 +72,33 @@ class LinkPredictor(nn.Module):
     """Feature head: MLP over both endpoints' embeddings and static features (+ hashed
     identity), the edge message, both recency encodings and the pair's history features."""
 
-    def __init__(self, in_channels, msg_dim, node_feat_dim, hash_dim, time_dim, hist_feat_dim=0, hidden_layers=2):
+    def __init__(self, in_channels, msg_dim, node_feat_dim, hash_dim, time_dim, hist_feat_dim=0, hidden_layers=2, dropout=0.1):
         super().__init__()
         self.lin1 = nn.Linear(
             in_channels * 2 + msg_dim + (node_feat_dim + hash_dim) * 2 + time_dim * 2 + hist_feat_dim,
             in_channels,
         )
-        self.lin_mid = nn.Linear(in_channels, in_channels)
-        # hidden_layers > 2 adds Linear layers before the output; none at <= 2.
-        self.lin_extra = nn.ModuleList(
-            nn.Linear(in_channels, in_channels) for _ in range(max(0, hidden_layers - 2))
-        )
-        self.lin2 = nn.Linear(in_channels, 1)
+
+        # residual blocks
+        num_blocks = max(1, hidden_layers-1)
+        self.blocks = nn.ModuleList([
+            nn.Sequential(
+                nn.Linear(in_channels, in_channels),
+                nn.SiLU(),
+                nn.Dropout(dropout),
+                nn.Linear(in_channels, in_channels),
+            )
+            for _ in range(num_blocks)
+        ])
+        self.norm=nn.LayerNorm(in_channels)
+        self.lin2=nn.Linear(in_channels, 1)
+
+        # self.lin_mid = nn.Linear(in_channels, in_channels)
+        # # hidden_layers > 2 adds Linear layers before the output; none at <= 2.
+        # self.lin_extra = nn.ModuleList(
+        #     nn.Linear(in_channels, in_channels) for _ in range(max(0, hidden_layers - 2))
+        # )
+        # self.lin2 = nn.Linear(in_channels, 1)
 
     def forward(self, z, feat, src, dst, msg, recency_enc, src_recency_enc, hist_feats):
         """Logit of each ``src[i] -> dst[i]`` pair; ``z`` / ``feat`` hold one row per endpoint node.
@@ -100,11 +115,14 @@ class LinkPredictor(nn.Module):
         node_w = torch.cat([torch.cat([w_zs, w_fs], 1), torch.cat([w_zd, w_fd], 1)], 0)
         h_src, h_dst = F.linear(torch.cat([z, feat], dim=-1), node_w).chunk(2, dim=-1)
         edge = torch.cat([msg, recency_enc, src_recency_enc, hist_feats], dim=-1)
-        h = F.linear(edge, torch.cat([w_msg, w_rest], 1), self.lin1.bias)
-        h = (h + h_src[src] + h_dst[dst]).relu()
-        h = self.lin_mid(h).relu()
-        for layer in self.lin_extra:
-            h = layer(h).relu()
+
+        # --- new combined SiLU ---
+        h = F.silu(F.linear(edge, torch.cat([w_msg, w_rest], 1), self.lin1.bias) + h_src[src] + h_dst[dst])
+
+        for block in self.blocks:
+            h = h + block(h)
+
+        h = self.norm(h)
         return self.lin2(h)
 
 
