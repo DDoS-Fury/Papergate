@@ -38,6 +38,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 from torch.optim import AdamW
+from torch.optim.lr_scheduler import CosineAnnealingLR
 from sklearn.metrics import average_precision_score, roc_auc_score
 from tqdm import tqdm
 
@@ -498,6 +499,7 @@ def train_tgn(cfg: TGNConfig | None = None, *, dataset: "StreamData | None" = No
               f"use_hist_feats={use_hist_feats} use_precursor={use_precursor}")
 
     optimizer = AdamW(model.parameters(), lr=cfg.learning_rate)
+    scheduler = CosineAnnealingLR(optimizer, T_max=cfg.epochs, eta_min=1e-5)
 
     # Chronological split (the stream is already time-ordered).
     n = len(dst)
@@ -558,7 +560,7 @@ def train_tgn(cfg: TGNConfig | None = None, *, dataset: "StreamData | None" = No
             K = cfg.infonce_k
             neg_res = _sample_structural_negatives(
                 P * K, neg_num, neg_lo, device, avoid=p_dst.repeat_interleave(K),
-                hard_pool=p_dst, hard_ratio=0.4
+                hard_pool=p_dst, hard_ratio=0.25
             )
             user_rep = p_user.repeat_interleave(K)
 
@@ -730,8 +732,14 @@ def train_tgn(cfg: TGNConfig | None = None, *, dataset: "StreamData | None" = No
                     # aux (device, resource) habituality counter — no temporal edge.
                     model.pair_count[(dev_l[j], d)] = model.pair_count.get((dev_l[j], d), 0) + 1
 
-        print(f"Epoch {epoch:02d} | Train Loss: {total_loss / max(num_train_batches, 1):.4f}")
+        current_lr = scheduler.get_last_lr()[0]
+        print(f"Epoch {epoch:02d} | Train Loss: {total_loss / max(num_train_batches, 1):.4f} | LR: {current_lr:.6f}")
+        scheduler.step() # learning rate update using CosineAnnealingLR fun
     train_seconds = time.perf_counter() - _t_train0
+
+    # TODO: checks that model improves with new settings
+    #print(f"Epoch {epoch:02d} | Train Loss: {total_loss / max(num_train_batches, 1):.4f}")
+    #train_seconds = time.perf_counter() - _t_train0
 
     # ============= FineTuning ==============
     if getattr(cfg, "ft_epochs", 0) > 0:
@@ -747,6 +755,7 @@ def train_tgn(cfg: TGNConfig | None = None, *, dataset: "StreamData | None" = No
         model.link_pred.requires_grad_(True)
         ft_lr = getattr(cfg, "ft_learning_rate", 1e-4)
         optimizer_ft = AdamW(model.link_pred.parameters(), lr=ft_lr)
+        # scheduler_ft = CosineAnnealingLR(optimizer_ft, T_max=cfg.ft_epochs, eta_min=1e-6)
 
         for ft_epoch in range(1, cfg.ft_epochs +1):
             model.memory.reset_state()
@@ -796,7 +805,7 @@ def train_tgn(cfg: TGNConfig | None = None, *, dataset: "StreamData | None" = No
                 K = cfg.infonce_k
                 neg_res = _sample_structural_negatives(
                     P * K, neg_num, neg_lo, device, avoid=p_dst.repeat_interleave(K),
-                    hard_pool=p_dst, hard_ratio=0.4
+                    hard_pool=p_dst, hard_ratio=0.25
                 )
                 user_rep = p_user.repeat_interleave(K)
                 has_bind = p_device is not None and data.dev_num > 0
@@ -965,6 +974,10 @@ def train_tgn(cfg: TGNConfig | None = None, *, dataset: "StreamData | None" = No
                     if has_bind:
                         # aux (device, resource) habituality counter — no temporal edge.
                         model.pair_count[(dev_l[j], d)] = model.pair_count.get((dev_l[j], d), 0) + 1
+
+            # current_ft_lr = scheduler_ft.get_last_lr()[0]
+            # print(f"Stage 2 Epoch {ft_epoch:02d} | MLP Loss: {total_ft_loss / max(num_train_batches, 1):.4f} | LR: {current_ft_lr: .7f}")
+            # scheduler_ft.step()
             print(f"Stage 2 Epoch {ft_epoch:02d} | MLP Loss: {total_ft_loss / max(num_train_batches, 1):.4f}")
 
     # --- THRESHOLD CALIBRATION (held-out benign slice) -----------------------
