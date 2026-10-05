@@ -17,10 +17,11 @@ from torch_geometric.nn.models.tgn import (
     IdentityMessage,
     MeanAggregator,
 )
-from torch_geometric.nn import TransformerConv
 
 from graphagate.model.neighbor import MessageNeighborLoader
-
+from graphagate.model.heads import LinkPredictor, StructuralProjector
+from graphagate.model.gnn import GraphAttentionEmbedding
+from graphagate.config import TGNConfig as _Cfg # unique source of config params
 
 def stable_hash(key, buckets: int) -> int:
     """Deterministic bucket for an entity ``key`` in ``[0, buckets)``.
@@ -30,100 +31,6 @@ def stable_hash(key, buckets: int) -> int:
     """
     digest = hashlib.blake2b(str(key).encode("utf-8"), digest_size=8).digest()
     return int.from_bytes(digest, "big") % buckets
-
-
-class GraphAttentionEmbedding(nn.Module):
-    """``num_hops`` TransformerConv layers (LayerNorm, residual from the second) over
-    historical edges whose attributes are ``[time_enc(Δt), msg]``."""
-
-    def __init__(self, in_channels, out_channels, msg_dim, time_enc, num_hops=3, heads=4):
-        super().__init__()
-        self.time_enc = time_enc
-        self.num_hops = num_hops
-        edge_dim = msg_dim + time_enc.out_channels
-        self.convs = nn.ModuleList()
-        self.convs.append(TransformerConv(in_channels, out_channels, heads=heads, dropout=0.1, edge_dim=edge_dim, concat=False))
-        for _ in range(num_hops - 1):
-            self.convs.append(TransformerConv(out_channels, out_channels, heads=heads, dropout=0.1, edge_dim=edge_dim, concat=False))
-        self.norms = nn.ModuleList([nn.LayerNorm(out_channels) for _ in range(num_hops)])
-
-    def forward(self, x, last_update, edge_index, t, msg):
-        """Embed ``x`` over edges ``edge_index`` with times ``t`` and messages ``msg``."""
-        if edge_index.numel() == 0:
-            edge_attr = torch.empty(0, msg.size(-1) + self.time_enc.out_channels, device=x.device)
-        else:
-            rel_t = last_update[edge_index[0]] - t
-            rel_t_enc = self.time_enc(rel_t.to(x.dtype))
-            edge_attr = torch.cat([rel_t_enc, msg], dim=-1)
-
-        for i, conv in enumerate(self.convs):
-            x_new = conv(x, edge_index, edge_attr)
-            if i > 0:
-                x = x + x_new  # Residual connection
-            else:
-                x = x_new
-            x = self.norms[i](x)
-            if i < len(self.convs) - 1:
-                x = x.relu()
-        return x
-
-
-class LinkPredictor(nn.Module):
-    """Feature head: MLP over both endpoints' embeddings and static features (+ hashed
-    identity), the edge message, both recency encodings and the pair's history features."""
-
-    def __init__(self, in_channels, msg_dim, node_feat_dim, hash_dim, time_dim, hist_feat_dim=0, hidden_layers=2, dropout=0.1):
-        super().__init__()
-        self.lin1 = nn.Linear(
-            in_channels * 2 + msg_dim + (node_feat_dim + hash_dim) * 2 + time_dim * 2 + hist_feat_dim,
-            in_channels,
-        )
-
-        # residual blocks
-        num_blocks = max(1, hidden_layers-1)
-        self.blocks = nn.ModuleList([
-            nn.Sequential(
-                nn.Linear(in_channels, in_channels),
-                nn.SiLU(),
-                nn.Dropout(dropout),
-                nn.Linear(in_channels, in_channels),
-            )
-            for _ in range(num_blocks)
-        ])
-        self.norm=nn.LayerNorm(in_channels)
-        self.lin2=nn.Linear(in_channels, 1)
-
-        # self.lin_mid = nn.Linear(in_channels, in_channels)
-        # # hidden_layers > 2 adds Linear layers before the output; none at <= 2.
-        # self.lin_extra = nn.ModuleList(
-        #     nn.Linear(in_channels, in_channels) for _ in range(max(0, hidden_layers - 2))
-        # )
-        # self.lin2 = nn.Linear(in_channels, 1)
-
-    def forward(self, z, feat, src, dst, msg, recency_enc, src_recency_enc, hist_feats):
-        """Logit of each ``src[i] -> dst[i]`` pair; ``z`` / ``feat`` hold one row per endpoint node.
-
-        ``lin1`` is applied by column blocks of its input layout ``[z_src, z_dst, msg, feat_src,
-        feat_dst, recency_enc, src_recency_enc, hist_feats]`` (the state_dict layout, unchanged):
-        the endpoint blocks are projected once per node row and gathered per pair, instead of
-        once per (pair × negative) row. Same value up to float summation order.
-        """
-        c, f, m = z.size(-1), feat.size(-1), msg.size(-1)
-        w_zs, w_zd, w_msg, w_fs, w_fd, w_rest = self.lin1.weight.split(
-            [c, c, m, f, f, self.lin1.in_features - 2 * c - m - 2 * f], dim=1
-        )
-        node_w = torch.cat([torch.cat([w_zs, w_fs], 1), torch.cat([w_zd, w_fd], 1)], 0)
-        h_src, h_dst = F.linear(torch.cat([z, feat], dim=-1), node_w).chunk(2, dim=-1)
-        edge = torch.cat([msg, recency_enc, src_recency_enc, hist_feats], dim=-1)
-
-        # --- new combined SiLU ---
-        h = F.silu(F.linear(edge, torch.cat([w_msg, w_rest], 1), self.lin1.bias) + h_src[src] + h_dst[dst])
-
-        for block in self.blocks:
-            h = h + block(h)
-
-        h = self.norm(h)
-        return self.lin2(h)
 
 
 class ZTATemporalGraphNetwork(nn.Module):
@@ -187,20 +94,19 @@ class ZTATemporalGraphNetwork(nn.Module):
 
         # Structural head: scaled cosine compatibility of the projected embeddings, i.e.
         # whether the pair belongs together given history (valid-but-non-habitual access).
-        self.struct_proj = nn.Sequential(
-            nn.Linear(memory_dim, memory_dim * 2),
-            nn.ReLU(),
-            nn.Dropout(0.1),
-            nn.Linear(memory_dim * 2, memory_dim)
+        self.struct_proj = StructuralProjector(
+            in_channels=memory_dim,
+            hidden_layers=link_pred_hidden_layers,
+            dropout=0.1,
         )
+
         self.struct_scale = nn.Parameter(torch.tensor(5.0))
+
         # Runtime state (see the class docstring).
         self.last_contact = {}
         self.pair_count = {}
         self.src_count = {}
         self.recent_alert = {}
-        # Defaults from TGNConfig, the single source of truth.
-        from graphagate.config import TGNConfig as _Cfg
 
         self.precursor_half_life = _Cfg.precursor_half_life
         self.precursor_max_shift = _Cfg.precursor_max_shift

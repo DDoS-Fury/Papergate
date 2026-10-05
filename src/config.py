@@ -139,6 +139,7 @@ class TGNConfig:
     gnn_heads: int = 4
     # Hidden Linear layers of the feature head before the output (persisted).
     link_pred_hidden_layers: int = 3
+    struct_proj_hidden_layers: int = 2
     hash_buckets: int = 100000
     hash_dim: int = 16
     # Temporal neighbours kept per node by the bounded in-memory neighbour loader.

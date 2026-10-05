@@ -140,7 +140,7 @@ services:
               "--epochs", "2",
               "--window-pad", "1209600",
               "--train-frac", "0.3",
-              "--eval-batch-size", "1024"]
+              "--eval-batch-size", "1"]
 
   # External validity on REAL telemetry with all 5 nodes populated (ssl.log carries
   # ja3): PicoDomain. Prerequisite: ./data contains Zeek_Logs.7z extracted into
@@ -159,7 +159,7 @@ services:
               "--log-dir", "/data/logs",
               "--red-log", "/data/Red Log.xlsx",
               "--epochs", "15",
-              "--eval-batch-size", "1024"]
+              "--eval-batch-size", "1"]
 
   # External validity on DARPA OpTC with the LMDEval protocol (tests/eval_optc.py).
   # Prerequisite: the flow list built by scripts/optc_extract.py in ./data/optc.
@@ -211,7 +211,7 @@ services:
     command: ["/app/tests/eval_uwf_zeekdata.py",
               "--data-dir", "/data/uwf_zeekdata24",
               "--epochs", "5",
-              "--eval-batch-size", "1024"]
+              "--eval-batch-size", "1"]
 
   # Ablation study: full vs no-struct-head vs no-hashed-identity (save=False, does
   # not touch the artifacts in public/). The contribution of the temporal part is

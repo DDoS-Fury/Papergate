@@ -36,6 +36,7 @@ from dataclasses import dataclass
 
 import numpy as np
 import torch
+from torch import nn
 import torch.nn.functional as F
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import CosineAnnealingLR
@@ -507,6 +508,7 @@ def train_tgn(cfg: TGNConfig | None = None, *, dataset: "StreamData | None" = No
     n_val = int(n * cfg.val_frac)
     train_end, val_end = n_train, n_train + n_val
     bs = cfg.batch_size
+
     # One-class: labels select the (benign) training set; see the module docstring.
     print("--- ONE-CLASS TRAINING START (benign traffic only) ---")
     _t_train0 = time.perf_counter()  # wall time of the gradient loop only (no calibration / replay)
@@ -749,12 +751,21 @@ def train_tgn(cfg: TGNConfig | None = None, *, dataset: "StreamData | None" = No
         model.gnn.requires_grad_(False)
         model.memory.requires_grad_(False)
         model.hash_emb.requires_grad_(False)
-        if hasattr(model, "struct_proj"):
-            model.struct_proj.requires_grad_(False)
 
         model.link_pred.requires_grad_(True)
+        if hasattr(model, "struct_proj"):
+            model.struct_proj.requires_grad_(True)
+            if isinstance(model.struct_scale, nn.Parameter):
+                model.struct_scale.requires_grad = True
+
+        #ft_lr = getattr(cfg, "ft_learning_rate", 1e-4)
+        params_ft = list(model.link_pred.parameters())
+        if hasattr(model, "struct_proj"):
+            params_ft += list(model.struct_proj.parameters())
+            params_ft.append(model.struct_scale)
+
         ft_lr = getattr(cfg, "ft_learning_rate", 1e-4)
-        optimizer_ft = AdamW(model.link_pred.parameters(), lr=ft_lr)
+        optimizer_ft = AdamW(params_ft, lr=ft_lr)
         # scheduler_ft = CosineAnnealingLR(optimizer_ft, T_max=cfg.ft_epochs, eta_min=1e-6)
 
         for ft_epoch in range(1, cfg.ft_epochs +1):
