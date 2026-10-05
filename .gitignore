@@ -42,6 +42,7 @@ docs/paper/*.out
 docs/paper/*.log
 docs/paper/*.aux
 docs/paper/generated/
+docs/development/*.tex
 !docs/paper/main.pdf
 backups/
 scratch/
