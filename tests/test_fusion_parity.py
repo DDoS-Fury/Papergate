@@ -19,6 +19,7 @@ import random
 import numpy as np
 import pytest
 import torch
+import torch.nn.functional as F
 
 from graphagate.model.registry import NodeRegistry
 from graphagate.model.tgn import LinkPredictor
@@ -134,7 +135,7 @@ def test_loader_dedup_same_edge_set_and_embeddings():
 def test_link_predictor_blocks_equal_concat_with_grads():
     torch.manual_seed(1)
     c, m, f, t, h = 32, MSG_DIM, 24, 8, 6
-    lp = LinkPredictor(c, m, node_feat_dim=16, hash_dim=8, time_dim=t, hist_feat_dim=h).train()
+    lp = LinkPredictor(c, m, node_feat_dim=16, hash_dim=8, time_dim=t, hist_feat_dim=h, dropout=0.0).train()
     nodes, rows = 9, 40
     z = torch.randn(nodes, c, requires_grad=True)
     feat = torch.randn(nodes, f)
@@ -145,8 +146,10 @@ def test_link_predictor_blocks_equal_concat_with_grads():
     g_new = torch.autograd.grad(out.square().sum(), [z, lp.lin1.weight])
 
     x = torch.cat([z[src], z[dst], msg, feat[src], feat[dst], rec, srec, hist], dim=-1)
-    ref = lp.lin1(x).relu()
-    ref = lp.lin_mid(ref).relu()
+    ref = F.silu(lp.lin1(x))
+    for block in lp.blocks:
+        ref = ref + block(ref)
+    ref = lp.norm(ref)
     ref = lp.lin2(ref)
     g_ref = torch.autograd.grad(ref.square().sum(), [z, lp.lin1.weight])
 

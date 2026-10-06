@@ -60,8 +60,17 @@ class LinkPredictor(nn.Module):
         return self.lin2(h)
 
 
+EDGE_ACCESS = "user>res"
+EDGE_DEV_USER = "dev>user"
+EDGE_CFG_USER = "cfg>user"
+EDGE_CFG_DEV = "cfg>dev"
+EDGE_SRC_CFG = "src>cfg"
+EDGE_SRC_DEV = "src>dev"
+
+
 class StructuralProjector(nn.Module):
     """Structural head: projection mapping node embeddings into a metric space for cosine similarity scoring.
+    Includes non-affine batch normalization to prevent dimensional collapse onto a single direction vector.
     """
     def __init__(self, in_channels, hidden_layers=2, dropout=0.1):
         super().__init__()
@@ -71,6 +80,10 @@ class StructuralProjector(nn.Module):
             nn.Dropout(dropout),
             nn.Linear(in_channels * 2, in_channels),
         )
+        self.bn = nn.BatchNorm1d(in_channels, affine=False)
 
     def forward(self, x):
-        return self.net(x)
+        h = self.net(x)
+        if h.size(0) > 1 or not self.training:
+            h = self.bn(h)
+        return h

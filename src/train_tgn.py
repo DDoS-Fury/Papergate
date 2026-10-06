@@ -332,6 +332,17 @@ def _sample_structural_negatives(num_events, num_res, res_lo, device, *, avoid=N
     return neg
 
 
+def _uniformity_loss(x, t: float = 2.0) -> torch.Tensor:
+    """Wang & Isola (2020) uniformity on the hypersphere: log E[exp(-t ||x - y||^2)].
+    Pushes projected node embeddings to distribute uniformly over the hypersphere,
+    preventing representation collapse onto a single directional mode.
+    """
+    if x.size(0) <= 1:
+        return torch.tensor(0.0, device=x.device)
+    pdist_sq = torch.pdist(x, p=2).pow(2)
+    return pdist_sq.mul(-t).exp().mean().log()
+
+
 # def _sample_structural_negatives(num_events, num_res, res_lo, device, *, avoid=None):
 #     """Uniformly random resource destinations (standard temporal link-prediction negatives).
 #
@@ -572,7 +583,8 @@ def train_tgn(cfg: TGNConfig | None = None, *, dataset: "StreamData | None" = No
             has_config = p_config is not None and data.cfg_num > 0
             if has_bind:
                 neg_usr = _sample_structural_negatives(
-                    P * K, data.usr_num, data.usr_lo, device, avoid=user_rep
+                    P * K, data.usr_num, data.usr_lo, device, avoid=user_rep,
+                    hard_pool=p_user, hard_ratio=0.25
                 )
                 dev_rep = p_device.repeat_interleave(K)
             if has_src:
@@ -580,20 +592,24 @@ def train_tgn(cfg: TGNConfig | None = None, *, dataset: "StreamData | None" = No
             if has_config:
                 cfg_rep = p_config.repeat_interleave(K)
                 neg_cusr = _sample_structural_negatives(  # config→user negatives
-                    P * K, data.usr_num, data.usr_lo, device, avoid=user_rep
+                    P * K, data.usr_num, data.usr_lo, device, avoid=user_rep,
+                    hard_pool=p_user, hard_ratio=0.25
                 )
                 if has_bind:
                     neg_cdev = _sample_structural_negatives(  # config→device negatives
-                        P * K, data.dev_num, data.dev_lo, device, avoid=dev_rep
+                        P * K, data.dev_num, data.dev_lo, device, avoid=dev_rep,
+                        hard_pool=p_device, hard_ratio=0.25
                     )
                 if has_src:
                     neg_scfg = _sample_structural_negatives(  # source→config negatives
-                        P * K, data.cfg_num, data.cfg_lo, device, avoid=cfg_rep
+                        P * K, data.cfg_num, data.cfg_lo, device, avoid=cfg_rep,
+                        hard_pool=p_config, hard_ratio=0.25
                     )
             if has_src and has_bind and not has_config:
                 # source→device binding (config-node ablation)
                 neg_dev = _sample_structural_negatives(
-                    P * K, data.dev_num, data.dev_lo, device, avoid=dev_rep
+                    P * K, data.dev_num, data.dev_lo, device, avoid=dev_rep,
+                    hard_pool=p_device, hard_ratio=0.25
                 )
 
             # Expand every involved node to its stored temporal neighbourhood and embed
@@ -623,13 +639,14 @@ def train_tgn(cfg: TGNConfig | None = None, *, dataset: "StreamData | None" = No
             cfg_l = p_config.tolist() if has_config else None
             tv_rep = p_t.repeat_interleave(K)
 
-            def _edge_logits(src_nodes, dst_nodes, t_nodes, msgs, hist_feats):
+            def _edge_logits(src_nodes, dst_nodes, t_nodes, msgs, hist_feats, edge_kind=None):
                 """Score one edge group: Δt(pair recency), Δt(src activity), then heads."""
                 s_list, d_list, t_list = src_nodes.tolist(), dst_nodes.tolist(), t_nodes.tolist()
                 d_pair = model.pair_delta_t(s_list, d_list, t_list, device)
                 d_src = model.src_delta_t(src_nodes, t_nodes, device)
                 return model.score(
-                    z, nf, h_idx, assoc[src_nodes], assoc[dst_nodes], msgs, d_pair, d_src, hist_feats
+                    z, nf, h_idx, assoc[src_nodes], assoc[dst_nodes], msgs, d_pair, d_src, hist_feats,
+                    edge_kind=edge_kind,
                 )
 
             zeros_msg = torch.zeros_like(p_msg)
@@ -642,13 +659,13 @@ def train_tgn(cfg: TGNConfig | None = None, *, dataset: "StreamData | None" = No
                 user_rep.tolist(), neg_res.tolist(), device,
                 aux_src_ids=dev_rep.tolist() if has_bind else None,
             )
-            pos_access = _edge_logits(p_user, p_dst, p_t, p_msg, hist_acc_pos)
-            neg_access = _edge_logits(user_rep, neg_res, tv_rep, msg_rep, hist_acc_neg).view(P, K)
+            pos_access = _edge_logits(p_user, p_dst, p_t, p_msg, hist_acc_pos, edge_kind=EDGE_ACCESS)
+            neg_access = _edge_logits(user_rep, neg_res, tv_rep, msg_rep, hist_acc_neg, edge_kind=EDGE_ACCESS).view(P, K)
 
             # --- CONTEXTUAL NEGATIVES: Gaussian noise on the message, a different mechanism
             # from the eval's discrete signal flips; keeps the feature head using the message.
             neg_msg = p_msg + torch.randn_like(p_msg) * 0.5
-            neg_out_ctx = _edge_logits(p_user, p_dst, p_t, neg_msg, hist_acc_pos)
+            neg_out_ctx = _edge_logits(p_user, p_dst, p_t, neg_msg, hist_acc_pos, edge_kind=EDGE_ACCESS)
 
             # --- SELF-SUPERVISED LOSS ---
             #   * InfoNCE ranking per edge: among {true endpoint, K random alternatives}
@@ -664,27 +681,33 @@ def train_tgn(cfg: TGNConfig | None = None, *, dataset: "StreamData | None" = No
                 + F.binary_cross_entropy_with_logits(neg_out_ctx, torch.zeros_like(neg_out_ctx))
             )
 
-            def _binding_loss(p_src, p_dst_b, src_rep_b, neg_b, src_list, dst_list):
+            # --- UNIFORMITY REGULARIZATION (Wang & Isola, ICML 2020) ---
+            if model.use_struct_head:
+                active_endpoints = torch.cat([p_user, p_dst]).unique()
+                proj_u = F.normalize(model.struct_proj(z[assoc[active_endpoints]]), dim=-1)
+                loss = loss + 0.05 * _uniformity_loss(proj_u)
+
+            def _binding_loss(p_src, p_dst_b, src_rep_b, neg_b, src_list, dst_list, kind=None):
                 """InfoNCE + positive-BCE for one zero-message binding edge group."""
                 hist_pos = model.compute_hist_feats(src_list, dst_list, device)
                 hist_neg = model.compute_hist_feats(src_rep_b.tolist(), neg_b.tolist(), device)
-                pos = _edge_logits(p_src, p_dst_b, p_t, zeros_msg, hist_pos)
-                neg = _edge_logits(src_rep_b, neg_b, tv_rep, zeros_msg_rep, hist_neg).view(P, K)
+                pos = _edge_logits(p_src, p_dst_b, p_t, zeros_msg, hist_pos, edge_kind=kind)
+                neg = _edge_logits(src_rep_b, neg_b, tv_rep, zeros_msg_rep, hist_neg, edge_kind=kind).view(P, K)
                 return (
                     F.cross_entropy(torch.cat([pos.unsqueeze(1), neg], dim=1), target)
                     + F.binary_cross_entropy_with_logits(pos, torch.ones_like(pos))
                 )
 
             if has_bind:  # device → user
-                loss = loss + _binding_loss(p_device, p_user, dev_rep, neg_usr, dev_l, u_l)
+                loss = loss + _binding_loss(p_device, p_user, dev_rep, neg_usr, dev_l, u_l, kind=EDGE_DEV_USER)
             if has_config:
-                loss = loss + _binding_loss(p_config, p_user, cfg_rep, neg_cusr, cfg_l, u_l)  # config → user
+                loss = loss + _binding_loss(p_config, p_user, cfg_rep, neg_cusr, cfg_l, u_l, kind=EDGE_CFG_USER)  # config → user
                 if has_bind:
-                    loss = loss + _binding_loss(p_config, p_device, cfg_rep, neg_cdev, cfg_l, dev_l)  # config → device
+                    loss = loss + _binding_loss(p_config, p_device, cfg_rep, neg_cdev, cfg_l, dev_l, kind=EDGE_CFG_DEV)  # config → device
                 if has_src:
-                    loss = loss + _binding_loss(p_source, p_config, src_rep, neg_scfg, src_l, cfg_l)  # source → config
+                    loss = loss + _binding_loss(p_source, p_config, src_rep, neg_scfg, src_l, cfg_l, kind=EDGE_SRC_CFG)  # source → config
             if has_src and has_bind and not has_config:  # source → device (ablation)
-                loss = loss + _binding_loss(p_source, p_device, src_rep, neg_dev, src_l, dev_l)
+                loss = loss + _binding_loss(p_source, p_device, src_rep, neg_dev, src_l, dev_l, kind=EDGE_SRC_DEV)
 
             loss.backward()
             optimizer.step()
@@ -754,6 +777,8 @@ def train_tgn(cfg: TGNConfig | None = None, *, dataset: "StreamData | None" = No
 
         if hasattr(model, "struct_proj"):
             model.struct_proj.requires_grad_(False)
+        if hasattr(model, "struct_rel"):
+            model.struct_rel.requires_grad_(False)
 
         model.link_pred.requires_grad_(True)
         ft_lr = getattr(cfg, "ft_learning_rate", 1e-4)
@@ -817,7 +842,8 @@ def train_tgn(cfg: TGNConfig | None = None, *, dataset: "StreamData | None" = No
                 has_config = p_config is not None and data.cfg_num > 0
                 if has_bind:
                     neg_usr = _sample_structural_negatives(
-                        P * K, data.usr_num, data.usr_lo, device, avoid=user_rep
+                        P * K, data.usr_num, data.usr_lo, device, avoid=user_rep,
+                        hard_pool=p_user, hard_ratio=0.25
                     )
                     dev_rep = p_device.repeat_interleave(K)
                 if has_src:
@@ -825,20 +851,24 @@ def train_tgn(cfg: TGNConfig | None = None, *, dataset: "StreamData | None" = No
                 if has_config:
                     cfg_rep = p_config.repeat_interleave(K)
                     neg_cusr = _sample_structural_negatives(  # config→user negatives
-                        P * K, data.usr_num, data.usr_lo, device, avoid=user_rep
+                        P * K, data.usr_num, data.usr_lo, device, avoid=user_rep,
+                        hard_pool=p_user, hard_ratio=0.25
                     )
                     if has_bind:
                         neg_cdev = _sample_structural_negatives(  # config→device negatives
-                            P * K, data.dev_num, data.dev_lo, device, avoid=dev_rep
+                            P * K, data.dev_num, data.dev_lo, device, avoid=dev_rep,
+                            hard_pool=p_device, hard_ratio=0.25
                         )
                     if has_src:
                         neg_scfg = _sample_structural_negatives(  # source→config negatives
-                            P * K, data.cfg_num, data.cfg_lo, device, avoid=cfg_rep
+                            P * K, data.cfg_num, data.cfg_lo, device, avoid=cfg_rep,
+                            hard_pool=p_config, hard_ratio=0.25
                         )
                 if has_src and has_bind and not has_config:
                     # source→device binding (config-node ablation)
                     neg_dev = _sample_structural_negatives(
-                        P * K, data.dev_num, data.dev_lo, device, avoid=dev_rep
+                        P * K, data.dev_num, data.dev_lo, device, avoid=dev_rep,
+                        hard_pool=p_device, hard_ratio=0.25
                     )
 
                 # Expand every involved node to its stored temporal neighbourhood and embed
@@ -868,13 +898,14 @@ def train_tgn(cfg: TGNConfig | None = None, *, dataset: "StreamData | None" = No
                 cfg_l = p_config.tolist() if has_config else None
                 tv_rep = p_t.repeat_interleave(K)
 
-                def _edge_logits(src_nodes, dst_nodes, t_nodes, msgs, hist_feats):
+                def _edge_logits(src_nodes, dst_nodes, t_nodes, msgs, hist_feats, edge_kind=None):
                     """Score one edge group: Δt(pair recency), Δt(src activity), then heads."""
                     s_list, d_list, t_list = src_nodes.tolist(), dst_nodes.tolist(), t_nodes.tolist()
                     d_pair = model.pair_delta_t(s_list, d_list, t_list, device)
                     d_src = model.src_delta_t(src_nodes, t_nodes, device)
                     return model.score(
-                        z, nf, h_idx, assoc[src_nodes], assoc[dst_nodes], msgs, d_pair, d_src, hist_feats
+                        z, nf, h_idx, assoc[src_nodes], assoc[dst_nodes], msgs, d_pair, d_src, hist_feats,
+                        edge_kind=edge_kind,
                     )
 
                 zeros_msg = torch.zeros_like(p_msg)
@@ -887,13 +918,13 @@ def train_tgn(cfg: TGNConfig | None = None, *, dataset: "StreamData | None" = No
                     user_rep.tolist(), neg_res.tolist(), device,
                     aux_src_ids=dev_rep.tolist() if has_bind else None,
                 )
-                pos_access = _edge_logits(p_user, p_dst, p_t, p_msg, hist_acc_pos)
-                neg_access = _edge_logits(user_rep, neg_res, tv_rep, msg_rep, hist_acc_neg).view(P, K)
+                pos_access = _edge_logits(p_user, p_dst, p_t, p_msg, hist_acc_pos, edge_kind=EDGE_ACCESS)
+                neg_access = _edge_logits(user_rep, neg_res, tv_rep, msg_rep, hist_acc_neg, edge_kind=EDGE_ACCESS).view(P, K)
 
                 # --- CONTEXTUAL NEGATIVES: Gaussian noise on the message, a different mechanism
                 # from the eval's discrete signal flips; keeps the feature head using the message.
                 neg_msg = p_msg + torch.randn_like(p_msg) * 0.5
-                neg_out_ctx = _edge_logits(p_user, p_dst, p_t, neg_msg, hist_acc_pos)
+                neg_out_ctx = _edge_logits(p_user, p_dst, p_t, neg_msg, hist_acc_pos, edge_kind=EDGE_ACCESS)
 
                 # --- SELF-SUPERVISED LOSS ---
                 #   * InfoNCE ranking per edge: among {true endpoint, K random alternatives}
@@ -909,29 +940,29 @@ def train_tgn(cfg: TGNConfig | None = None, *, dataset: "StreamData | None" = No
                         + F.binary_cross_entropy_with_logits(neg_out_ctx, torch.zeros_like(neg_out_ctx))
                 )
 
-                def _binding_loss(p_src, p_dst_b, src_rep_b, neg_b, src_list, dst_list):
+                def _binding_loss(p_src, p_dst_b, src_rep_b, neg_b, src_list, dst_list, kind=None):
                     """InfoNCE + positive-BCE for one zero-message binding edge group."""
                     hist_pos = model.compute_hist_feats(src_list, dst_list, device)
                     hist_neg = model.compute_hist_feats(src_rep_b.tolist(), neg_b.tolist(), device)
-                    pos = _edge_logits(p_src, p_dst_b, p_t, zeros_msg, hist_pos)
-                    neg = _edge_logits(src_rep_b, neg_b, tv_rep, zeros_msg_rep, hist_neg).view(P, K)
+                    pos = _edge_logits(p_src, p_dst_b, p_t, zeros_msg, hist_pos, edge_kind=kind)
+                    neg = _edge_logits(src_rep_b, neg_b, tv_rep, zeros_msg_rep, hist_neg, edge_kind=kind).view(P, K)
                     return (
                             F.cross_entropy(torch.cat([pos.unsqueeze(1), neg], dim=1), target)
                             + F.binary_cross_entropy_with_logits(pos, torch.ones_like(pos))
                     )
 
                 if has_bind:  # device → user
-                    loss = loss + _binding_loss(p_device, p_user, dev_rep, neg_usr, dev_l, u_l)
+                    loss = loss + _binding_loss(p_device, p_user, dev_rep, neg_usr, dev_l, u_l, kind=EDGE_DEV_USER)
                 if has_config:
-                    loss = loss + _binding_loss(p_config, p_user, cfg_rep, neg_cusr, cfg_l, u_l)  # config → user
+                    loss = loss + _binding_loss(p_config, p_user, cfg_rep, neg_cusr, cfg_l, u_l, kind=EDGE_CFG_USER)  # config → user
                     if has_bind:
                         loss = loss + _binding_loss(p_config, p_device, cfg_rep, neg_cdev, cfg_l,
-                                                    dev_l)  # config → device
+                                                    dev_l, kind=EDGE_CFG_DEV)  # config → device
                     if has_src:
                         loss = loss + _binding_loss(p_source, p_config, src_rep, neg_scfg, src_l,
-                                                    cfg_l)  # source → config
+                                                    cfg_l, kind=EDGE_SRC_CFG)  # source → config
                 if has_src and has_bind and not has_config:  # source → device (ablation)
-                    loss = loss + _binding_loss(p_source, p_device, src_rep, neg_dev, src_l, dev_l)
+                    loss = loss + _binding_loss(p_source, p_device, src_rep, neg_dev, src_l, dev_l, kind=EDGE_SRC_DEV)
                 loss.backward()
                 optimizer_ft.step()  # <--- AGGIORNA SOLO I PESI DELL'MLP!
                 total_ft_loss += loss.item()

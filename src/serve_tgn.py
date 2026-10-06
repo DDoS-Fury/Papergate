@@ -93,7 +93,7 @@ def _event_tensors(src_idx: int, dst_idx: int, t_val: int, msg_vec, device):
 
 @torch.no_grad()
 def infer_logit(model, src_idx: int, dst_idx: int, t_val: int, msg_vec, device,
-                aux_src_idx: int | None = None) -> float:
+                aux_src_idx: int | None = None, edge_kind: str | None = None) -> float:
     """Anomaly *logit* (``-logit P(benign)``) of a single edge; mutates nothing.
 
     A logit because ``1 - sigmoid`` saturates to 1.0 in float32 below -16, tying the head
@@ -117,7 +117,8 @@ def infer_logit(model, src_idx: int, dst_idx: int, t_val: int, msg_vec, device,
     hist_feats = model.compute_hist_feats([src_idx], [dst_idx], device, aux_src_ids=aux_ids)
 
     out = model(
-        n_id, edge_index, hist_t, hist_msg, assoc[b_src], assoc[b_dst], b_msg, delta_t, delta_t_src, hist_feats
+        n_id, edge_index, hist_t, hist_msg, assoc[b_src], assoc[b_dst], b_msg, delta_t, delta_t_src, hist_feats,
+        edge_kind=edge_kind,
     ).squeeze(-1)
     return -float(out.item())
 
@@ -125,12 +126,14 @@ def infer_logit(model, src_idx: int, dst_idx: int, t_val: int, msg_vec, device,
 # Edge kinds of the causal chain. Every edge group carries its kind explicitly: the
 # serving and replay paths list the groups in different orders, and the per-edge benign
 # calibration below is keyed by kind, not by position.
-EDGE_ACCESS = "user>res"
-EDGE_DEV_USER = "dev>user"
-EDGE_CFG_USER = "cfg>user"
-EDGE_CFG_DEV = "cfg>dev"
-EDGE_SRC_CFG = "src>cfg"
-EDGE_SRC_DEV = "src>dev"  # config-node ablation only
+from graphagate.model.heads import (
+    EDGE_ACCESS,
+    EDGE_DEV_USER,
+    EDGE_CFG_USER,
+    EDGE_CFG_DEV,
+    EDGE_SRC_CFG,
+    EDGE_SRC_DEV,
+)
 
 
 def fit_edge_calibration(benign_logits, *, tail_q: float) -> dict:
@@ -225,7 +228,7 @@ def chain_edge_logits(model, groups, t, device) -> dict:
         hist = model.compute_hist_feats(
             s_list, d_list, device, aux_src_ids=None if aux is None else aux.tolist()
         )
-        out[kind] = -model.score(z, nf, h_idx, assoc[src], assoc[dst], msg, d_pair, d_src, hist)
+        out[kind] = -model.score(z, nf, h_idx, assoc[src], assoc[dst], msg, d_pair, d_src, hist, edge_kind=kind)
     return out
 
 
@@ -668,7 +671,7 @@ def load_model(checkpoint_path, stats_path, device):
     ckpt = torch.load(checkpoint_path, map_location=device, weights_only=False)
     hp = ckpt["hyperparams"]
     model = build_model(hp, device)
-    model.load_state_dict(ckpt["model"])
+    model.load_state_dict(ckpt["model"], strict=False)
     # Restore pending raw messages so memory continuation is exact.
     model.memory.msg_s_store = ckpt.get("msg_s_store", {})
     model.memory.msg_d_store = ckpt.get("msg_d_store", {})

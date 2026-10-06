@@ -89,7 +89,7 @@ class TGNConfig:
     p_config_release: float = 0.00025
     p_config_adopt: float = 0.05
     p_hotdesk: float = 0.02
-    p_sensor_fp: float = 0.01
+    p_sensor_fp: float = 0.001
     p_theft_mimic_config: float = 0.7
     p_theft_known_source: float = 0.7
     p_theft_session_replay: float = 0.5

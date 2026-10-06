@@ -19,7 +19,16 @@ from torch_geometric.nn.models.tgn import (
 )
 
 from graphagate.model.neighbor import MessageNeighborLoader
-from graphagate.model.heads import LinkPredictor, StructuralProjector
+from graphagate.model.heads import (
+    LinkPredictor,
+    StructuralProjector,
+    EDGE_ACCESS,
+    EDGE_DEV_USER,
+    EDGE_CFG_USER,
+    EDGE_CFG_DEV,
+    EDGE_SRC_CFG,
+    EDGE_SRC_DEV,
+)
 from graphagate.model.gnn import GraphAttentionEmbedding
 from graphagate.config import TGNConfig as _Cfg # unique source of config params
 
@@ -101,6 +110,18 @@ class ZTATemporalGraphNetwork(nn.Module):
         )
 
         self.struct_scale = nn.Parameter(torch.tensor(5.0))
+
+        # Relational modulation vectors (DistMult-style bilinear diagonal) per edge kind:
+        # Decouples the 5-node causal chain so transitivity across
+        # source→config→device→user→resource does not force all nodes into the same vector mode.
+        self.struct_rel = nn.ParameterDict({
+            EDGE_ACCESS: nn.Parameter(torch.ones(memory_dim)),
+            EDGE_DEV_USER: nn.Parameter(torch.ones(memory_dim)),
+            EDGE_CFG_USER: nn.Parameter(torch.ones(memory_dim)),
+            EDGE_CFG_DEV: nn.Parameter(torch.ones(memory_dim)),
+            EDGE_SRC_CFG: nn.Parameter(torch.ones(memory_dim)),
+            EDGE_SRC_DEV: nn.Parameter(torch.ones(memory_dim)),
+        })
 
         # Runtime state (see the class docstring).
         self.last_contact = {}
@@ -213,7 +234,7 @@ class ZTATemporalGraphNetwork(nn.Module):
             aux = self._hist_triplet(aux_src_ids, dst_ids, device)
         return torch.cat([base, aux], dim=-1)
 
-    def score(self, z, nf, h_idx, src_local, dst_local, cur_msg, delta_t, delta_t_src, hist_feats):
+    def score(self, z, nf, h_idx, src_local, dst_local, cur_msg, delta_t, delta_t_src, hist_feats, edge_kind: str | None = None):
         """Benign-vs-anomalous logit for ``src_local -> dst_local`` carrying ``cur_msg``.
 
         Sum of two complementary signals (shared by training and serving):
@@ -248,10 +269,15 @@ class ZTATemporalGraphNetwork(nn.Module):
             # Dropout is the identity in eval, so projecting each node once is exact.
             proj = F.normalize(self.struct_proj(z_u), dim=-1)
             hs, hd = proj[src], proj[dst]
+
+        if edge_kind is not None and hasattr(self, "struct_rel") and edge_kind in self.struct_rel:
+            rel_w = self.struct_rel[edge_kind]
+            hd = F.normalize(hd * rel_w, dim=-1)
+
         struct = self.struct_scale * (hs * hd).sum(-1)
         return feat + struct
 
-    def forward(self, n_id, edge_index, hist_t, hist_msg, src_local, dst_local, cur_msg, delta_t, delta_t_src, hist_feats):
+    def forward(self, n_id, edge_index, hist_t, hist_msg, src_local, dst_local, cur_msg, delta_t, delta_t_src, hist_feats, edge_kind: str | None = None):
         """Score the current edge(s) ``src_local -> dst_local`` carrying ``cur_msg``.
 
         Embeddings come from the historical neighbourhood (``edge_index`` / ``hist_*``);
@@ -262,4 +288,4 @@ class ZTATemporalGraphNetwork(nn.Module):
         z = self.embed(n_id, edge_index, hist_t, hist_msg)
         nf = self.node_feat[n_id]
         h_idx = self.node_hash[n_id]
-        return self.score(z, nf, h_idx, src_local, dst_local, cur_msg, delta_t, delta_t_src, hist_feats)
+        return self.score(z, nf, h_idx, src_local, dst_local, cur_msg, delta_t, delta_t_src, hist_feats, edge_kind=edge_kind)
