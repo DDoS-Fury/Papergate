@@ -39,5 +39,5 @@ class GraphAttentionEmbedding(nn.Module):
                 x = x_new
             x = self.norms[i](x)
             if i < len(self.convs) - 1:
-                x = F.silu(x) # x = x.relu()
+                x = x.relu()
         return x

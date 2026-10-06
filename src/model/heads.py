@@ -61,24 +61,16 @@ class LinkPredictor(nn.Module):
 
 
 class StructuralProjector(nn.Module):
-    """Structural head: residual projection mapping node embeddings into a metric space for cosine similarity scoring.
+    """Structural head: projection mapping node embeddings into a metric space for cosine similarity scoring.
     """
     def __init__(self, in_channels, hidden_layers=2, dropout=0.1):
         super().__init__()
-        num_blocks = max(1, hidden_layers - 1)
-        self.blocks = nn.ModuleList([
-            nn.Sequential(
-                nn.Linear(in_channels, in_channels * 2),
-                nn.SiLU(),
-                nn.Dropout(dropout),
-                nn.Linear(in_channels * 2, in_channels),
-            )
-            for _ in range(num_blocks)
-        ])
-        self.norm = nn.LayerNorm(in_channels)
+        self.net = nn.Sequential(
+            nn.Linear(in_channels, in_channels * 2),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(in_channels * 2, in_channels),
+        )
 
     def forward(self, x):
-        h = x
-        for block in self.blocks:
-            h = block(h) # h = h + block(h)
-        return h # self.norm(h)
+        return self.net(x)
