@@ -80,5 +80,5 @@ class StructuralProjector(nn.Module):
     def forward(self, x):
         h = x
         for block in self.blocks:
-            h = h + block(h)
-        return self.norm(h)
+            h = block(h) # h = h + block(h)
+        return h # self.norm(h)
