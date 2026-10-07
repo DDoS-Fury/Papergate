@@ -47,3 +47,4 @@ docs/development/*.tex
 backups/
 scratch/
 *emissions.csv
+runs/

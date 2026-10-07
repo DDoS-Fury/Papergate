@@ -68,13 +68,14 @@ EDGE_SRC_CFG = "src>cfg"
 EDGE_SRC_DEV = "src>dev"
 
 
+
 class StructuralProjector(nn.Sequential):
     """Structural head: projection mapping node embeddings into a metric space for cosine similarity scoring."""
 
     def __init__(self, in_channels, hidden_layers=2, dropout=0.1):
         super().__init__(
             nn.Linear(in_channels, in_channels * 2),
-            nn.ReLU(),
+            nn.GELU(),
             nn.Dropout(dropout),
             nn.Linear(in_channels * 2, in_channels),
         )

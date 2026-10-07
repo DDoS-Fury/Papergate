@@ -27,6 +27,7 @@ dependencies = [
     "psutil>=5.9.0",
     "codecarbon",
     "aiohttp",
+    "tensorboard>=2.15",
 ]
 
 [project.optional-dependencies]

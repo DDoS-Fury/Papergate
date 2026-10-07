@@ -29,6 +29,7 @@ the reported FPR conservative.
 """
 
 import copy
+import os
 import random
 import sys
 import time
@@ -42,6 +43,12 @@ from torch.optim import AdamW
 from torch.optim.lr_scheduler import CosineAnnealingLR
 from sklearn.metrics import average_precision_score, roc_auc_score
 from tqdm import tqdm
+
+try:
+    from torch.utils.tensorboard import SummaryWriter
+except ImportError:
+    SummaryWriter = None
+
 
 from graphagate.calibration import (
     cost_sensitive_threshold,
@@ -63,9 +70,9 @@ from graphagate.model.registry import NodeRegistry
 from graphagate.model.tgn import ZTATemporalGraphNetwork, stable_hash
 from graphagate.serve_tgn import (
     EDGE_ACCESS,
-    EDGE_CFG_DEV,
-    EDGE_CFG_USER,
     EDGE_DEV_USER,
+    EDGE_CFG_USER,
+    EDGE_CFG_DEV,
     EDGE_SRC_CFG,
     EDGE_SRC_DEV,
     anomaly_score,
@@ -420,7 +427,8 @@ def _synthetic_stream_data(cfg: TGNConfig) -> StreamData:
 
 def train_tgn(cfg: TGNConfig | None = None, *, dataset: "StreamData | None" = None,
               use_struct_head=True, use_hash_identity=True, use_hist_feats=True,
-              use_precursor=True, use_config_node=True, save=True, return_scores=False):
+              use_precursor=True, use_config_node=True, save=True, return_scores=False,
+              log_dir: str | None = None):
     """Train + evaluate the streaming TGN; returns a metrics dict.
 
     Keyword flags drive the ablations (``tests/ablations``): ``use_struct_head``,
@@ -432,6 +440,17 @@ def train_tgn(cfg: TGNConfig | None = None, *, dataset: "StreamData | None" = No
     """
     if cfg is None:
         cfg = TGNConfig()
+
+    writer = None
+    if SummaryWriter is not None:
+        if log_dir is None:
+            tag = "synthetic" if dataset is None else "custom"
+            timestamp = time.strftime("%Y%m%d_%H%M%S")
+            log_dir = os.path.join("runs", f"tgn_{tag}_{timestamp}")
+        os.makedirs(log_dir, exist_ok=True)
+        writer = SummaryWriter(log_dir=log_dir)
+        print(f"[tensorboard] Logging to: {log_dir}")
+
     # Full seeding. The scatter-add in TransformerConv / TGNMemory has no deterministic CUDA
     # kernel (hence warn_only): residual run-to-run noise must be measured by repeated runs.
     # Set CUBLAS_WORKSPACE_CONFIG=:4096:8 for cuBLAS determinism.
@@ -523,6 +542,7 @@ def train_tgn(cfg: TGNConfig | None = None, *, dataset: "StreamData | None" = No
     # One-class: labels select the (benign) training set; see the module docstring.
     print("--- ONE-CLASS TRAINING START (benign traffic only) ---")
     _t_train0 = time.perf_counter()  # wall time of the gradient loop only (no calibration / replay)
+    global_step = 0
     for epoch in range(1, cfg.epochs + 1):
         model.memory.reset_state()  # restart the recurrent memory each epoch
         model.neighbor_loader.reset_state()  # ...and the temporal neighbourhood
@@ -634,14 +654,13 @@ def train_tgn(cfg: TGNConfig | None = None, *, dataset: "StreamData | None" = No
             cfg_l = p_config.tolist() if has_config else None
             tv_rep = p_t.repeat_interleave(K)
 
-            def _edge_logits(src_nodes, dst_nodes, t_nodes, msgs, hist_feats, edge_kind=None):
+            def _edge_logits(src_nodes, dst_nodes, t_nodes, msgs, hist_feats):
                 """Score one edge group: Δt(pair recency), Δt(src activity), then heads."""
                 s_list, d_list, t_list = src_nodes.tolist(), dst_nodes.tolist(), t_nodes.tolist()
                 d_pair = model.pair_delta_t(s_list, d_list, t_list, device)
                 d_src = model.src_delta_t(src_nodes, t_nodes, device)
                 return model.score(
                     z, nf, h_idx, assoc[src_nodes], assoc[dst_nodes], msgs, d_pair, d_src, hist_feats,
-                    edge_kind=edge_kind,
                 )
 
             zeros_msg = torch.zeros_like(p_msg)
@@ -654,13 +673,13 @@ def train_tgn(cfg: TGNConfig | None = None, *, dataset: "StreamData | None" = No
                 user_rep.tolist(), neg_res.tolist(), device,
                 aux_src_ids=dev_rep.tolist() if has_bind else None,
             )
-            pos_access = _edge_logits(p_user, p_dst, p_t, p_msg, hist_acc_pos, edge_kind=EDGE_ACCESS)
-            neg_access = _edge_logits(user_rep, neg_res, tv_rep, msg_rep, hist_acc_neg, edge_kind=EDGE_ACCESS).view(P, K)
+            pos_access = _edge_logits(p_user, p_dst, p_t, p_msg, hist_acc_pos)
+            neg_access = _edge_logits(user_rep, neg_res, tv_rep, msg_rep, hist_acc_neg).view(P, K)
 
             # --- CONTEXTUAL NEGATIVES: Gaussian noise on the message, a different mechanism
             # from the eval's discrete signal flips; keeps the feature head using the message.
             neg_msg = p_msg + torch.randn_like(p_msg) * 0.5
-            neg_out_ctx = _edge_logits(p_user, p_dst, p_t, neg_msg, hist_acc_pos, edge_kind=EDGE_ACCESS)
+            neg_out_ctx = _edge_logits(p_user, p_dst, p_t, neg_msg, hist_acc_pos)
 
             # --- SELF-SUPERVISED LOSS ---
             #   * InfoNCE ranking per edge: among {true endpoint, K random alternatives}
@@ -682,32 +701,35 @@ def train_tgn(cfg: TGNConfig | None = None, *, dataset: "StreamData | None" = No
                 proj_u = F.normalize(model.struct_proj(z[assoc[active_endpoints]]), dim=-1)
                 loss = loss + 0.05 * _uniformity_loss(proj_u)
 
-            def _binding_loss(p_src, p_dst_b, src_rep_b, neg_b, src_list, dst_list, kind=None):
+            def _binding_loss(p_src, p_dst_b, src_rep_b, neg_b, src_list, dst_list):
                 """InfoNCE + positive-BCE for one zero-message binding edge group."""
                 hist_pos = model.compute_hist_feats(src_list, dst_list, device)
                 hist_neg = model.compute_hist_feats(src_rep_b.tolist(), neg_b.tolist(), device)
-                pos = _edge_logits(p_src, p_dst_b, p_t, zeros_msg, hist_pos, edge_kind=kind)
-                neg = _edge_logits(src_rep_b, neg_b, tv_rep, zeros_msg_rep, hist_neg, edge_kind=kind).view(P, K)
+                pos = _edge_logits(p_src, p_dst_b, p_t, zeros_msg, hist_pos)
+                neg = _edge_logits(src_rep_b, neg_b, tv_rep, zeros_msg_rep, hist_neg).view(P, K)
                 return (
                     F.cross_entropy(torch.cat([pos.unsqueeze(1), neg], dim=1), target)
                     + F.binary_cross_entropy_with_logits(pos, torch.ones_like(pos))
                 )
 
             if has_bind:  # device → user
-                loss = loss + _binding_loss(p_device, p_user, dev_rep, neg_usr, dev_l, u_l, kind=EDGE_DEV_USER)
+                loss = loss + _binding_loss(p_device, p_user, dev_rep, neg_usr, dev_l, u_l)
             if has_config:
-                loss = loss + _binding_loss(p_config, p_user, cfg_rep, neg_cusr, cfg_l, u_l, kind=EDGE_CFG_USER)  # config → user
+                loss = loss + _binding_loss(p_config, p_user, cfg_rep, neg_cusr, cfg_l, u_l)  # config → user
                 if has_bind:
-                    loss = loss + _binding_loss(p_config, p_device, cfg_rep, neg_cdev, cfg_l, dev_l, kind=EDGE_CFG_DEV)  # config → device
+                    loss = loss + _binding_loss(p_config, p_device, cfg_rep, neg_cdev, cfg_l, dev_l)  # config → device
                 if has_src:
-                    loss = loss + _binding_loss(p_source, p_config, src_rep, neg_scfg, src_l, cfg_l, kind=EDGE_SRC_CFG)  # source → config
+                    loss = loss + _binding_loss(p_source, p_config, src_rep, neg_scfg, src_l, cfg_l)  # source → config
             if has_src and has_bind and not has_config:  # source → device (ablation)
-                loss = loss + _binding_loss(p_source, p_device, src_rep, neg_dev, src_l, dev_l, kind=EDGE_SRC_DEV)
+                loss = loss + _binding_loss(p_source, p_device, src_rep, neg_dev, src_l, dev_l)
 
             loss.backward()
             optimizer.step()
             batch_loss = loss.item()
             total_loss += batch_loss
+            global_step += 1
+            if writer is not None and (global_step % 10 == 0 or i == num_train_batches - 1):
+                writer.add_scalar("Train/Batch_Loss", batch_loss, global_step)
             # refresh=False: store the postfix but let the bar's own throttled refresh
             # (mininterval) draw it — otherwise every batch forces a line in non-TTY logs.
             epoch_bar.set_postfix(loss=f"{batch_loss:.4f}", refresh=False)
@@ -749,11 +771,15 @@ def train_tgn(cfg: TGNConfig | None = None, *, dataset: "StreamData | None" = No
                     model.pair_count[(a, b)] = model.pair_count.get((a, b), 0) + 1
                     model.src_count[a] = model.src_count.get(a, 0) + 1
                 if has_bind:
-                    # aux (device, resource) habituality counter — no temporal edge.
+                    # aux (device, resource) habituality counter -> no temporal edge.
                     model.pair_count[(dev_l[j], d)] = model.pair_count.get((dev_l[j], d), 0) + 1
 
+        epoch_loss = total_loss / max(num_train_batches, 1)
         current_lr = scheduler.get_last_lr()[0]
-        print(f"Epoch {epoch:02d} | Train Loss: {total_loss / max(num_train_batches, 1):.4f} | LR: {current_lr:.6f}")
+        print(f"Epoch {epoch:02d} | Train Loss: {epoch_loss:.4f} | LR: {current_lr:.6f}")
+        if writer is not None:
+            writer.add_scalar("Train/Epoch_Loss", epoch_loss, epoch)
+            writer.add_scalar("Train/LR", current_lr, epoch)
         scheduler.step() # learning rate update using CosineAnnealingLR fun
     train_seconds = time.perf_counter() - _t_train0
 
@@ -772,15 +798,14 @@ def train_tgn(cfg: TGNConfig | None = None, *, dataset: "StreamData | None" = No
 
         if hasattr(model, "struct_proj"):
             model.struct_proj.requires_grad_(False)
-        if hasattr(model, "struct_rel"):
-            model.struct_rel.requires_grad_(False)
 
         model.link_pred.requires_grad_(True)
         ft_lr = getattr(cfg, "ft_learning_rate", 1e-4)
         optimizer_ft = AdamW(model.link_pred.parameters(), lr=ft_lr)
         # scheduler_ft = CosineAnnealingLR(optimizer_ft, T_max=cfg.ft_epochs, eta_min=1e-6)
 
-        for ft_epoch in range(1, cfg.ft_epochs +1):
+        global_step_ft = 0
+        for ft_epoch in range(1, cfg.ft_epochs + 1):
             model.memory.reset_state()
             model.neighbor_loader.reset_state()
             model.last_contact.clear()
@@ -888,14 +913,13 @@ def train_tgn(cfg: TGNConfig | None = None, *, dataset: "StreamData | None" = No
                 cfg_l = p_config.tolist() if has_config else None
                 tv_rep = p_t.repeat_interleave(K)
 
-                def _edge_logits(src_nodes, dst_nodes, t_nodes, msgs, hist_feats, edge_kind=None):
+                def _edge_logits(src_nodes, dst_nodes, t_nodes, msgs, hist_feats):
                     """Score one edge group: Δt(pair recency), Δt(src activity), then heads."""
                     s_list, d_list, t_list = src_nodes.tolist(), dst_nodes.tolist(), t_nodes.tolist()
                     d_pair = model.pair_delta_t(s_list, d_list, t_list, device)
                     d_src = model.src_delta_t(src_nodes, t_nodes, device)
                     return model.score(
                         z, nf, h_idx, assoc[src_nodes], assoc[dst_nodes], msgs, d_pair, d_src, hist_feats,
-                        edge_kind=edge_kind,
                     )
 
                 zeros_msg = torch.zeros_like(p_msg)
@@ -908,13 +932,13 @@ def train_tgn(cfg: TGNConfig | None = None, *, dataset: "StreamData | None" = No
                     user_rep.tolist(), neg_res.tolist(), device,
                     aux_src_ids=dev_rep.tolist() if has_bind else None,
                 )
-                pos_access = _edge_logits(p_user, p_dst, p_t, p_msg, hist_acc_pos, edge_kind=EDGE_ACCESS)
-                neg_access = _edge_logits(user_rep, neg_res, tv_rep, msg_rep, hist_acc_neg, edge_kind=EDGE_ACCESS).view(P, K)
+                pos_access = _edge_logits(p_user, p_dst, p_t, p_msg, hist_acc_pos)
+                neg_access = _edge_logits(user_rep, neg_res, tv_rep, msg_rep, hist_acc_neg).view(P, K)
 
                 # --- CONTEXTUAL NEGATIVES: Gaussian noise on the message, a different mechanism
                 # from the eval's discrete signal flips; keeps the feature head using the message.
                 neg_msg = p_msg + torch.randn_like(p_msg) * 0.5
-                neg_out_ctx = _edge_logits(p_user, p_dst, p_t, neg_msg, hist_acc_pos, edge_kind=EDGE_ACCESS)
+                neg_out_ctx = _edge_logits(p_user, p_dst, p_t, neg_msg, hist_acc_pos)
 
                 # --- SELF-SUPERVISED LOSS ---
                 #   * InfoNCE ranking per edge: among {true endpoint, K random alternatives}
@@ -930,35 +954,36 @@ def train_tgn(cfg: TGNConfig | None = None, *, dataset: "StreamData | None" = No
                         + F.binary_cross_entropy_with_logits(neg_out_ctx, torch.zeros_like(neg_out_ctx))
                 )
 
-                def _binding_loss(p_src, p_dst_b, src_rep_b, neg_b, src_list, dst_list, kind=None):
+                def _binding_loss(p_src, p_dst_b, src_rep_b, neg_b, src_list, dst_list):
                     """InfoNCE + positive-BCE for one zero-message binding edge group."""
                     hist_pos = model.compute_hist_feats(src_list, dst_list, device)
                     hist_neg = model.compute_hist_feats(src_rep_b.tolist(), neg_b.tolist(), device)
-                    pos = _edge_logits(p_src, p_dst_b, p_t, zeros_msg, hist_pos, edge_kind=kind)
-                    neg = _edge_logits(src_rep_b, neg_b, tv_rep, zeros_msg_rep, hist_neg, edge_kind=kind).view(P, K)
+                    pos = _edge_logits(p_src, p_dst_b, p_t, zeros_msg, hist_pos)
+                    neg = _edge_logits(src_rep_b, neg_b, tv_rep, zeros_msg_rep, hist_neg).view(P, K)
                     return (
                             F.cross_entropy(torch.cat([pos.unsqueeze(1), neg], dim=1), target)
                             + F.binary_cross_entropy_with_logits(pos, torch.ones_like(pos))
                     )
 
                 if has_bind:  # device → user
-                    loss = loss + _binding_loss(p_device, p_user, dev_rep, neg_usr, dev_l, u_l, kind=EDGE_DEV_USER)
+                    loss = loss + _binding_loss(p_device, p_user, dev_rep, neg_usr, dev_l, u_l)
                 if has_config:
-                    loss = loss + _binding_loss(p_config, p_user, cfg_rep, neg_cusr, cfg_l, u_l, kind=EDGE_CFG_USER)  # config → user
+                    loss = loss + _binding_loss(p_config, p_user, cfg_rep, neg_cusr, cfg_l, u_l)  # config → user
                     if has_bind:
-                        loss = loss + _binding_loss(p_config, p_device, cfg_rep, neg_cdev, cfg_l,
-                                                    dev_l, kind=EDGE_CFG_DEV)  # config → device
+                        loss = loss + _binding_loss(p_config, p_device, cfg_rep, neg_cdev, cfg_l, dev_l,)  # config → device
                     if has_src:
-                        loss = loss + _binding_loss(p_source, p_config, src_rep, neg_scfg, src_l,
-                                                    cfg_l, kind=EDGE_SRC_CFG)  # source → config
+                        loss = loss + _binding_loss(p_source, p_config, src_rep, neg_scfg, src_l, cfg_l)  # source → config
                 if has_src and has_bind and not has_config:  # source → device (ablation)
-                    loss = loss + _binding_loss(p_source, p_device, src_rep, neg_dev, src_l, dev_l, kind=EDGE_SRC_DEV)
+                    loss = loss + _binding_loss(p_source, p_device, src_rep, neg_dev, src_l, dev_l)
                 loss.backward()
-                optimizer_ft.step()  # <--- AGGIORNA SOLO I PESI DELL'MLP!
-                total_ft_loss += loss.item()
-                ft_bar.set_postfix(loss=f"{loss.item():.4f}", refresh=False)
+                optimizer_ft.step()
+                batch_ft_loss = loss.item()
+                total_ft_loss += batch_ft_loss
+                global_step_ft += 1
+                if writer is not None and (global_step_ft % 10 == 0 or i == num_train_batches - 1):
+                    writer.add_scalar("Stage2/Batch_Loss", batch_ft_loss, global_step_ft)
+                ft_bar.set_postfix(loss=f"{batch_ft_loss:.4f}", refresh=False)
 
-                # Predict-then-update dello stato temporale (righe 668-704)
                 # Predict-then-update: commit the benign events (memory, neighbours, recency,
                 # counters) in serving edge order: source→config, config→device, config→user,
                 # device→user, user→resource.
@@ -1002,9 +1027,12 @@ def train_tgn(cfg: TGNConfig | None = None, *, dataset: "StreamData | None" = No
             # current_ft_lr = scheduler_ft.get_last_lr()[0]
             # print(f"Stage 2 Epoch {ft_epoch:02d} | MLP Loss: {total_ft_loss / max(num_train_batches, 1):.4f} | LR: {current_ft_lr: .7f}")
             # scheduler_ft.step()
-            print(f"Stage 2 Epoch {ft_epoch:02d} | MLP Loss: {total_ft_loss / max(num_train_batches, 1):.4f}")
+            stage2_epoch_loss = total_ft_loss / max(num_train_batches, 1)
+            print(f"Stage 2 Epoch {ft_epoch:02d} | MLP Loss: {stage2_epoch_loss:.4f}")
+            if writer is not None:
+                writer.add_scalar("Stage2/Epoch_Loss", stage2_epoch_loss, ft_epoch)
 
-    # --- THRESHOLD CALIBRATION (held-out benign slice) -----------------------
+    # ------ THRESHOLD CALIBRATION (held-out benign slice) ------
     print("\n--- THRESHOLD CALIBRATION (on the benign validation stream) ---")
     def _slice(arr, lo, hi):
         return arr[lo:hi] if arr is not None else None
@@ -1203,6 +1231,26 @@ def train_tgn(cfg: TGNConfig | None = None, *, dataset: "StreamData | None" = No
         print(f"  {name:10s} | {vs_rule[type_id]} | n={int(l_sel.sum()):4d} | AUC: {t_auc:.4f} | "
               f"AP: {t_ap:.4f} | Recall@thr: {t_recall:.4f}")
 
+    if writer is not None:
+        eval_step = cfg.epochs + getattr(cfg, "ft_epochs", 0)
+        writer.add_scalar("Eval/AUC", auc, eval_step)
+        writer.add_scalar("Eval/AP", ap, eval_step)
+        writer.add_scalar("Eval/Precision_routed", precision, eval_step)
+        writer.add_scalar("Eval/Recall_routed", recall, eval_step)
+        if not np.isnan(new_lat_recall):
+            writer.add_scalar("Eval/Lateral_Recall_routed", new_lat_recall, eval_step)
+        if not np.isnan(old_lat_recall):
+            writer.add_scalar("Eval/Lateral_Recall_global", old_lat_recall, eval_step)
+        if not np.isnan(new_fpr):
+            writer.add_scalar("Eval/FPR_routed", new_fpr, eval_step)
+        if not np.isnan(old_fpr):
+            writer.add_scalar("Eval/FPR_global", old_fpr, eval_step)
+
+        for type_name, m in per_type.items():
+            writer.add_scalar(f"PerType/{type_name}_AUC", m["auc"], eval_step)
+            writer.add_scalar(f"PerType/{type_name}_AP", m["ap"], eval_step)
+            writer.add_scalar(f"PerType/{type_name}_Recall_routed", m["recall"], eval_step)
+
     # --- COLD-START CONDITIONING (lateral) -----------------------------------
     # Lateral recall split by whether the actor had benign history before the event (warmed)
     # or not (cold: detection not yet possible). Labels are used up to val_end; after that
@@ -1343,6 +1391,9 @@ def train_tgn(cfg: TGNConfig | None = None, *, dataset: "StreamData | None" = No
         )
         print(f"\nSaved checkpoint -> {TGN_CHECKPOINT_PATH}")
         print(f"Saved stats      -> {TGN_STATS_PATH}")
+
+    if writer is not None:
+        writer.close()
 
     return {
         "threshold": threshold,

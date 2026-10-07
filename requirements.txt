@@ -11,3 +11,4 @@ uvicorn[standard]>=0.29
 psutil>=5.9.0
 codecarbon
 aiohttp
+tensorboard>=2.15
