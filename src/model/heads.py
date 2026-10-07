@@ -80,7 +80,7 @@ class StructuralProjector(nn.Module):
             nn.Dropout(dropout),
             nn.Linear(in_channels * 2, in_channels),
         )
-        self.bn = nn.BatchNorm1d(in_channels, affine=False)
+        self.bn = nn.BatchNorm1d(in_channels, affine=False) # non-affine to prevent collapse
 
     def forward(self, x):
         h = self.net(x)

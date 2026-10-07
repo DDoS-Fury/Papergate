@@ -584,7 +584,6 @@ def train_tgn(cfg: TGNConfig | None = None, *, dataset: "StreamData | None" = No
             if has_bind:
                 neg_usr = _sample_structural_negatives(
                     P * K, data.usr_num, data.usr_lo, device, avoid=user_rep,
-                    hard_pool=p_user, hard_ratio=0.25
                 )
                 dev_rep = p_device.repeat_interleave(K)
             if has_src:
@@ -593,23 +592,19 @@ def train_tgn(cfg: TGNConfig | None = None, *, dataset: "StreamData | None" = No
                 cfg_rep = p_config.repeat_interleave(K)
                 neg_cusr = _sample_structural_negatives(  # config→user negatives
                     P * K, data.usr_num, data.usr_lo, device, avoid=user_rep,
-                    hard_pool=p_user, hard_ratio=0.25
                 )
                 if has_bind:
                     neg_cdev = _sample_structural_negatives(  # config→device negatives
                         P * K, data.dev_num, data.dev_lo, device, avoid=dev_rep,
-                        hard_pool=p_device, hard_ratio=0.25
                     )
                 if has_src:
                     neg_scfg = _sample_structural_negatives(  # source→config negatives
                         P * K, data.cfg_num, data.cfg_lo, device, avoid=cfg_rep,
-                        hard_pool=p_config, hard_ratio=0.25
                     )
             if has_src and has_bind and not has_config:
                 # source→device binding (config-node ablation)
                 neg_dev = _sample_structural_negatives(
                     P * K, data.dev_num, data.dev_lo, device, avoid=dev_rep,
-                    hard_pool=p_device, hard_ratio=0.25
                 )
 
             # Expand every involved node to its stored temporal neighbourhood and embed
@@ -843,7 +838,6 @@ def train_tgn(cfg: TGNConfig | None = None, *, dataset: "StreamData | None" = No
                 if has_bind:
                     neg_usr = _sample_structural_negatives(
                         P * K, data.usr_num, data.usr_lo, device, avoid=user_rep,
-                        hard_pool=p_user, hard_ratio=0.25
                     )
                     dev_rep = p_device.repeat_interleave(K)
                 if has_src:
@@ -852,23 +846,19 @@ def train_tgn(cfg: TGNConfig | None = None, *, dataset: "StreamData | None" = No
                     cfg_rep = p_config.repeat_interleave(K)
                     neg_cusr = _sample_structural_negatives(  # config→user negatives
                         P * K, data.usr_num, data.usr_lo, device, avoid=user_rep,
-                        hard_pool=p_user, hard_ratio=0.25
                     )
                     if has_bind:
                         neg_cdev = _sample_structural_negatives(  # config→device negatives
                             P * K, data.dev_num, data.dev_lo, device, avoid=dev_rep,
-                            hard_pool=p_device, hard_ratio=0.25
                         )
                     if has_src:
                         neg_scfg = _sample_structural_negatives(  # source→config negatives
                             P * K, data.cfg_num, data.cfg_lo, device, avoid=cfg_rep,
-                            hard_pool=p_config, hard_ratio=0.25
                         )
                 if has_src and has_bind and not has_config:
                     # source→device binding (config-node ablation)
                     neg_dev = _sample_structural_negatives(
                         P * K, data.dev_num, data.dev_lo, device, avoid=dev_rep,
-                        hard_pool=p_device, hard_ratio=0.25
                     )
 
                 # Expand every involved node to its stored temporal neighbourhood and embed
