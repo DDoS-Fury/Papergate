@@ -68,22 +68,17 @@ EDGE_SRC_CFG = "src>cfg"
 EDGE_SRC_DEV = "src>dev"
 
 
-class StructuralProjector(nn.Module):
-    """Structural head: projection mapping node embeddings into a metric space for cosine similarity scoring.
-    Includes non-affine batch normalization to prevent dimensional collapse onto a single direction vector.
-    """
+class StructuralProjector(nn.Sequential):
+    """Structural head: projection mapping node embeddings into a metric space for cosine similarity scoring."""
+
     def __init__(self, in_channels, hidden_layers=2, dropout=0.1):
-        super().__init__()
-        self.net = nn.Sequential(
+        super().__init__(
             nn.Linear(in_channels, in_channels * 2),
             nn.ReLU(),
             nn.Dropout(dropout),
             nn.Linear(in_channels * 2, in_channels),
         )
-        self.bn = nn.BatchNorm1d(in_channels, affine=False) # non-affine to prevent collapse
 
-    def forward(self, x):
-        h = self.net(x)
-        if h.size(0) > 1 or not self.training:
-            h = self.bn(h)
-        return h
+    @property
+    def net(self):
+        return self
