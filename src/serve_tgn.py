@@ -79,6 +79,7 @@ def build_model(hp: dict, device: torch.device) -> ZTATemporalGraphNetwork:
     # Plain-attribute toggles are not in the state_dict: restore them from hp
     # (default True = the training default).
     model.use_precursor = bool(hp.get("use_precursor", True))
+    model.edge_combine = str(hp.get("edge_combine", "max")) # old checkpoint: max
     # Must match training, else source nodes carry a feature the model never learned.
     model.use_source_internal = bool(hp.get("use_source_internal", False))
     # Neighbour loader lives outside the state_dict; load_model restores its contents.
@@ -224,17 +225,50 @@ def chain_edge_logits(model, groups, t, device) -> dict:
         out[kind] = -model.score(z, nf, h_idx, assoc[src], assoc[dst], msg, d_pair, d_src, hist)
     return out
 
+def _fisher_logodds(cal: torch.Tensor) -> torch.Tensor:
+    """Fisher's method over ``[K, B]`` calibrated edge log-odds → combined log-odds ``[B]``.
+
+    ``ℓ_k = log((1-p_k)/p_k)`` ⇒ ``-log p_k = softplus(ℓ_k)``. ``X = -2 Σ log p_k`` is χ²(2K)
+    under independence, with survival function ``exp(-X/2) Σ_{i<K} (X/2)^i / i!``, evaluated
+    in log space (float64). The edges share nodes, so the p-value is not exact: thresholds
+    are refitted on the combined score anyway, only the ranking matters.
+    """
+    k = cal.size(0)
+    h = torch.nn.functional.softplus(cal).sum(0).clamp(min=1e-300)  # X / 2
+    i = torch.arange(k, dtype=torch.float64, device=cal.device).unsqueeze(1)
+    log_terms = i * torch.log(h).unsqueeze(0) - torch.lgamma(i + 1)
+    log_p = (-h + torch.logsumexp(log_terms, dim=0)).clamp(max=-1e-15)
+    return torch.log(-torch.expm1(log_p)) - log_p
+
 
 def combine_edge_logits(model, edge_logits: dict) -> torch.Tensor:
-    """Event anomaly logit: the max over its edges of the (benign-calibrated) edge logits.
+    """Event anomaly logit from its (benign-calibrated) edge logits.
 
-    Without ``model.edge_calib`` (``edge_calibration=False``) this is the plain max.
+    ``model.edge_combine``: ``"max"`` (default) = most surprising edge; ``"fisher"`` =
+    Fisher's combination of the edges' benign p-values (needs ``model.edge_calib``, else
+    the logits are not p-value log-odds and it falls back to max).
     """
-    out = None
-    for kind, logit in edge_logits.items():
-        c = calibrated_edge_logit(model, kind, logit)
-        out = c if out is None else torch.maximum(out, c)
+    cal = [calibrated_edge_logit(model, kind, logit) for kind, logit in edge_logits.items()]
+    mode = getattr(model, "edge_combine", "max")
+    if mode == "fisher" and getattr(model, "edge_calib", None) and len(cal) > 1:
+        return _fisher_logodds(torch.stack([c.to(torch.float64) for c in cal]))
+    if mode not in ("max", "fisher"):
+        raise ValueError(f"unknown edge_combine={mode!r}")
+    out = cal[0]
+    for c in cal[1:]:
+        out = torch.maximum(out, c)
     return out
+
+# def combine_edge_logits(model, edge_logits: dict) -> torch.Tensor:
+#     """Event anomaly logit: the max over its edges of the (benign-calibrated) edge logits.
+#
+#     Without ``model.edge_calib`` (``edge_calibration=False``) this is the plain max.
+#     """
+#     out = None
+#     for kind, logit in edge_logits.items():
+#         c = calibrated_edge_logit(model, kind, logit)
+#         out = c if out is None else torch.maximum(out, c)
+#     return out
 
 
 @torch.no_grad()

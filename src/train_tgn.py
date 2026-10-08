@@ -43,6 +43,7 @@ from torch.optim import AdamW
 from torch.optim.lr_scheduler import CosineAnnealingLR
 from sklearn.metrics import average_precision_score, roc_auc_score
 from tqdm import tqdm
+from scipy.special import logit as _logit, expit as expit_np
 
 try:
     from torch.utils.tensorboard import SummaryWriter
@@ -122,10 +123,9 @@ def fit_thresholds(scores, labels, v_types, v_msg, cfg):
         # No lateral example in the window: fall back to the FPR threshold.
         t_clean = t_unsup
     else:
-        clean_cap = min(getattr(cfg, "clean_fpr_cap", 0.012), 0.012)
         t_clean = cost_sensitive_threshold(
             scores[mask], cal_labels_, cost_ratio=cfg.cost_ratio,
-            target_fpr_cap=clean_cap,
+            target_fpr_cap=cfg.clean_fpr_cap,
         )
 
     # Dirty threshold: cost-sensitive on contextual anomalies if present, else dirty benign quantile.
@@ -134,7 +134,7 @@ def fit_thresholds(scores, labels, v_types, v_msg, cfg):
     if cal_labels_dirty.sum() > 0:
         t_dirty = cost_sensitive_threshold(
             scores[mask_dirty], cal_labels_dirty, cost_ratio=cfg.cost_ratio,
-            target_fpr_cap=0.75,
+            target_fpr_cap=cfg.dirty_fpr_cap,
         )
     elif dirty_benign.size > 0:
         t_dirty = float(np.quantile(dirty_benign, 1.0 - cfg.target_fpr))
@@ -330,6 +330,70 @@ def _rule_baseline(test_msg):
         | (test_msg[:, 3] == 1.0)
     ).astype(int)
 
+def precursor_report(tag, scores, labels, types, msg, shift, thr_clean, thr_dirty):
+    """Routed FPR / recall split by whether the kill-chain precursor shifted the event, and
+    the same decision with the shift removed (counterfactual, same thresholds)."""
+    shift = np.asarray(shift, dtype=np.float64)
+    dirty = _rule_baseline(msg).astype(bool)
+    pred = routed_predict(scores, dirty, thr_clean, thr_dirty).astype(bool)
+    pred_ns = routed_predict(
+        expit_np(_logit(np.asarray(scores, dtype=np.float64)) - shift),
+        dirty, thr_clean, thr_dirty,
+    ).astype(bool)
+    armed = shift > 0
+    benign = types == 0
+    fp = pred & benign
+
+    def _rate(p, m):
+        return float(p[m].mean()) if m.any() else float("nan")
+
+    print(f"\n--- PRECURSOR DIAGNOSTIC ({tag}) ---")
+    print(f"  benign FPR: with shift={_rate(pred, benign):.4f} | without={_rate(pred_ns, benign):.4f}")
+    for name, m in (("armed", armed), ("unarmed", ~armed)):
+        print(f"  benign {name:8s}: n={int((benign & m).sum()):6d} | FPR={_rate(pred, benign & m):.4f}")
+    print(f"  share of benign FPs on armed events: {fp[armed].sum() / max(int(fp.sum()), 1):.3f}")
+    for ty, name in ((3, "lateral"), (4, "cred-theft")):
+        sel = types == ty
+        if not sel.any():
+            continue
+        print(f"  {name:10s}: recall with shift={_rate(pred, sel):.4f} | without={_rate(pred_ns, sel):.4f} "
+              f"| armed {int((sel & armed).sum())}/{int(sel.sum())}")
+
+
+def combine_report(model, val_extra, val_types, val_msg, test_extra, test_types, target_fpr):
+    """Offline comparison of the edge-combination rules on the recorded edge logits.
+
+    Same arming as the run (shifts are reused, not replayed): a first-order comparison.
+    Works on logits (comb + shift), not on expit scores, which saturate at 1.0.
+    """
+    prev = getattr(model, "edge_combine", "max")
+    clean_benign_v = (val_types == 0) & ~_rule_baseline(val_msg).astype(bool)
+    print("\n--- EDGE COMBINATION (offline, recorded logits) ---")
+    for mode in ("max", "fisher"):
+        model.edge_combine = mode
+
+        def _lg(extra):
+            comb = combine_edge_logits(model, {
+                k: torch.as_tensor(v) for k, v in extra["edge_logits"].items()
+            }).numpy()
+            return comb + extra["shift"]
+
+        lv, lt = _lg(val_extra), _lg(test_extra)
+        thr = float(np.quantile(lv[clean_benign_v], 1.0 - target_fpr))
+        benign = test_types == 0
+        parts = []
+        for ty, name in ((3, "lateral"), (4, "theft")):
+            pos = test_types == ty
+            if not pos.any():
+                continue
+            sel = benign | pos
+            lab = pos[sel].astype(int)
+            parts.append(f"{name} AUC={roc_auc_score(lab, lt[sel]):.4f} "
+                         f"AP={average_precision_score(lab, lt[sel]):.4f} "
+                         f"R={float((lt[pos] >= thr).mean()):.4f}")
+        print(f"  {mode:6s} | " + " | ".join(parts)
+              + f" | benign FPR={float((lt[benign] >= thr).mean()):.4f} (val clean @{target_fpr})")
+    model.edge_combine = prev
 
 # TODO: checks if it works as expected
 def _sample_structural_negatives(num_events, num_res, res_lo, device, *, avoid=None, hard_pool=None, hard_ratio=0.4):
@@ -543,6 +607,7 @@ def train_tgn(cfg: TGNConfig | None = None, *, dataset: "StreamData | None" = No
     # Kill-chain precursor knobs (serving-time prior; see serve_tgn.precursor_shift).
     model.precursor_half_life = cfg.precursor_half_life
     model.precursor_max_shift = cfg.precursor_max_shift
+    model.edge_combine = cfg.edge_combine
     if not (use_struct_head and use_hash_identity and use_hist_feats and use_precursor):
         print(f"[ablation] use_struct_head={use_struct_head} use_hash_identity={use_hash_identity} "
               f"use_hist_feats={use_hist_feats} use_precursor={use_precursor}")
@@ -1050,6 +1115,10 @@ def train_tgn(cfg: TGNConfig | None = None, *, dataset: "StreamData | None" = No
             if writer is not None:
                 writer.add_scalar("Stage2/Epoch_Loss", stage2_epoch_loss, ft_epoch)
 
+    # Trained weights before calibration/eval: a crash there no longer costs the training.
+    if writer is not None:
+        torch.save(model.state_dict(), os.path.join(log_dir, "weights_pre_calib.pt"))
+
     # ------ THRESHOLD CALIBRATION (held-out benign slice) ------
     print("\n--- THRESHOLD CALIBRATION (on the benign validation stream) ---")
     def _slice(arr, lo, hi):
@@ -1089,7 +1158,7 @@ def train_tgn(cfg: TGNConfig | None = None, *, dataset: "StreamData | None" = No
     model.recent_alert.clear()
     pre_cal_state = _snapshot_runtime()
 
-    def _cal_replay(desc, thr=None, thr_dirty=None, thr_arm=None, gate_by_label=True, **kw):
+    def _cal_replay(desc, thr=None, thr_dirty=None, thr_arm=None, gate_by_label=False, **kw):
         """Replay the validation slice from the pre-calibration state."""
         _restore_runtime(pre_cal_state)
         return _replay(
@@ -1105,16 +1174,12 @@ def train_tgn(cfg: TGNConfig | None = None, *, dataset: "StreamData | None" = No
         return fit_thresholds(scores, labels, types[train_end:val_end].numpy(),
                               msg[train_end:val_end].numpy(), cfg)
 
+    # Pass A: test gate (signal-clean commits) and sensor-only arming: the feedback does not
+    # depend on any threshold, so the per-edge reference fitted on it is exact and its
+    # scores can be recomputed instead of replayed.
     scores_a, labels_a, extra_a = _cal_replay(
-        "Calibration pass A (val replay, no threshold)", return_edge_logits=True,
-        gate_by_label=True,
+        "Calibration pass A (val replay, sensor-only arming)", return_edge_logits=True,
     )
-    # Per-edge benign calibration: raw edge logits live on different scales (access ≈ -10,
-    # bindings ≈ -15), so the max would pick the access edge and drown the bindings, where
-    # lateral movement and theft show. Each kind is mapped to the p-value of its own
-    # signal-clean benign reference (no attack label); see serve_tgn.calibrated_edge_logit.
-    # Pass A's feedback uses sensor alarms only, so fitting on it is exact and its scores
-    # are recomputed here instead of replayed.
     set_edge_calibration(model, None)
     if cfg.edge_calibration:
         ref = (labels_a == 0) & ~_rule_baseline(msg[train_end:val_end].numpy()).astype(bool)
@@ -1127,16 +1192,29 @@ def train_tgn(cfg: TGNConfig | None = None, *, dataset: "StreamData | None" = No
         }).numpy()
         scores_a = anomaly_score(comb + extra_a["shift"])
         print(f"Per-edge benign calibration fitted on {int(ref.sum())} clean benign val events "
-              f"({', '.join(extra_a['edge_logits'])})")
-    val_scores, val_labels = _cal_replay(
-        "Calibration pass B (val replay, test gate)", thr=None, thr_dirty=None,
-        thr_arm=None, gate_by_label=True,
-    )
+              f"({', '.join(extra_a['edge_logits'])}) | combine={cfg.edge_combine}")
+    val_scores, val_labels, extra_v = scores_a, labels_a, extra_a
     threshold, threshold_dirty, threshold_clean_unsup, benign_val_scores = _fit_thresholds(
         val_scores, val_labels
     )
-    # The label-free clean threshold is also the kill-chain arm threshold: the test replay
-    # arms on it, and save_model persists it so serving arms on the same one.
+    # Passes B: replay under the current thresholds with the test's score-driven arming, so
+    # the precursor shifts (and the benign tail they create) match the test replay; refit the
+    # decision thresholds. The arm threshold stays frozen at its pass-A value (sensor-only
+    # arming, independent of any threshold): refitting it feeds back on itself (arming →
+    # heavier benign tail → higher arm threshold → less arming → ...) and oscillates.
+    thr_arm_frozen = threshold_clean_unsup
+    for it in range(cfg.calib_iters):
+        val_scores, val_labels, extra_v = _cal_replay(
+            f"Calibration pass B{it + 1}/{cfg.calib_iters} (val replay, test gate + arming)",
+            thr=threshold, thr_dirty=threshold_dirty, thr_arm=thr_arm_frozen,
+            return_edge_logits=True,
+        )
+        threshold, threshold_dirty, thr_unsup_b, benign_val_scores = _fit_thresholds(
+            val_scores, val_labels
+        )
+        print(f"  pass B{it + 1}: thr_clean={threshold:.6f} thr_dirty={threshold_dirty:.6f} "
+              f"(thr_arm frozen={thr_arm_frozen:.6f}, unsup refit={thr_unsup_b:.6f})")
+    threshold_clean_unsup = thr_arm_frozen
     model.threshold_arm = threshold_clean_unsup
     val_types = types[train_end:val_end].numpy()
     val_msg = msg[train_end:val_end].numpy()
@@ -1177,13 +1255,14 @@ def train_tgn(cfg: TGNConfig | None = None, *, dataset: "StreamData | None" = No
     # Memory + neighbour history legitimately continue from the (benign) calibration
     # slice; the alert state does not.
     model.recent_alert.clear()  # don't let calibration-slice alerts pre-condition the test stream
-    test_scores, test_labels = _replay(
+    test_scores, test_labels, extra_t = _replay(
         model, _slice(source_arr, val_end, n), _slice(device_arr, val_end, n),
         user_arr[val_end:], dst[val_end:], t[val_end:], msg[val_end:], y[val_end:],
         device, config_nodes=_slice(config_arr, val_end, n),
         threshold=threshold, threshold_dirty=threshold_dirty,
         threshold_arm=threshold_clean_unsup, gate_by_label=False,
         batch_size=cfg.eval_batch_size, desc="Inferenza (replay test)",
+        return_edge_logits=True,
     )
 
     test_types = types[val_end:].numpy()
@@ -1249,6 +1328,14 @@ def train_tgn(cfg: TGNConfig | None = None, *, dataset: "StreamData | None" = No
                           "recall_global": t_recall_global, "n": int(l_sel.sum())}
         print(f"  {name:10s} | {vs_rule[type_id]} | n={int(l_sel.sum()):4d} | AUC: {t_auc:.4f} | "
               f"AP: {t_ap:.4f} | Recall@thr: {t_recall:.4f}")
+
+    val_types_np = types[train_end:val_end].numpy()
+    val_msg_np = msg[train_end:val_end].numpy()
+    precursor_report("val", val_scores, val_labels, val_types_np, val_msg_np,
+                     extra_v["shift"], threshold, threshold_dirty)
+    precursor_report("test", test_scores, test_labels, test_types, test_msg,
+                     extra_t["shift"], threshold, threshold_dirty)
+    combine_report(model, extra_v, val_types_np, val_msg_np, extra_t, test_types, cfg.target_fpr)
 
     if writer is not None:
         eval_step = cfg.epochs + getattr(cfg, "ft_epochs", 0)
@@ -1397,6 +1484,7 @@ def train_tgn(cfg: TGNConfig | None = None, *, dataset: "StreamData | None" = No
             "guest_device_fallback": cfg.guest_device_fallback,
             "use_precursor": use_precursor,
             "edge_calibration": cfg.edge_calibration,
+            "edge_combine": cfg.edge_combine,
         }
         op_new = operating_point(test_scores, test_labels, test_types, threshold)
         model.recent_alert.clear()

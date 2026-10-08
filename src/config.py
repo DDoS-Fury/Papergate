@@ -187,7 +187,16 @@ class TGNConfig:
     # re-challenge); calibration.cost_sensitive_threshold.
     cost_ratio: float = 20.0
     # Cap on the clean-stream benign FPR during that search.
-    clean_fpr_cap: float = 0.05
+    clean_fpr_cap: float = 0.012
+    # Cap on the dirty-stream benign FPR of the cost-sensitive contextual threshold.
+    dirty_fpr_cap: float = 0.75
+    # Event logit from the per-edge calibrated log-odds: "max" (most surprising edge) or
+    # "fisher" (Fisher's method: accumulates weak evidence across bindings).
+    edge_combine: str = "max"
+    # Calibration replays after pass A refitting the decision thresholds (the precursor arm
+    # threshold is frozen at pass A, so one pass is already self-consistent).
+    calib_iters: int = 1
+
     # Per-edge benign calibration before the max over edges (serve_tgn.calibrated_edge_logit);
     # edge_calib_tail_q = quantile above which the reference gets an exponential tail.
     edge_calibration: bool = True
