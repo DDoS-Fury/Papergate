@@ -106,23 +106,41 @@ def fit_thresholds(scores, labels, v_types, v_msg, cfg):
     benign = scores[labels == 0]
     if benign.size == 0:
         raise RuntimeError("No benign events in the validation slice for calibration.")
-    t_dirty = float(np.quantile(benign, 1.0 - cfg.target_fpr))
     v_clean = ~_rule_baseline(v_msg).astype(bool)
+    clean_benign = scores[v_clean & (labels == 0)]
+    dirty_benign = scores[(~v_clean) & (labels == 0)]
+
     # Label-free alternative to t_clean (benign quantile over signal-clean events), stored
     # in the calibration metadata for deployments without red-team labels.
-    clean_benign = scores[v_clean & (labels == 0)]
     t_unsup = float(np.quantile(clean_benign, 1.0 - cfg.target_fpr)) if clean_benign.size \
-        else t_dirty
+        else float(np.quantile(benign, 1.0 - cfg.target_fpr))
+
+    # Clean threshold: cost-sensitive on lateral movement within the clean stream.
     mask = v_clean & ((labels == 0) | (v_types == 3))
     cal_labels_ = (v_types[mask] == 3).astype(int)
     if cal_labels_.sum() == 0:
         # No lateral example in the window: fall back to the FPR threshold.
-        t_clean = t_dirty
+        t_clean = t_unsup
     else:
+        clean_cap = min(getattr(cfg, "clean_fpr_cap", 0.012), 0.012)
         t_clean = cost_sensitive_threshold(
             scores[mask], cal_labels_, cost_ratio=cfg.cost_ratio,
-            target_fpr_cap=cfg.clean_fpr_cap,
+            target_fpr_cap=clean_cap,
         )
+
+    # Dirty threshold: cost-sensitive on contextual anomalies if present, else dirty benign quantile.
+    mask_dirty = (~v_clean) & ((labels == 0) | (v_types == 2))
+    cal_labels_dirty = (v_types[mask_dirty] == 2).astype(int)
+    if cal_labels_dirty.sum() > 0:
+        t_dirty = cost_sensitive_threshold(
+            scores[mask_dirty], cal_labels_dirty, cost_ratio=cfg.cost_ratio,
+            target_fpr_cap=0.75,
+        )
+    elif dirty_benign.size > 0:
+        t_dirty = float(np.quantile(dirty_benign, 1.0 - cfg.target_fpr))
+    else:
+        t_dirty = t_unsup
+
     return t_clean, t_dirty, t_unsup, benign
 
 
@@ -1068,15 +1086,16 @@ def train_tgn(cfg: TGNConfig | None = None, *, dataset: "StreamData | None" = No
         model.src_count = dict(snap["src_count"])
         model.recent_alert = dict(snap["recent_alert"])
 
+    model.recent_alert.clear()
     pre_cal_state = _snapshot_runtime()
 
-    def _cal_replay(desc, thr=None, thr_dirty=None, thr_arm=None, **kw):
+    def _cal_replay(desc, thr=None, thr_dirty=None, thr_arm=None, gate_by_label=True, **kw):
         """Replay the validation slice from the pre-calibration state."""
         _restore_runtime(pre_cal_state)
         return _replay(
             model, _slice(source_arr, train_end, val_end), _slice(device_arr, train_end, val_end),
             user_arr[train_end:val_end], dst[train_end:val_end], t[train_end:val_end],
-            msg[train_end:val_end], y[train_end:val_end], device, gate_by_label=False,
+            msg[train_end:val_end], y[train_end:val_end], device, gate_by_label=gate_by_label,
             threshold=thr, threshold_dirty=thr_dirty, threshold_arm=thr_arm,
             config_nodes=_slice(config_arr, train_end, val_end),
             batch_size=cfg.eval_batch_size, desc=desc, **kw,
@@ -1087,7 +1106,8 @@ def train_tgn(cfg: TGNConfig | None = None, *, dataset: "StreamData | None" = No
                               msg[train_end:val_end].numpy(), cfg)
 
     scores_a, labels_a, extra_a = _cal_replay(
-        "Calibration pass A (val replay, no threshold)", return_edge_logits=True
+        "Calibration pass A (val replay, no threshold)", return_edge_logits=True,
+        gate_by_label=True,
     )
     # Per-edge benign calibration: raw edge logits live on different scales (access ≈ -10,
     # bindings ≈ -15), so the max would pick the access edge and drown the bindings, where
@@ -1108,10 +1128,9 @@ def train_tgn(cfg: TGNConfig | None = None, *, dataset: "StreamData | None" = No
         scores_a = anomaly_score(comb + extra_a["shift"])
         print(f"Per-edge benign calibration fitted on {int(ref.sum())} clean benign val events "
               f"({', '.join(extra_a['edge_logits'])})")
-    thr_a, thr_dirty_a, thr_arm_a, _ = _fit_thresholds(scores_a, labels_a)
     val_scores, val_labels = _cal_replay(
-        "Calibration pass B (val replay, test gate)", thr=thr_a, thr_dirty=thr_dirty_a,
-        thr_arm=thr_arm_a,
+        "Calibration pass B (val replay, test gate)", thr=None, thr_dirty=None,
+        thr_arm=None, gate_by_label=True,
     )
     threshold, threshold_dirty, threshold_clean_unsup, benign_val_scores = _fit_thresholds(
         val_scores, val_labels
@@ -1184,7 +1203,7 @@ def train_tgn(cfg: TGNConfig | None = None, *, dataset: "StreamData | None" = No
     # --- HEADLINE: lateral recall, global FPR threshold vs routed cost-sensitive decision ---
     lat = test_types == 3
     benign_test = test_labels == 0
-    old_preds = (test_scores >= threshold_dirty).astype(int)
+    old_preds = (test_scores >= threshold_clean_unsup).astype(int)
     old_lat_recall = float(old_preds[lat].mean()) if lat.any() else float("nan")
     new_lat_recall = float(test_preds[lat].mean()) if lat.any() else float("nan")
     old_fpr = float(old_preds[benign_test].mean()) if benign_test.any() else float("nan")
@@ -1380,6 +1399,7 @@ def train_tgn(cfg: TGNConfig | None = None, *, dataset: "StreamData | None" = No
             "edge_calibration": cfg.edge_calibration,
         }
         op_new = operating_point(test_scores, test_labels, test_types, threshold)
+        model.recent_alert.clear()
         save_model(
             model, registry, threshold, hp, TGN_CHECKPOINT_PATH, TGN_STATS_PATH,
             threshold_dirty=threshold_dirty,

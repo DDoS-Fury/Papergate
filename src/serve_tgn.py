@@ -295,9 +295,9 @@ def precursor_shift(model, src_idx: int, t_val: int) -> float:
     if not getattr(model, "use_precursor", False):
         return 0.0
     last = getattr(model, "recent_alert", {}).get(src_idx)
-    if last is None:
+    if last is None or t_val < last:
         return 0.0
-    dt = max(0.0, float(t_val) - float(last))
+    dt = float(t_val) - float(last)
     decay = 0.5 ** (dt / model.precursor_half_life)
     return model.precursor_max_shift * decay
 
