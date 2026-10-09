@@ -191,11 +191,18 @@ class TGNConfig:
     # Cap on the dirty-stream benign FPR of the cost-sensitive contextual threshold.
     dirty_fpr_cap: float = 0.75
     # Event logit from the per-edge calibrated log-odds: "max" (most surprising edge) or
-    # "fisher" (Fisher's method: accumulates weak evidence across bindings).
-    edge_combine: str = "max"
+    # "fisher" (Fisher's method: accumulates weak evidence across bindings). Fisher raised
+    # lateral/theft AP and theft recall at the val-1% threshold, and halved the test benign
+    # FPR drift at that threshold (2.1% → 1.2%).
+    edge_combine: str = "fisher"
     # Calibration replays after pass A refitting the decision thresholds (the precursor arm
     # threshold is frozen at pass A, so one pass is already self-consistent).
     calib_iters: int = 1
+    # Arm the kill-chain precursor also on the score (>= the label-free 1%-FPR threshold),
+    # besides sensor alarms and flagged events. Off: with a 72 h half-life it armed 61% (val)
+    # / 70% (test) of benign events, so the shift acted as a global offset behind 95% of the
+    # benign false positives and val→test FPR drift (the armed share grows along the stream).
+    precursor_arm_on_score: bool = False
 
     # Per-edge benign calibration before the max over edges (serve_tgn.calibrated_edge_logit);
     # edge_calib_tail_q = quantile above which the reference gets an exponential tail.

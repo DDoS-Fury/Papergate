@@ -1197,25 +1197,26 @@ def train_tgn(cfg: TGNConfig | None = None, *, dataset: "StreamData | None" = No
     threshold, threshold_dirty, threshold_clean_unsup, benign_val_scores = _fit_thresholds(
         val_scores, val_labels
     )
-    # Passes B: replay under the current thresholds with the test's score-driven arming, so
-    # the precursor shifts (and the benign tail they create) match the test replay; refit the
-    # decision thresholds. The arm threshold stays frozen at its pass-A value (sensor-only
-    # arming, independent of any threshold): refitting it feeds back on itself (arming →
-    # heavier benign tail → higher arm threshold → less arming → ...) and oscillates.
-    thr_arm_frozen = threshold_clean_unsup
+    # Passes B: replay under the current thresholds with the test's arming rule, so the
+    # precursor shifts (and the benign tail they create) match the test replay; refit the
+    # thresholds. The score arm threshold, when enabled, stays frozen at its pass-A value
+    # (sensor-only arming, independent of any threshold): refitting it feeds back on itself
+    # (arming → heavier benign tail → higher arm threshold → less arming → ...) and oscillates.
+    # threshold_clean_unsup keeps its refit value: it is the label-free 1%-FPR threshold
+    # reported as the global baseline and persisted in the calibration metadata.
+    thr_arm = threshold_clean_unsup if cfg.precursor_arm_on_score else None
     for it in range(cfg.calib_iters):
         val_scores, val_labels, extra_v = _cal_replay(
             f"Calibration pass B{it + 1}/{cfg.calib_iters} (val replay, test gate + arming)",
-            thr=threshold, thr_dirty=threshold_dirty, thr_arm=thr_arm_frozen,
+            thr=threshold, thr_dirty=threshold_dirty, thr_arm=thr_arm,
             return_edge_logits=True,
         )
-        threshold, threshold_dirty, thr_unsup_b, benign_val_scores = _fit_thresholds(
+        threshold, threshold_dirty, threshold_clean_unsup, benign_val_scores = _fit_thresholds(
             val_scores, val_labels
         )
         print(f"  pass B{it + 1}: thr_clean={threshold:.6f} thr_dirty={threshold_dirty:.6f} "
-              f"(thr_arm frozen={thr_arm_frozen:.6f}, unsup refit={thr_unsup_b:.6f})")
-    threshold_clean_unsup = thr_arm_frozen
-    model.threshold_arm = threshold_clean_unsup
+              f"thr_unsup={threshold_clean_unsup:.6f} (thr_arm={thr_arm})")
+    model.threshold_arm = thr_arm
     val_types = types[train_end:val_end].numpy()
     val_msg = msg[train_end:val_end].numpy()
     val_clean = ~_rule_baseline(val_msg).astype(bool)
@@ -1234,7 +1235,7 @@ def train_tgn(cfg: TGNConfig | None = None, *, dataset: "StreamData | None" = No
         f"threshold_dirty@FPR={cfg.target_fpr}: {threshold_dirty:.4f} "
         f"[signal-dirty events] | "
         f"threshold_clean_unsup@FPR={cfg.target_fpr}: {threshold_clean_unsup:.4f} "
-        f"[label-free alternative; persisted as the precursor arm threshold]"
+        f"[label-free alternative; arms the precursor only with precursor_arm_on_score]"
     )
     # Lateral recall/FPR trade-off the clean threshold was picked from (operator/OPA reference).
     if cal_labels.sum() > 0:
@@ -1260,7 +1261,7 @@ def train_tgn(cfg: TGNConfig | None = None, *, dataset: "StreamData | None" = No
         user_arr[val_end:], dst[val_end:], t[val_end:], msg[val_end:], y[val_end:],
         device, config_nodes=_slice(config_arr, val_end, n),
         threshold=threshold, threshold_dirty=threshold_dirty,
-        threshold_arm=threshold_clean_unsup, gate_by_label=False,
+        threshold_arm=model.threshold_arm, gate_by_label=False,
         batch_size=cfg.eval_batch_size, desc="Inferenza (replay test)",
         return_edge_logits=True,
     )
@@ -1485,6 +1486,7 @@ def train_tgn(cfg: TGNConfig | None = None, *, dataset: "StreamData | None" = No
             "use_precursor": use_precursor,
             "edge_calibration": cfg.edge_calibration,
             "edge_combine": cfg.edge_combine,
+            "precursor_arm_on_score": cfg.precursor_arm_on_score,
         }
         op_new = operating_point(test_scores, test_labels, test_types, threshold)
         model.recent_alert.clear()
