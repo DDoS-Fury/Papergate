@@ -7,6 +7,8 @@
 - :func:`causal_src_seen`: warmed / cold partition for the cold-start split.
 - :func:`tail_stream`: data-budget slicing of a stream.
 - :func:`binary_metrics`: precision / recall at a threshold.
+- :func:`incident_metrics` / :func:`incident_report`: incident-level detection (an attack is
+  blocked by its first flagged event) and credential theft split by mimicry variant.
 """
 
 from __future__ import annotations
@@ -17,7 +19,8 @@ import numpy as np
 
 # Per-event tensors of a generated stream (``SyntheticStream``); everything else in it
 # (node features, keys, node-space layout) describes the entity space and must not be cut.
-_PER_EVENT = ("source", "config", "device", "user", "dst", "t", "msg", "y", "types", "scenario")
+_PER_EVENT = ("source", "config", "device", "user", "dst", "t", "msg", "y", "types", "scenario",
+              "incident", "theft_variant")
 
 
 def tail_stream(stream, cfg, n_train: int):
@@ -43,7 +46,7 @@ def tail_stream(stream, cfg, n_train: int):
     n2 = n - start
     tf, vf = (n_train + 0.5) / n2, (val_len + 0.5) / n2
     assert int(n2 * tf) == n_train and int(n2 * vf) == val_len
-    cut = {k: getattr(stream, k)[start:] for k in _PER_EVENT}
+    cut = {k: getattr(stream, k)[start:] for k in _PER_EVENT if getattr(stream, k, None) is not None}
     return (dataclasses.replace(stream, **cut),
             dataclasses.replace(cfg, num_events=n2, train_frac=tf, val_frac=vf))
 
@@ -134,3 +137,86 @@ def binary_metrics(scores, labels, threshold: float) -> tuple[float, float]:
     precision = tp / (tp + fp) if (tp + fp) else 0.0
     recall = tp / (tp + fn) if (tp + fn) else 0.0
     return precision, recall
+
+
+def incident_metrics(pred, types, incident, attack_type: int, block_types=None) -> dict:
+    """Incident-level detection of the ``attack_type`` events of each incident.
+
+    An incident is *blocked* by its first flagged event among ``block_types`` (default: the
+    attack type alone): in Zero Trust that block re-authenticates / revokes the session, so
+    the later events would not be served. Per incident, ``served`` counts its ``attack_type``
+    events before the block (all of them when never blocked). Arrays are aligned and in
+    stream order; only incidents with an ``attack_type`` event in the window count, from
+    their first visible event.
+    """
+    pred, types, incident = (np.asarray(a) for a in (pred, types, incident))
+    block_types = (attack_type,) if block_types is None else tuple(block_types)
+    ids = np.unique(incident[(types == attack_type) & (incident >= 0)])
+    blocked, served, share = [], [], []
+    for k in ids:
+        idx = np.flatnonzero(incident == k)
+        target = types[idx] == attack_type
+        flags = pred[idx].astype(bool) & np.isin(types[idx], block_types)
+        cut = int(np.argmax(flags)) if flags.any() else len(idx)
+        n_served = int(target[:cut].sum())
+        blocked.append(bool(flags.any()))
+        served.append(n_served)
+        share.append(n_served / int(target.sum()))
+    n = len(ids)
+    return {
+        "n_incidents": n,
+        "n_events": int(((types == attack_type) & (incident >= 0)).sum()),
+        "blocked": float(np.mean(blocked)) if n else float("nan"),
+        "served_median": float(np.median(served)) if n else float("nan"),
+        "served_share": float(np.mean(share)) if n else float("nan"),
+    }
+
+
+# Credential-theft variant bits, mirrored from stream_synthetic (THEFT_*).
+_THEFT_BITS = ((1, "replay"), (2, "mimic"), (4, "known-src"))
+
+
+def incident_report(tag, pred, scores, types, incident, theft_variant) -> dict:
+    """Print and return the incident-level metrics of lateral movement (3) and credential
+    theft (4) at the decision ``pred``, and theft split by mimicry variant.
+
+    Lateral is reported twice: blocked by a lateral event alone (the TGN's target), and by
+    any event of the compromise episode — recon probes and policy denials are mostly caught
+    by the sensors / OPA, so that row credits the whole stack, not the TGN.
+    """
+    from sklearn.metrics import roc_auc_score
+
+    pred, scores, types = np.asarray(pred).astype(bool), np.asarray(scores), np.asarray(types)
+    incident, theft_variant = np.asarray(incident), np.asarray(theft_variant)
+    rows = {
+        "lateral": incident_metrics(pred, types, incident, 3),
+        "lateral (any chain event)": incident_metrics(pred, types, incident, 3, block_types=(1, 2, 3)),
+        "cred-theft": incident_metrics(pred, types, incident, 4),
+    }
+    print(f"\n--- INCIDENT-LEVEL DETECTION ({tag}) ---")
+    print("  blocked = share of incidents with >=1 flagged event; served = attack events "
+          "before the first block (median) / share of the incident")
+    for name, m in rows.items():
+        print(f"  {name:26s} | incidents={m['n_incidents']:3d} (events={m['n_events']:4d}) | "
+              f"blocked={m['blocked']:.3f} | served median={m['served_median']:.1f} "
+              f"share={m['served_share']:.3f}")
+
+    benign = types == 0
+    print("  cred-theft by variant (replay = victim cookie, mimic = victim/fleet JA3, "
+          "known-src = fleet egress IP):")
+    variants = {}
+    for v in range(8):
+        sel = (types == 4) & (theft_variant == v)
+        if not sel.any():
+            continue
+        name = "+".join(n for b, n in _THEFT_BITS if v & b) or "none"
+        both = benign | sel
+        auc = float(roc_auc_score(sel[both].astype(int), scores[both]))
+        m = incident_metrics(pred, np.where(sel, 4, np.where(types == 4, -1, types)), incident, 4)
+        variants[name] = {"n_events": int(sel.sum()), "auc": auc,
+                          "recall": float(pred[sel].mean()), **m}
+        print(f"    {name:23s} | events={int(sel.sum()):3d} incidents={m['n_incidents']:3d} | "
+              f"AUC={auc:.3f} | event recall={pred[sel].mean():.3f} | blocked={m['blocked']:.3f}")
+    rows["theft_variants"] = variants
+    return rows
+

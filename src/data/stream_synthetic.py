@@ -158,6 +158,11 @@ SCEN_WIPED = 2     # Recently re-keyed cookie (cold device node)
 SCEN_SHARED = 4    # Workstation shared across multiple users
 SCEN_NEW_USER = 8  # Recently onboarded user (cold user node)
 
+# Credential-theft variant bits (event field ``theft_variant``): the mimicry the attacker used.
+THEFT_REPLAY = 1     # replayed one of the victim's device cookies (pass-the-cookie)
+THEFT_MIMIC_CFG = 2  # the victim's / a common fleet client instead of a fresh JA3
+THEFT_KNOWN_SRC = 4  # a fleet egress IP instead of a fresh one
+
 _WIPE_COLD_EVENTS = 25      # Events until a re-keyed device is considered warm
 _NEW_USER_COLD_EVENTS = 25  # Events until a new user node is considered warm
 
@@ -215,6 +220,8 @@ class _TheftIncident:
     source: int
     config: int
     remaining: int  # requests left in the session
+    incident: int = -1  # incident id (event field ``incident``)
+    variant: int = 0    # THEFT_* bits
 
 
 class ZTAStreamSimulator:
@@ -510,6 +517,8 @@ class ZTAStreamSimulator:
         self._next_dev = self._next_src = self._next_cfg = 0
         self._slot_age: dict[int, int] = {}
         self.compromised_state: dict[int, int] = {}           # machine -> KillPhase
+        self.compromise_incident: dict[int, int] = {}         # machine -> incident id
+        self._next_incident = 0  # evaluation-only ids: no RNG draw, the stream is unchanged
         self.compromised_chain_remaining: dict[int, int] = {} # machine -> steps left in phase
         self.compromised_dwell: dict[int, int] = {}           # machine -> dwell events before remediation
         self.harvested_creds: dict[int, list[int]] = {}       # machine -> dumped credentials
@@ -706,6 +715,7 @@ class ZTAStreamSimulator:
     def _compromise(self, machine: int) -> None:
         """Initialize compromise on machine: harvest cached or foreign credentials for pivot."""
         self.compromised_state[machine] = KillPhase.RECON
+        self.compromise_incident[machine] = self._new_incident()
         cached = sorted(set(self.machine_users[machine]) | self.machine_logons.get(machine, set()))
         foreign = [u for u in self._registered if u not in cached]
         k = int(np.random.randint(1, 4))
@@ -721,8 +731,13 @@ class ZTAStreamSimulator:
     def _remediate(self, machine: int) -> None:
         """Clean the machine: drop all compromise bookkeeping."""
         for d in (self.compromised_state, self.compromised_chain_remaining,
-                  self.compromised_dwell, self.harvested_creds):
+                  self.compromised_dwell, self.harvested_creds, self.compromise_incident):
             d.pop(machine, None)
+
+    def _new_incident(self) -> int:
+        """Next incident id: one per theft session and per machine compromise episode."""
+        self._next_incident += 1
+        return self._next_incident - 1
 
     def _advance_kill_chain(self, machine: int) -> str:
         """Advance the machine's kill chain by one request; return the anomaly kind to emit.
@@ -778,8 +793,12 @@ class ZTAStreamSimulator:
             label=int(etype != EventType.BENIGN), etype=etype, scenario=req.scenario,
         )
 
-    def _event(self, *, source, config, device, user, res_idx, feat, label, etype, scenario):
-        """Event dict (global node ids + external keys); ages cold device/user nodes."""
+    def _event(self, *, source, config, device, user, res_idx, feat, label, etype, scenario,
+               incident=-1, theft_variant=0):
+        """Event dict (global node ids + external keys); ages cold device/user nodes.
+
+        ``incident`` (-1 = none) and ``theft_variant`` are evaluation-only ground truth.
+        """
         if device in self._slot_age:
             self._slot_age[device] += 1
         if user in self._user_age:
@@ -791,7 +810,7 @@ class ZTAStreamSimulator:
         return {
             "source": source, "config": config, "device": device, "user": user, "dst": dst,
             "t": self.t, "features": feat, "label": label, "etype": int(etype),
-            "scenario": scenario,
+            "scenario": scenario, "incident": incident, "theft_variant": theft_variant,
             "key_source": self.keys[source], "key_config": self.keys[config],
             "key_device": self.keys[device],
             "key_user": self.keys[user], "key_dst": self.keys[dst],
@@ -820,7 +839,11 @@ class ZTAStreamSimulator:
 
         # Compromised hosts blend in with benign traffic most of the time
         if req.machine in self.compromised_state and np.random.rand() < _P_ATTACK_ON_COMPROMISED:
-            return self._attack_event(req)
+            # Read before the kill chain advances: remediation drops the episode id.
+            incident = self.compromise_incident[req.machine]
+            event = self._attack_event(req)
+            event["incident"] = incident
+            return event
         return self._benign_event(req)
 
     def _current_interarrival_scale(self) -> float:
@@ -862,10 +885,12 @@ class ZTAStreamSimulator:
             and self.machine_tiers[m] < 2  # TPM-bound identities cannot be stolen
         ]
         replay_m = None
+        variant = 0
         if victim_machines and random.random() < self.p_theft_session_replay:
             # Pass-the-cookie: replay victim device cookie
             replay_m = int(random.choice(victim_machines))
             dev_slot = self.machine_slot[replay_m]
+            variant |= THEFT_REPLAY
         elif self.guest_device_fallback and self._guest_dev_slot is not None:
             dev_slot = self._guest_dev_slot
         else:
@@ -878,6 +903,7 @@ class ZTAStreamSimulator:
         # Attacker network: fleet egress IP or fresh IP
         if random.random() < self.p_theft_known_source:
             src_slot = self.src_lo + int(np.random.randint(self._num_office, self.num_sources))
+            variant |= THEFT_KNOWN_SRC
         else:
             src_slot = self._alloc_src()
         if random.random() < self.p_theft_mimic_config:
@@ -886,10 +912,12 @@ class ZTAStreamSimulator:
                 self.cfg_lo + int(random.choice(self.machine_configs[replay_m]))
                 if replay_m is not None else self._fleet_config()
             )
+            variant |= THEFT_MIMIC_CFG
         else:
             cfg_slot = self.cfg_lo + self._alloc_cfg()
         return _TheftIncident(victim=victim, device=dev_slot, source=src_slot, config=cfg_slot,
-                              remaining=int(np.random.randint(3, 7)))
+                              remaining=int(np.random.randint(3, 7)),
+                              incident=self._new_incident(), variant=variant)
 
     def _emit_theft_event(self, incident: _TheftIncident) -> dict:
         """Emit one credential-theft request: attacker IP/device/config with victim credentials."""
@@ -906,6 +934,7 @@ class ZTAStreamSimulator:
         return self._event(
             source=incident.source, config=incident.config, device=incident.device, user=u,
             res_idx=res_idx, feat=feat, label=1, etype=EventType.CRED_THEFT, scenario=0,
+            incident=incident.incident, theft_variant=incident.variant,
         )
 
     def _set_user(self, req: _Request, user: int) -> None:
@@ -1151,6 +1180,10 @@ class SyntheticStream:
     cfg_num: int = 0
     res_lo: int = 0
     res_num: int = 0
+    # Evaluation-only ground truth: incident id per event (-1 = none; one per theft session
+    # and per machine compromise episode) and the THEFT_* bits of credential-theft events.
+    incident: torch.Tensor | None = None
+    theft_variant: torch.Tensor | None = None
 
 
 def generate_streaming_data(num_events: int = 50000, **sim_kwargs) -> SyntheticStream:
@@ -1180,4 +1213,5 @@ def generate_streaming_data(num_events: int = 50000, **sim_kwargs) -> SyntheticS
         src_lo=sim.src_lo, src_num=sim.src_slots,
         cfg_lo=sim.cfg_lo, cfg_num=sim.cfg_slots,
         res_lo=sim.res_lo, res_num=sim.num_resources,
+        incident=col("incident"), theft_variant=col("theft_variant"),
     )

@@ -150,6 +150,20 @@ class TGNConfig:
     # InfoNCE ranking objective: number of random-destination negatives per positive.
     # The lateral signal is "rank the true dst above K alternatives given src history".
     infonce_k: int = 5
+    # Binding edges also rank the true head above K corrupted heads (other device / client /
+    # IP for the same tail): credential theft keeps the victim and swaps the attacker's
+    # context in, a head corruption the tail-only objective never sees. Off: with
+    # mask_seen_negatives the full run lost lateral AP 0.089 → 0.033 and the wiped-cookie FPR
+    # rose 0.3% → 2.2% (a fresh device for a known user is a head corruption).
+    head_negatives: bool = False
+    # Share of binding-edge negatives (head and tail) drawn from the batch's endpoints:
+    # frequency-weighted, like the popular fleet client a thief mimics. 0 = uniform (reference).
+    binding_hard_ratio: float = 0.0
+    # Drop from the InfoNCE softmax the negatives already seen in the benign history
+    # (pair_count > 0), instead of ranking them below the true endpoint (12-24% of the
+    # draws late in training). Off: it won a 5-epoch ablation but the 15-epoch full run
+    # lost lateral AP 0.089 → 0.049 and AUC 0.88 → 0.80 (train loss 0.19: too easy a task).
+    mask_seen_negatives: bool = False
     # Δt clamp and never-seen sentinel (seconds, one week) for both recency inputs. A
     # constant sentinel, not t_now, keeps train/val/test and serving encodings stationary
     # (see ZTATemporalGraphNetwork.pair_delta_t).
@@ -168,7 +182,9 @@ class TGNConfig:
     # Optimisation.
     batch_size: int = 200
     epochs: int = 15    # Training epochs (all network)
-    ft_epochs: int = 5  # Finetune epochs (only linkPredictor)
+    # Finetune epochs (link predictor only, GNN frozen). 5 moved the loss only 1.161 → 1.153,
+    # but the reference full run used them; removing them is untested on its own.
+    ft_epochs: int = 5
     learning_rate: float = 1e-3
     ft_learning_rate: float = 1e-4
     # Offline replay batch size (calibration + test, never serving). 1 = exact per-event;
