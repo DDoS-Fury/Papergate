@@ -255,21 +255,25 @@ class ZTATemporalGraphNetwork(nn.Module):
         ).squeeze(-1)
         if not self.use_struct_head:
             return feat  # ablation: feature head only (no structural compatibility head)
+        return feat + self.struct_logit(z_u, src, dst)
+
+    def struct_logit(self, z, src, dst):
+        """Structural term alone: scaled cosine of the projected embeddings of ``z[src]`` and
+        ``z[dst]`` (training also ranks it by itself, see ``TGNConfig.struct_aux_weight``)."""
         if self.training:
             # struct_proj has Dropout: keep one independent draw per scored row.
-            hs = F.normalize(self.struct_proj(z_u[src]), dim=-1)
-            hd = F.normalize(self.struct_proj(z_u[dst]), dim=-1)
+            hs = F.normalize(self.struct_proj(z[src]), dim=-1)
+            hd = F.normalize(self.struct_proj(z[dst]), dim=-1)
         else:
             # Dropout is the identity in eval, so projecting each node once is exact.
-            proj = F.normalize(self.struct_proj(z_u), dim=-1)
+            proj = F.normalize(self.struct_proj(z), dim=-1)
             hs, hd = proj[src], proj[dst]
 
         # if edge_kind is not None and hasattr(self, "struct_rel") and edge_kind in self.struct_rel:
         #     rel_w = self.struct_rel[edge_kind]
         #     hd = F.normalize(hd * rel_w, dim=-1)
 
-        struct = self.struct_scale * (hs * hd).sum(-1)
-        return feat + struct
+        return self.struct_scale * (hs * hd).sum(-1)
 
     def forward(self, n_id, edge_index, hist_t, hist_msg, src_local, dst_local, cur_msg, delta_t, delta_t_src, hist_feats):
         """Score the current edge(s) ``src_local -> dst_local`` carrying ``cur_msg``.

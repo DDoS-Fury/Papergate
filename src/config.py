@@ -168,6 +168,16 @@ class TGNConfig:
     # draws late in training). Off: it won a 5-epoch ablation but the 15-epoch full run
     # lost lateral AP 0.089 → 0.049 and AUC 0.88 → 0.80 (train loss 0.19: too easy a task).
     mask_seen_negatives: bool = False
+    # Structural-head training terms (Stage 1 only; scoring and the state_dict are unchanged).
+    # Both off = the reference loss, bit-identical (smoke diff, tasks/todo.md). Untested on a
+    # full run: in a 30k-event / 4-epoch CPU smoke, turning both on raised the resultant
+    # length of the projections from 0.74 to 0.94 (towards the one-direction collapse).
+    # Uniformity per node type (users among users, resources among resources) instead of on
+    # the mixed set, which also repels a user from their own resources.
+    uniformity_per_type: bool = False
+    # Weight of an auxiliary InfoNCE on the structural term alone, per edge: the head has to
+    # rank the true endpoint by itself instead of riding on the feature head. 0 = off.
+    struct_aux_weight: float = 0.0
     # Δt clamp and never-seen sentinel (seconds, one week) for both recency inputs. A
     # constant sentinel, not t_now, keeps train/val/test and serving encodings stationary
     # (see ZTATemporalGraphNetwork.pair_delta_t).

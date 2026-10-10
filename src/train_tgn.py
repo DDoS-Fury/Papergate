@@ -748,18 +748,34 @@ def train_tgn(cfg: TGNConfig | None = None, *, dataset: "StreamData | None" = No
             missed), or a pair already in the benign history (a shared device, a user's second
             machine), read from the model's own counters, never from labels."""
             logits = _edge_logits(src_b, dst_b, tv_rep, msgs, hist_feats)
-            if cfg.mask_seen_negatives:
-                seen = torch.tensor(
-                    [model.pair_count.get(pr, 0) > 0 for pr in zip(src_b.tolist(), dst_b.tolist())],
-                    dtype=torch.bool, device=device,
-                )
-                logits = logits.masked_fill(seen | is_true, float("-inf"))
-            return logits.view(P, K)
+            return _mask_negatives(logits, src_b, dst_b, is_true).view(P, K)
+
+        def _mask_negatives(logits, src_b, dst_b, is_true):
+            if not cfg.mask_seen_negatives:
+                return logits
+            seen = torch.tensor(
+                [model.pair_count.get(pr, 0) > 0 for pr in zip(src_b.tolist(), dst_b.tolist())],
+                dtype=torch.bool, device=device,
+            )
+            return logits.masked_fill(seen | is_true, float("-inf"))
 
         target = torch.zeros(P, dtype=torch.long, device=device)
 
         def _infonce(pos, neg):
             return F.cross_entropy(torch.cat([pos.unsqueeze(1), neg], dim=1), target)
+
+        # Stage 1 only: the projector is frozen in Stage 2.
+        struct_aux = uniformity and model.use_struct_head and cfg.struct_aux_weight > 0
+
+        def _struct_infonce(head, tail, corruptions):
+            """Auxiliary InfoNCE on the structural term alone, over the same corruptions
+            ``(heads, tails, is_true)`` as the edge's main InfoNCE."""
+            pos = model.struct_logit(z, assoc[head], assoc[tail])
+            negs = [
+                _mask_negatives(model.struct_logit(z, assoc[h], assoc[t]), h, t, is_true).view(P, K)
+                for h, t, is_true in corruptions
+            ]
+            return cfg.struct_aux_weight * _infonce(pos, torch.cat(negs, dim=1))
 
         zeros_msg = torch.zeros_like(p_msg)
         zeros_msg_rep = torch.zeros(P * K, p_msg.size(1), device=device)
@@ -794,11 +810,22 @@ def train_tgn(cfg: TGNConfig | None = None, *, dataset: "StreamData | None" = No
             + F.binary_cross_entropy_with_logits(neg_out_ctx, torch.zeros_like(neg_out_ctx))
         )
 
+        if struct_aux:
+            loss = loss + _struct_infonce(
+                p_user, p_dst, [(user_rep, neg_res, neg_res == p_dst.repeat_interleave(K))],
+            )
+
         # --- UNIFORMITY REGULARIZATION (Wang & Isola, ICML 2020) ---
+        # Per node type: on the mixed set the term also repels a user from their resources.
         if uniformity and model.use_struct_head:
-            active_endpoints = torch.cat([p_user, p_dst]).unique()
-            proj_u = F.normalize(model.struct_proj(z[assoc[active_endpoints]]), dim=-1)
-            loss = loss + 0.05 * _uniformity_loss(proj_u)
+            groups = (
+                [p_user.unique(), p_dst.unique()] if cfg.uniformity_per_type
+                else [torch.cat([p_user, p_dst]).unique()]
+            )
+            unif = sum(
+                _uniformity_loss(F.normalize(model.struct_proj(z[assoc[g]]), dim=-1)) for g in groups
+            )
+            loss = loss + 0.05 * unif / len(groups)
 
         def _binding_loss(head, tail, neg_t, neg_h):
             """One InfoNCE per zero-message binding edge — the true pair above its tail and
@@ -807,19 +834,20 @@ def train_tgn(cfg: TGNConfig | None = None, *, dataset: "StreamData | None" = No
             h_l, t_l = head.tolist(), tail.tolist()
             pos = _edge_logits(head, tail, p_t, zeros_msg, model.compute_hist_feats(h_l, t_l, device))
             h_rep, t_rep = head.repeat_interleave(K), tail.repeat_interleave(K)
-            negs = [_neg_logits(
-                h_rep, neg_t, zeros_msg_rep,
-                model.compute_hist_feats(h_rep.tolist(), neg_t.tolist(), device), neg_t == t_rep,
-            )]
+            corruptions = [(h_rep, neg_t, neg_t == t_rep)]
             if neg_h is not None:
-                negs.append(_neg_logits(
-                    neg_h, t_rep, zeros_msg_rep,
-                    model.compute_hist_feats(neg_h.tolist(), t_rep.tolist(), device), neg_h == h_rep,
-                ))
-            return (
+                corruptions.append((neg_h, t_rep, neg_h == h_rep))
+            negs = [
+                _neg_logits(h, t, zeros_msg_rep, model.compute_hist_feats(h.tolist(), t.tolist(), device), is_true)
+                for h, t, is_true in corruptions
+            ]
+            edge_loss = (
                 _infonce(pos, torch.cat(negs, dim=1))
                 + F.binary_cross_entropy_with_logits(pos, torch.ones_like(pos))
             )
+            if struct_aux:
+                edge_loss = edge_loss + _struct_infonce(head, tail, corruptions)
+            return edge_loss
 
         for head, tail, neg_t, neg_h in bind_edges:
             loss = loss + _binding_loss(head, tail, neg_t, neg_h)
