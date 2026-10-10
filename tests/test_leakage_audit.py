@@ -41,7 +41,8 @@ from sklearn.metrics import roc_auc_score
 
 from graphagate.config import TGNConfig
 from graphagate.data.lookup_rules import lookup_flags
-from graphagate.data.stream_synthetic import generate_streaming_data, stream_kwargs_from_cfg
+from graphagate.data.stream_synthetic import (
+    ZTAStreamSimulator, generate_streaming_data, stream_kwargs_from_cfg)
 
 SEEDS = [42, 7, 123]
 # The audit must see the stream the model is trained on: at 40k events the rarer classes
@@ -347,6 +348,31 @@ def test_role_claim_matches_identity():
         f"{int(changed.sum())} events carry a role claim that differs from the same "
         f"user's previous one — a zero-false-positive rule tell"
     )
+
+
+@pytest.mark.parametrize("seed", SEEDS)
+def test_fresh_slot_pools_never_recycle(seed):
+    """Every fresh device / IP / JA3 draw gets a never-used node slot.
+
+    The pools are recycled round-robin once exhausted. A recycled slot hands the new entity
+    (a re-keyed cookie, a thief's device) the previous occupant's memory and neighbours, and
+    the offline replay hashes each slot with its *last* key, so earlier occupants train under
+    a later entity's identity. Serving gives a new key a reset slot instead.
+    """
+    cfg = TGNConfig(num_events=N_EVENTS, seed=seed)
+    kw = stream_kwargs_from_cfg(cfg)
+    n = kw.pop("num_events")
+    sim = ZTAStreamSimulator(admission_horizon=n, **kw)
+    for _ in range(n):
+        sim.step()
+    # The cursors advance once per slot visited: past the pool size, a slot was visited twice.
+    for name, cursor, pool in (("device", sim._next_dev, sim._dev_pool),
+                               ("source", sim._next_src, sim._src_pool),
+                               ("config", sim._next_cfg, sim._cfg_pool)):
+        assert cursor <= len(pool), (
+            f"seed {seed}: {cursor} {name} draws on a pool of {len(pool)} — slots recycled; "
+            f"enlarge the TGNConfig pool"
+        )
 
 
 @pytest.mark.parametrize("seed", SEEDS)

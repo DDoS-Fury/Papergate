@@ -42,7 +42,7 @@ d) Il max sugli archi ignora l'evidenza che si somma (src/serve_tgn.py:236). Un 
 più binding contemporaneamente, e il max a provare Fisher (-Σ log p_k) o la sommadei due archi peggiori. Si può testare subito senza riaddestrare, perché i logit per arco sono già registrati in
 extra_a["edge_logits"].
 
-2. Training: negativi sbagliati per i tar
+2. Training: negativi sbagliati per i target
 
 a) Si corrompe solo la destinazione. Preny: device→user ha l'aspetto abituale, e
 l'anomalia è "config estraneo sul cookie  sorgente. Bisogna corrompere anche la

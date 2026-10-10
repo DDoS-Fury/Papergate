@@ -41,9 +41,12 @@ class TGNConfig:
     num_configs: int = 40
     num_events: int = 200000
 
-    # Spare device slots, recycled round-robin: cookie wipes (a machine re-keyed as a cold
-    # node) and credential-theft attacker devices draw from them.
-    num_wipe_slots: int = 128
+    # Spare device slots: cookie wipes (a machine re-keyed as a cold node) and
+    # credential-theft attacker devices draw from them. Sized never to recycle (a reused slot
+    # would hand a fresh cookie the old device's memory, and the offline replay hashes every
+    # slot with its last key; serving gives a new key a reset slot): 256-339 draws over
+    # seeds 1-3, 7, 42, 123 at 200k events (tests/test_leakage_audit.py checks it).
+    num_wipe_slots: int = 352
     num_theft_slots: int = 64
 
     # Behavioural dynamics (all benign except p_cred_theft):
@@ -82,8 +85,9 @@ class TGNConfig:
     # harvested credential at p_lateral_foreign_cred; a credential comes from the machine's
     # logon cache at p_harvest_cached, else from a user who never signed in there.
     # p_lateral_role_spoof (a role-claim tell) stays at 0.
-    # Fresh slot pools (shared by benign churn and attackers, recycled when exhausted):
-    num_new_sources: int = 6000
+    # Fresh slot pools (shared by benign churn and attackers), sized never to recycle like
+    # the device spares: 5963-6150 source draws and 704-757 config draws over the same seeds.
+    num_new_sources: int = 6800
     num_new_configs: int = 1024
     p_new_source: float = 0.3
     p_config_release: float = 0.00025
