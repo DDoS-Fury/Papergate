@@ -9,20 +9,20 @@
 ![CUDA](https://img.shields.io/badge/CUDA-13-76B900?style=for-the-badge&logo=nvidia&logoColor=white)
 ![License: MIT](https://img.shields.io/badge/License-MIT-yellow?style=for-the-badge)
 
-Graphagate is a high-throughput **Temporal Graph Network (TGN)** microservice for **one-class anomaly detection** in Zero Trust Architectures (ZTA). It analyzes continuous authentication and authorization request streams to uncover stealthy lateral movement, credential abuse, and reconnaissance without requiring an external graph database.
+Graphagate is a high-throughput **Temporal Graph Network (TGN)** microservice for **one-class anomaly detection** in Zero Trust Architectures (ZTA). It processes continuous authentication and authorization request streams to detect lateral movement, credential abuse, and reconnaissance without requiring an external graph database.
 
 ---
 
-## Key Highlights
+## Overview
 
-- **5-Entity Heterogeneous Dynamic Graph**: Deconstructs every access request into a causal 5-edge chain spanning client network, TLS fingerprint, device hardware posture, user principal, and target asset.
-- **Dual-Head Anomaly Scoring**: Combines a **Deep Residual MLP Feature Head** (evaluating contextual telemetry, interaction counters, and harmonic recency) with a **Normalized Metric Structural Head** (flagging unhabitual topological pairings).
+- **5-Entity Heterogeneous Dynamic Graph**: Decomposes each access request into a 5-edge causal chain spanning client network, TLS fingerprint, device hardware posture, user principal, and target asset.
+- **Dual-Head Anomaly Scoring**: Evaluates requests using a **Deep Residual MLP Feature Head** (for contextual telemetry, interaction counters, and harmonic recency) and a **Normalized Metric Structural Head** (for topological anomalies).
 - **Two-Stage Optimization Regime**:
   - **Stage 1 (Joint Learning)**: End-to-end representation learning across memory, temporal GNN attention, and scoring heads with Cosine Annealing.
   - **Stage 2 (Feature-Head Fine-Tuning)**: Freezes graph memory and attention backbones, fine-tuning the residual MLP with in-batch hard negative mining to sharpen decision boundaries.
 - **In-Memory Streaming Inference ($O(1)$ RAM State)**: Tracks recurrent node memories and temporal neighborhood buffers ($K=30$) in pre-allocated ring buffers.
-- **Anti-Poisoning Policy Gate**: State updates commit strictly via a predict-then-update mechanism for policy-admitted events (`OPA ALLOW`), insulating historical baselines from adversarial poisoning.
-- **Calibrated Multi-Threshold Routing & Kill-Chain Prior**: Maps raw logits into empirical upper-tail log-odds, routes clean vs. dirty requests against cost-sensitive operating points, and boosts alert sensitivity using a 72-hour half-life precursor prior.
+- **Policy Gate**: State updates commit strictly via a predict-then-update mechanism for policy-admitted events (`OPA ALLOW`), preventing unverified traffic from corrupting historical memory baselines.
+- **Calibrated Multi-Threshold Routing & Precursor Prior**: Maps raw logits into empirical upper-tail log-odds, routes clean vs. dirty requests against cost-sensitive operating points, and incorporates a 72-hour half-life precursor prior.
 
 ---
 

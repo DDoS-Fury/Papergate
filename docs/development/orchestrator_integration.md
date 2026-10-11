@@ -1,10 +1,10 @@
 # ZTA Orchestrator and TGN Model Integration
 
-This document clarifies the integration architecture between the Security Orchestrator (which talks to the Policy Decision Point, e.g. OPA) and the TGN (Temporal Graph Network) AI microservice.
+This document clarifies the integration architecture between the Security Orchestrator (which talks to the Policy Decision Point, e.g. OPA) and the TGN (Temporal Graph Network) microservice.
 
 ## No Vector Database Needed
 
-A common question when integrating AI models for structural Anomaly Detection (such as graphs) is whether an external vector database (e.g. Milvus, Pinecone) is needed to store past embeddings or request tuples.
+A common question when integrating graph models for structural Anomaly Detection (such as graphs) is whether an external vector database (e.g. Milvus, Pinecone) is needed to store past embeddings or request tuples.
 
 **The answer for the TGN is no.**
 
@@ -80,7 +80,7 @@ The TGN model was designed specifically to be **stateful** and to autonomously m
 
 ### Persistence
 
-The only storage required for this AI layer is the filesystem. The model save command
+The only storage required for the detector is the filesystem. The model save command
 (`save_model`) serializes the entire state to disk:
 - The trained network weights (including the node identity and the two scoring heads).
 - The in-memory tensors with the access histories (TGN Memory) + the raw-message store.
@@ -88,7 +88,7 @@ The only storage required for this AI layer is the filesystem. The model save co
 - The NodeRegistry dictionary.
 
 This file (`public/tgn_checkpoint.pt`) together with the metadata (`public/tgn_stats.json`)
-lets the AI microservice restart exactly from where it was interrupted without losing the
+lets the microservice restart exactly from where it was interrupted without losing the
 users' historical context.
 
 ## HTTP API (inference service)
