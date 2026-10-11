@@ -1195,6 +1195,19 @@ def generate_streaming_data(num_events: int = 50000, **sim_kwargs) -> SyntheticS
     sim = ZTAStreamSimulator(admission_horizon=num_events, **sim_kwargs)
     events = [sim.step() for _ in range(num_events)]
 
+    # The fresh pools hand out slots round-robin and wrap once exhausted. A recycled slot is one
+    # node id for two entities, stored with the key and static features of the last one: the
+    # events of the first occupant, possibly in the training window, would carry the identity
+    # of an entity from later in the stream. The cursors count the draws.
+    for name, cursor, pool, knob in (("device", sim._next_dev, sim._dev_pool, "num_wipe_slots"),
+                                     ("source", sim._next_src, sim._src_pool, "num_new_sources"),
+                                     ("config", sim._next_cfg, sim._cfg_pool, "num_new_configs")):
+        if cursor > len(pool):
+            raise RuntimeError(
+                f"fresh {name} pool recycled: {cursor} draws on {len(pool)} slots over "
+                f"{num_events} events; enlarge TGNConfig.{knob}"
+            )
+
     def col(name, dtype=torch.long):
         return torch.tensor([e[name] for e in events], dtype=dtype)
 

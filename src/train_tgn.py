@@ -398,20 +398,32 @@ def combine_report(model, val_extra, val_types, val_msg, test_extra, test_types,
               + f" | benign FPR={float((lt[benign] >= thr).mean()):.4f} (val clean @{target_fpr})")
     model.edge_combine = prev
 
-def _sample_structural_negatives(num_events, num_res, res_lo, device, *, avoid=None, hard_pool=None, hard_ratio=0.4):
-    """InfoNCE negatives: uniform over ``[res_lo, res_lo + num_res)``, a ``hard_ratio`` share
-    drawn from ``hard_pool`` (the batch's endpoints: frequency-weighted, no labels).
+def _sample_structural_negatives(num_events, num_res, res_lo, device, *, avoid=None, hard_pool=None,
+                                 hard_ratio=0.4, pool=None):
+    """InfoNCE negatives: uniform over ``pool`` (node ids) when given, else over
+    ``[res_lo, res_lo + num_res)``; a ``hard_ratio`` share is drawn from ``hard_pool`` (the
+    batch's endpoints: frequency-weighted, no labels).
+
+    ``pool`` is how the training loop keeps the draws inside the entities of the benign
+    training traffic (``TGNConfig.negatives_from_train_only``): the id range also holds the
+    entities that first appear in validation / test.
 
     The hard draws fill the *prefix* of the flat ``P*K`` array (repeat_interleave layout), so
     the first ``hard_ratio`` of the positives get only in-batch negatives and the rest only
     uniform ones. Kept as is: the reference full run was trained this way, and random
     placement (with the other negative changes) did not reproduce it (tasks/todo.md).
-    ``num_res == 0`` (no known id range) draws everything from the pool. Draws equal to
+    ``num_res == 0`` (no known id range) draws everything from the hard pool. Draws equal to
     ``avoid`` are re-rolled once uniformly.
     """
     if num_res <= 0:
         return hard_pool[torch.randint(0, len(hard_pool), (num_events,), device=device)]
-    neg = torch.randint(0, num_res, (num_events,), device=device) + res_lo
+
+    def _uniform(k):
+        if pool is not None:
+            return pool[torch.randint(0, len(pool), (k,), device=device)]
+        return torch.randint(0, num_res, (k,), device=device) + res_lo
+
+    neg = _uniform(num_events)
 
     if hard_pool is not None and len(hard_pool) > 1 and hard_ratio > 0.0:
         num_hard = int(num_events * hard_ratio)
@@ -421,9 +433,18 @@ def _sample_structural_negatives(num_events, num_res, res_lo, device, *, avoid=N
     if avoid is not None:
         collide = neg == avoid
         if collide.any():
-            neg[collide] = torch.randint(0, num_res, (int(collide.sum()),), device=device) + res_lo
+            neg[collide] = _uniform(int(collide.sum()))
 
     return neg
+
+
+def train_negative_pool(nodes, y, train_end, enabled=True):
+    """Node ids that may be drawn as training negatives for one endpoint role: the entities
+    of the benign events of the training window. ``None`` (flag off, or a dataset without
+    that role) leaves the draw on the role's whole id range."""
+    if not enabled or nodes is None:
+        return None
+    return nodes[:train_end][y[:train_end] == 0].unique()
 
 
 def _uniformity_loss(x, t: float = 2.0) -> torch.Tensor:
@@ -634,9 +655,19 @@ def train_tgn(cfg: TGNConfig | None = None, *, dataset: "StreamData | None" = No
     bs = cfg.batch_size
 
     K = cfg.infonce_k
-    # Node-id ranges (lo, num) of the binding endpoints; num == 0 → in-batch draws only.
-    usr_rng, dev_rng = (data.usr_lo, data.usr_num), (data.dev_lo, data.dev_num)
-    cfg_rng, src_rng = (data.cfg_lo, data.cfg_num), (data.src_lo, data.src_num)
+    # Negative pools, one per endpoint role: (lo, num, ids). The draws are uniform over ``ids``,
+    # the entities seen in the benign training traffic. Over the whole id range ``[lo, lo+num)``
+    # the loop would also read the static features and train the identity embedding of the
+    # entities that first appear in validation / test (re-keyed cookies, new JA3s, a thief's
+    # device, new hires), which a deployment cannot know when it trains. ``ids is None``
+    # (negatives_from_train_only=False) restores the range; num == 0 → in-batch draws only.
+    def _role(lo, num, nodes):
+        ids = train_negative_pool(nodes, y, train_end, cfg.negatives_from_train_only)
+        return lo, num, (ids.to(device) if ids is not None else None)
+
+    res_rng = _role(neg_lo, neg_num, dst)
+    usr_rng, dev_rng = _role(data.usr_lo, data.usr_num, user_arr), _role(data.dev_lo, data.dev_num, device_arr)
+    cfg_rng, src_rng = _role(data.cfg_lo, data.cfg_num, config_arr), _role(data.src_lo, data.src_num, source_arr)
 
     def _batch_loss(i: int, *, uniformity: bool):
         """Self-supervised loss of train batch ``i`` and a closure committing its benign events.
@@ -682,8 +713,8 @@ def train_tgn(cfg: TGNConfig | None = None, *, dataset: "StreamData | None" = No
         # looks benign on the access edge; the anomaly lives in the bindings.
         P = len(p_user)
         neg_res = _sample_structural_negatives(
-            P * K, neg_num, neg_lo, device, avoid=p_dst.repeat_interleave(K),
-            hard_pool=p_dst, hard_ratio=0.25
+            P * K, res_rng[1], res_rng[0], device, avoid=p_dst.repeat_interleave(K),
+            hard_pool=p_dst, hard_ratio=0.25, pool=res_rng[2],
         )
         user_rep = p_user.repeat_interleave(K)
 
@@ -695,7 +726,7 @@ def train_tgn(cfg: TGNConfig | None = None, *, dataset: "StreamData | None" = No
         def _corrupt(pos, rng):
             return _sample_structural_negatives(
                 P * K, rng[1], rng[0], device, avoid=pos.repeat_interleave(K),
-                hard_pool=pos, hard_ratio=cfg.binding_hard_ratio,
+                hard_pool=pos, hard_ratio=cfg.binding_hard_ratio, pool=rng[2],
             )
 
         # (head, tail, tail negatives, head negatives | None), in the loss order.

@@ -168,6 +168,12 @@ class TGNConfig:
     # draws late in training). Off: it won a 5-epoch ablation but the 15-epoch full run
     # lost lateral AP 0.089 → 0.049 and AUC 0.88 → 0.80 (train loss 0.19: too easy a task).
     mask_seen_negatives: bool = False
+    # Training negatives are drawn only among the entities seen in the benign training traffic.
+    # Over the whole id range the loop also read the static features and trained the identity
+    # embedding of entities that first appear in validation / test (re-keyed cookies, new JA3s,
+    # a thief's device, new hires): on a full run every such device, config and user had its
+    # identity embedding moved by training. False restores that, to measure what it was worth.
+    negatives_from_train_only: bool = True
     # Structural-head training terms (Stage 1 only; scoring and the state_dict are unchanged).
     # Both off = the reference loss, bit-identical (smoke diff, tasks/todo.md). Untested on a
     # full run: in a 30k-event / 4-epoch CPU smoke, turning both on raised the resultant

@@ -31,6 +31,7 @@ from graphagate.eval_common import binary_metrics
 from graphagate.model.registry import NodeRegistry
 from graphagate.model.tgn import ZTATemporalGraphNetwork, stable_hash
 from graphagate.serve_tgn import anomaly_score, precursor_shift, record_alert
+from graphagate.train_tgn import train_negative_pool
 
 
 def tgn_2node_baseline(cfg: Optional[TGNConfig] = None) -> dict:
@@ -97,9 +98,13 @@ def tgn_2node_baseline(cfg: Optional[TGNConfig] = None) -> dict:
     n_val = int(n * cfg.val_frac)
     train_end, val_end = n_train, n_train + n_val
 
-    # Negative sampling range over the resources
+    # Negative sampling over the resources: like the 5-node TGN, only those seen in the benign
+    # training traffic (cfg.negatives_from_train_only), else the whole catalogue range.
     res_lo = stream.res_lo
     res_num = stream.res_num
+    res_pool = train_negative_pool(dst, y, train_end, cfg.negatives_from_train_only)
+    if res_pool is not None:
+        res_pool = res_pool.to(device)
     K = cfg.infonce_k
     batch_size = cfg.batch_size
     optimizer = AdamW(model.parameters(), lr=cfg.learning_rate)
@@ -133,7 +138,10 @@ def tgn_2node_baseline(cfg: Optional[TGNConfig] = None) -> dict:
             P = int(pu.shape[0])
 
             # Random structural negatives over the resources
-            neg_res = torch.randint(res_lo, res_lo + res_num, (P * K,), device=device)
+            if res_pool is not None:
+                neg_res = res_pool[torch.randint(0, len(res_pool), (P * K,), device=device)]
+            else:
+                neg_res = torch.randint(res_lo, res_lo + res_num, (P * K,), device=device)
             pu_rep = pu.repeat_interleave(K)
             pt_rep = pt.repeat_interleave(K)
             pmsg_rep = pmsg.repeat_interleave(K, dim=0)
