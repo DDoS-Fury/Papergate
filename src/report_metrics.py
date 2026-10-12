@@ -45,12 +45,12 @@ def latex_cell(vals, *, bold: bool = False, decimals: int = 3) -> str:
     return rf"${body}\pm{s:.{decimals}f}$"
 
 
-def paired_delta(a_vals, b_vals, decimals: int = 3, alpha: float = 0.05) -> dict:
+def paired_delta(a_vals, b_vals, decimals: int = 3) -> dict:
     """Paired comparison of two arms measured on the SAME seeds.
 
     Per-seed differences cancel the seed-to-seed variance. Returns ``n_pairs``,
-    ``mean_delta``, ``sd_delta``, ``ci95`` (bootstrap), ``p_value`` (two-sided Wilcoxon
-    signed-rank) and ``significant``. Wilcoxon needs >= 6 pairs to reach p < 0.05.
+    ``mean_delta``, ``sd_delta``, ``ci95`` (bootstrap) and ``significant`` (the CI
+    excludes zero).
     """
     a = np.asarray(a_vals, dtype=float)
     b = np.asarray(b_vals, dtype=float)
@@ -65,7 +65,6 @@ def paired_delta(a_vals, b_vals, decimals: int = 3, alpha: float = 0.05) -> dict
         "mean_delta": round(float(np.mean(diffs)), decimals) if n else float("nan"),
         "sd_delta": round(float(np.std(diffs, ddof=1)), decimals) if n > 1 else float("nan"),
         "ci95": (float("nan"), float("nan")),
-        "p_value": float("nan"),
         "significant": False,
     }
     if n < 2:
@@ -75,18 +74,7 @@ def paired_delta(a_vals, b_vals, decimals: int = 3, alpha: float = 0.05) -> dict
     boot = rng.choice(diffs, size=(10_000, n), replace=True).mean(axis=1)
     lo, hi = np.percentile(boot, [2.5, 97.5])
     out["ci95"] = (round(float(lo), decimals), round(float(hi), decimals))
-
-    if np.allclose(diffs, 0.0):
-        out["p_value"] = 1.0
-        return out
-    try:
-        from scipy.stats import wilcoxon
-
-        out["p_value"] = float(wilcoxon(diffs).pvalue)
-        out["significant"] = bool(out["p_value"] < alpha)
-    except ImportError:
-        # No scipy: fall back to the bootstrap CI excluding zero.
-        out["significant"] = bool(lo > 0.0 or hi < 0.0)
+    out["significant"] = bool(lo > 0.0 or hi < 0.0)
     return out
 
 

@@ -2,13 +2,13 @@
 
 This document clarifies the integration architecture between the Security Orchestrator (which talks to the Policy Decision Point, e.g. OPA) and the TGN (Temporal Graph Network) AI microservice.
 
-## No Vector Database Needed
+## In-Memory State and Graph Storage
 
-A common question when integrating AI models for structural Anomaly Detection (such as graphs) is whether an external vector database (e.g. Milvus, Pinecone) is needed to store past embeddings or request tuples.
+The TGN microservice does not require an external vector database (such as Milvus or Pinecone) or graph database to store past interactions.
 
-**The answer for the TGN is no.**
-
-The TGN model was designed specifically to be **stateful** and to autonomously manage its own temporal memory in RAM via PyTorch tensors. The structural history (the last `K` temporal neighbours of each entity) is also kept in RAM by a **bounded neighbour loader** (`MessageNeighborLoader`, a fixed-size ring buffer `O(num_nodes·K)`): this is what enables *lateral movement* detection **without** any external graph database.
+The model is stateful and maintains its temporal representations directly in RAM using PyTorch tensors:
+- Recurrent node memory (`model.memory`, GRU state) tracks historical interactions per entity.
+- The bounded neighbor store (`MessageNeighborLoader`, pre-allocated ring buffer `O(num_nodes · K)`) maintains the last $K$ temporal interactions per node to support multi-hop attention during inference without graph database queries.
 
 ### Execution Flow (Serving)
 
@@ -68,11 +68,11 @@ The TGN model was designed specifically to be **stateful** and to autonomously m
    - If **OPA answers ALLOW** (the event is fully legitimate and not anomalous), the
      Orchestrator calls **`update_memory`**, which advances the TGN memory **and** inserts
      the edge into the neighbour loader.
-   - If **OPA answers DENY**, the `update_memory` call is omitted. This absolutely prevents
-     attackers from "poisoning" the model, guaranteeing that the TGN learns only from what
-     OPA explicitly approved — both in memory and in the neighbour history. The Orchestrator
-     calls **`/deny`** instead, which records the event's kill-chain alarm (if any) and
-     touches nothing else.
+   - If **OPA answers DENY**, the orchestrator omits `update_memory`. This protects the
+     baseline against poisoning on denied requests, ensuring that the recurrent state and
+     temporal neighbor history record only policy-admitted events. The orchestrator calls
+     **`/deny`** instead, which records the event's kill-chain alarm (if present) without
+     updating memory or neighbor buffers.
 
    > Note: `infer_score` / `update_memory` work on slot indices already mapped by the
    > `NodeRegistry`; the per-event static attributes must be written into the slot before

@@ -1,6 +1,6 @@
 """Isolation Forest anomaly-detection baseline for Graphagate.
 
-Why this baseline exists:
+Rationale:
   The streaming TGN scores each access event using its *relational + temporal*
   context (recurrent memory + temporal neighbourhood). This baseline deliberately
   throws all of that away: it treats every event as an i.i.d. static feature
@@ -78,12 +78,13 @@ def _build_features(msg, src, dst, node_features, y, *, label_horizon: int):
     return np.concatenate([msg_np, src_feat, dst_feat, hist], axis=1)
 
 
-def isolation_forest_baseline(cfg: TGNConfig = TGNConfig(), stream=None):
+def isolation_forest_baseline(cfg: TGNConfig = TGNConfig(), stream=None, use_precursor: bool = True):
     """Fit/evaluate the Isolation Forest under the TGN protocol; see the module docstring.
 
     ``stream`` is an optional pre-built :class:`SyntheticStream` (the data-budget curve
     passes a truncated tail so every method sees the same events); ``None`` generates it
-    from ``cfg`` exactly as before.
+    from ``cfg`` exactly as before. ``use_precursor=False`` leaves the scores as the forest
+    produced them (no kill-chain factor in model selection, calibration or test).
     """
     # Seed everything up front for reproducibility (the generator re-seeds numpy
     # and stdlib ``random`` internally too, but we seed here so the IsolationForest
@@ -115,9 +116,14 @@ def isolation_forest_baseline(cfg: TGNConfig = TGNConfig(), stream=None):
 
     # Kill-chain precursor prior (same multiplicative factor + params as the TGN), applied
     # to the val/test scores below so the baseline gets the SAME recon→lateral boost.
-    precursor_fac = causal_precursor_factor(
-        src.numpy(), t.numpy(), msg.numpy(), cfg.precursor_half_life, cfg.precursor_max_boost
-    )
+    # Measured on v5 (seeds 1000-1004, 200k): the factor alone ranks lateral at AUC 0.82-0.96,
+    # the forest without it is at chance (0.43-0.53) — hence the ``use_precursor=False`` row.
+    if use_precursor:
+        precursor_fac = causal_precursor_factor(
+            src.numpy(), t.numpy(), msg.numpy(), cfg.precursor_half_life, cfg.precursor_max_boost
+        )
+    else:
+        precursor_fac = np.ones(len(src), dtype=np.float64)
 
     X_train, y_train = X[:train_end], y_np[:train_end]
     X_val, y_val = X[train_end:val_end], y_np[train_end:val_end]
@@ -230,6 +236,11 @@ def isolation_forest_baseline(cfg: TGNConfig = TGNConfig(), stream=None):
         "agg_precision": float(precision), "agg_recall": float(recall),
         "per_type": per_type,
     }
+
+
+def isolation_forest_no_precursor_baseline(cfg: TGNConfig = TGNConfig(), stream=None):
+    """The forest alone: same features, fit and protocol, scores without the precursor factor."""
+    return isolation_forest_baseline(cfg, stream, use_precursor=False)
 
 
 def main():

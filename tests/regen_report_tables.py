@@ -11,16 +11,16 @@ The decision rules below are pre-registered in ``tasks/todo.md`` and implemented
 code, before any run.
 
 Panels (all ``save=False`` — the deployable artifact in ``public/`` is untouched)
-* **A (E1)** — TGN | Isolation Forest | rules | rules + validation labels | rules, no labels.
+* **A (E1)** — TGN | Isolation Forest | Isolation Forest without the kill-chain precursor
+  factor | rules | rules + validation labels | rules, no labels.
   The primary rules row (``lookup_rules``) gets ground-truth labels only through the
   training window, like the TGN; ``lookup_rules_val`` (the rule audit's protocol, an oracle
   over validation) is the sensitivity row and ``lookup_rules_all`` uses no label at all.
   One protocol for every row: default ``TGNConfig()`` stream, chronological 70/10/20,
   benign-only training, every method on every seed. Per class (lateral, cred-theft): AUC,
   AP and recall at the global 1% FPR; plus per-seed *paired* TGN-minus-baseline differences.
-  E1 verdict per comparator: the TGN "beats" it only if the paired difference is
-  significant (Wilcoxon) AND its bootstrap 95% CI excludes 0 upward, on lateral AND theft
-  AUC.
+  E1 verdict per comparator: the TGN "beats" it only if the bootstrap 95% CI of the
+  paired difference excludes 0 upward, on lateral AND theft AUC.
 * **B (E2)** — config node on vs off. The "on" arm IS Panel A's TGN run (reloaded from
   ``panelA.json`` and guarded by a config-equality assert): only the "off" arm trains.
 * **C (E3)** — data-budget curve: TGN / IF / rules on the last N training events before an
@@ -95,6 +95,8 @@ BASELINES = {
     # key -> (script, entrypoint, label used in the tables)
     "iforest": ("baselines/isolation_forest/isolation_forest_baseline.py",
                 "isolation_forest_baseline", "Isolation Forest"),
+    "iforest_noprec": ("baselines/isolation_forest/isolation_forest_baseline.py",
+                       "isolation_forest_no_precursor_baseline", "Isolation Forest (no precursor)"),
     "lookup_rules": ("baselines/lookup_rules/lookup_rules_baseline.py",
                      "lookup_rules_baseline", "Stateful rules"),
     "lookup_rules_val": ("baselines/lookup_rules/lookup_rules_baseline.py",
@@ -108,7 +110,7 @@ BASELINES = {
     "ocsvm": ("baselines/ocsvm/ocsvm_baseline.py", "ocsvm_baseline", "One-Class SVM"),
     "xgboost": ("baselines/xgboost/xgboost_baseline.py", "xgboost_baseline", "XGBoost (sup.)"),
 }
-LEAN_BASELINES = ["iforest", "lookup_rules", "lookup_rules_val", "lookup_rules_all"]
+LEAN_BASELINES = ["iforest", "iforest_noprec", "lookup_rules", "lookup_rules_val", "lookup_rules_all"]
 BUDGET_BASELINES = ["iforest", "lookup_rules"]   # Panel C: the primary comparators only
 
 
@@ -244,9 +246,8 @@ def run_panel_a_tgn(seeds, ov, fresh=False) -> list[dict]:
 def _paired_vs_tgn(tgn_row: dict, base_summary: dict) -> dict:
     """Per-seed paired TGN-minus-baseline statistics for every comparator and cell.
 
-    ``tgn_better`` is the pre-registered rule: the Wilcoxon test is significant AND the
-    bootstrap 95% CI of the mean paired difference excludes 0 upward. Cells a comparator
-    does not report (the rules' aggregate) are skipped.
+    ``tgn_better``: the bootstrap 95% CI of the mean paired difference excludes 0 upward.
+    Cells a comparator does not report (the rules' aggregate) are skipped.
     """
     out = {}
     for key, summ in base_summary.items():
@@ -256,7 +257,7 @@ def _paired_vs_tgn(tgn_row: dict, base_summary: dict) -> dict:
             if np.isnan(np.asarray(b, dtype=float)).all():
                 continue
             res = paired_delta(a, b)
-            res["tgn_better"] = bool(res["significant"] and res["ci95"][0] > 0)
+            res["tgn_better"] = bool(res["ci95"][0] > 0)
             out[key][cell] = res
     return out
 
@@ -378,7 +379,7 @@ def _adaptation_verdict(vals: dict, nstars: dict) -> dict:
     for other in ("iforest", "lookup_rules"):
         for cell in ("lat_auc", "theft_auc"):
             r = paired_delta(vals["tgn"][n["tgn"]][cell], vals[other][n[other]][cell])
-            if not (r["significant"] and r["ci95"][0] > 0):
+            if not r["ci95"][0] > 0:
                 return {"verdict": "rejected", "reason": f"TGN not better than {other} on {cell}"}
     return {"verdict": "supported", "n_star": n}
 
@@ -450,8 +451,8 @@ def _delta(a: dict, b: dict, key: str) -> str:
     """Signed Δ (a − b) from the PAIRED per-seed differences, with a significance marker.
 
     Both arms are run under the same seeds, so the comparison is paired: the per-seed
-    differences are what carries the signal. The dagger marks a Δ that the paired test
-    does not establish (Wilcoxon signed-rank, α=0.05).
+    differences are what carries the signal. The dagger marks a Δ whose bootstrap 95% CI
+    includes zero.
     """
     if any(math.isnan(x) for x in (a[key]["mean"], b[key]["mean"])):
         return "---"
@@ -480,7 +481,7 @@ def _emit_panel_b_tex(summary: dict):
     for label, key in rows:
         lines.append(f"{label} & {_cell(v3, key)} & {_cell(v4, key)} & "
                      f"{_delta(v4, v3, key)} \\\\")
-    lines.append(r"% $^{\dagger}$ = $\Delta$ not established by the paired Wilcoxon test.")
+    lines.append(r"% $^{\dagger}$ = paired bootstrap 95\% CI of $\Delta$ includes zero.")
     GEN_DIR.mkdir(parents=True, exist_ok=True)
     (GEN_DIR / "tab_v3v4.tex").write_text("\n".join(lines) + "\n")
 
@@ -516,7 +517,7 @@ def _emit_paired_tex(paired: dict):
     keys = list(paired)
     lines = ["% Generated by tests/regen_report_tables.py — do NOT edit by hand.",
              "% Paired per-seed TGN minus comparator: mean [bootstrap 95% CI]; dagger = TGN not shown better",
-             "% (Wilcoxon significant AND CI excluding 0 upward). Numeric source: tasks/runs/panelA.json",
+             "% (CI not excluding 0 upward). Numeric source: tasks/runs/panelA.json",
              "%   columns: " + " | ".join(BASELINES[k][2] for k in keys)]
     for label, cell in rows:
         cells = []

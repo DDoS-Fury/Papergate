@@ -100,6 +100,8 @@ docker compose --profile baseline-xgboost up
   A classic, non-relational anomaly detector: it measures what is obtained **without**
   graph structure. Hyperparameters selected on the validation AUC
   (standard compromise of the one-class setting: no labels in the fit).
+  `isolation_forest_no_precursor_baseline` is the same pipeline without the kill-chain
+  precursor factor (the forest's own scores).
 - `ocsvm/` — One-Class SVM (sklearn, RBF kernel) on the **same** per-event static
   vectors as the Isolation Forest (fit on a benign subsample for scalability). The
   kernel counterpart of the non-relational "floor".

@@ -14,7 +14,7 @@ dependencies = [
     "torch_geometric>=2.6,<3.0",
     "numpy>=1.26,<3.0",
     "scikit-learn>=1.4",
-    # Statistical tests: KS in the leakage audit, Wilcoxon in the paired-delta reporting.
+    # Statistical tests (KS in the leakage audit) and expit/logit in training and serving.
     "scipy>=1.11",
     # Supervised reference baseline (tests/baselines/xgboost) — packaged so the Panel A
     # comparison is reproducible out-of-the-box (no runtime pip install). Mirrors requirements.txt.

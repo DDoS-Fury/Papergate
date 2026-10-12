@@ -1,6 +1,6 @@
 """One-Class SVM anomaly-detection baseline for Graphagate.
 
-Why this baseline exists:
+Rationale:
   A classic, non-relational unsupervised detector that — like the Isolation Forest
   baseline — sees each access event as an i.i.d. static feature vector with no graph
   structure or temporal history. One-Class SVM (RBF kernel) is the other canonical

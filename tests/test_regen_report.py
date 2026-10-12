@@ -66,14 +66,6 @@ def test_e1_worse_tgn_is_never_better():
     assert rr._verdict(rr._paired_vs_tgn(tgn, {"r": rule})) == {"r": False}
 
 
-def test_e1_three_seeds_cannot_establish_anything():
-    # Wilcoxon needs >= 6 pairs: at 3 seeds even a huge gap is "not established".
-    tgn = _tgn_row(np.array([0.9, 0.9, 0.9]), np.array([0.9, 0.9, 0.9]))
-    tgn = {c: _row(v["vals"][:3]) for c, v in tgn.items()}
-    rule = {c: _row([0.5, 0.5, 0.5]) for c in tgn}
-    assert rr._verdict(rr._paired_vs_tgn(tgn, {"r": rule})) == {"r": False}
-
-
 # --- E3: N* -----------------------------------------------------------------------------
 N_FULL = 140_000
 

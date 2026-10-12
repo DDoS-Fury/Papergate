@@ -27,6 +27,12 @@ threshold and the per-type breakdown (policy / contextual / lateral / cred-theft
 benign-denied). The gap to the TGN measures how much the detection depends on the
 graph structure and on the interaction history.
 
+`isolation_forest_no_precursor_baseline(cfg, stream=None)` is the same pipeline without the
+precursor factor (`use_precursor=False`): the forest's own scores in model selection,
+calibration and test. On v5 (seeds 1000-1004, 200k events) the factor alone ranks lateral
+movement at AUC 0.82–0.96 and the forest without it is at chance (0.43–0.53), so the
+lateral number of the default row is the prior's, not the forest's.
+
 ## Execution
 
 Because PyTorch and baseline dependencies are not installed on the host, run the baseline inside the project's Docker container:

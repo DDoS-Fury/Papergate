@@ -86,3 +86,18 @@ def test_pipeline_passes_val_end_and_uses_the_injected_stream(monkeypatch):
     assert horizons == [int(n * cfg.train_frac) + int(n * cfg.val_frac)]
     assert 0.0 <= out["agg_auc"] <= 1.0
     assert "lateral" in out["per_type"]
+
+
+def test_no_precursor_variant_never_computes_the_factor(monkeypatch):
+    cfg = dataclasses.replace(TGNConfig(), num_events=20000, seed=2000)
+    stream = generate_streaming_data(**stream_kwargs_from_cfg(cfg))
+    with_factor = iforest.isolation_forest_baseline(cfg, stream=stream)
+
+    def _no_factor(*_a, **_k):
+        raise AssertionError("the no-precursor variant must not call causal_precursor_factor")
+
+    monkeypatch.setattr(iforest, "causal_precursor_factor", _no_factor)
+    out = iforest.isolation_forest_no_precursor_baseline(cfg, stream=stream)
+
+    assert "lateral" in out["per_type"]
+    assert out["per_type"]["lateral"]["auc"] != with_factor["per_type"]["lateral"]["auc"]

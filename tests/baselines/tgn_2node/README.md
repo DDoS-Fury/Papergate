@@ -1,6 +1,6 @@
 # Baseline: Vanilla 2-Node TGN (User → Resource)
 
-## Why this baseline exists
+## Rationale
 
 It isolates the effect of the **5-node ZTA decomposition**
 (Source → Config → Device → User → Resource) with respect to a **standard
