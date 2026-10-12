@@ -102,23 +102,6 @@ The model trains under a one-class / semi-supervised regime using policy-complia
 
 ---
 
-## Benchmark Results
-
-Evaluated on a continuous synthetic ZTA benchmark ($N = 200{,}000$ events, chronological 70% train / 10% val / 20% test split, 3 seeds). All baselines receive identical tabular signals, static features, and causal interaction counters:
-
-| Model | Agg AUC | Agg AP | Lateral Movement AUC | Lateral Recall @ 1% FPR |
-|---|:---:|:---:|:---:|:---:|
-| Isolation Forest | 0.592 ± 0.030 | 0.347 ± 0.033 | 0.537 ± 0.023 | 0.9% |
-| One-Class SVM | 0.633 ± 0.013 | 0.438 ± 0.016 | 0.469 ± 0.019 | 0.7% |
-| Static GNN (Graph, No Temporal) | 0.753 ± 0.004 | 0.674 ± 0.008 | 0.602 ± 0.024 | 13.9% |
-| TGN 2-Node ($u \to r$) | 0.854 ± 0.023 | 0.822 ± 0.028 | 0.659 ± 0.024 | 17.0% |
-| **Graphagate TGN (Full 5-Node)** | **0.853 ± 0.013** | **0.801 ± 0.013** | **0.721 ± 0.011** | **16.1%** |
-| *XGBoost (Supervised Upper-Bound)* | *0.924 ± 0.008* | *0.892 ± 0.008* | *0.783 ± 0.021* | *20.2%* |
-
-> **Role of the Configuration Node**: Incorporating the client TLS profile ($c$) exposes client-principal mismatches, raising operational cost-sensitive lateral recall from 20.2% to 48.5% (+0.283) and enabling detection of credential theft that is otherwise identical to benign traffic on direct access edges.
-
----
-
 ## Limitations and Threat Model
 
 - **External Validity**: Published benchmark numbers are evaluated primarily on continuous synthetic streams. Public enterprise datasets containing simultaneously verified user identities, TLS fingerprints, and labeled lateral movement are scarce. PicoDomain provides real fields across all five nodes but covers a small environment (6 hosts, 2.67 days); LANL auth lacks TLS/config telemetry.
