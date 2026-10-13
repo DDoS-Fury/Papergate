@@ -239,6 +239,18 @@ class TGNConfig:
     # / 70% (test) of benign events, so the shift acted as a global offset behind 95% of the
     # benign false positives and val→test FPR drift (the armed share grows along the stream).
     precursor_arm_on_score: bool = False
+    # Offline replay commit gate. True: a request is committed to the memory only if it is
+    # signal-clean AND the reference PDP allows it (serving commits on ALLOW only, never on
+    # DENY). False: signal-clean alone, which also commits the policy-violation and
+    # benign-denial classes (~1.6% of the test window), a proxy that overstates lateral / theft
+    # AUC (tasks/replay_audit_results.md). Needs ``StreamData.policy_allow`` (synthetic stream);
+    # external datasets without it fall back to the signal gate.
+    policy_gate: bool = True
+    # Diagnostic arm, off by default: do not commit the events of an entity whose precursor
+    # shift is >= this many nats (an alert is still recent). It gates on the model's own
+    # flags, which the other arms never do; it makes the logits depend on the precursor, so the
+    # scalar precursor sweep (tests/ablations/run_replay_audit.py) does not apply to it.
+    quarantine_shift: float | None = None
 
     # Per-edge benign calibration before the max over edges (serve_tgn.calibrated_edge_logit);
     # edge_calib_tail_q = quantile above which the reference gets an exponential tail.

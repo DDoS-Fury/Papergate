@@ -20,7 +20,7 @@ from graphagate.eval_common import _PER_EVENT, tail_stream
 # Written out on purpose: the tests must not derive their expectation from the module
 # under test (dropping a field from ``_PER_EVENT`` would otherwise silence its own check).
 PER_EVENT = ("source", "config", "device", "user", "dst", "t", "msg", "y", "types", "scenario",
-             "incident", "theft_variant")
+             "incident", "theft_variant", "policy_allow")
 
 
 def _split(n, cfg):
@@ -105,6 +105,7 @@ def test_rounding_never_moves_the_split():
         scenario: np.ndarray
         incident: np.ndarray
         theft_variant: np.ndarray
+        policy_allow: np.ndarray
 
     rng = np.random.default_rng(7)
     for _ in range(300):

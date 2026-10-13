@@ -1184,6 +1184,9 @@ class SyntheticStream:
     # and per machine compromise episode) and the THEFT_* bits of credential-theft events.
     incident: torch.Tensor | None = None
     theft_variant: torch.Tensor | None = None
+    # Reference-PDP decision per event (True = ``policy_allows(role, method, uri)``): the commit
+    # gate of a policy-aware replay. Derived from the message and the destination only, no label.
+    policy_allow: torch.Tensor | None = None
 
 
 def generate_streaming_data(num_events: int = 50000, **sim_kwargs) -> SyntheticStream:
@@ -1211,6 +1214,16 @@ def generate_streaming_data(num_events: int = 50000, **sim_kwargs) -> SyntheticS
     def col(name, dtype=torch.long):
         return torch.tensor([e[name] for e in events], dtype=dtype)
 
+    allowed: dict[tuple[int, int, int], bool] = {}
+
+    def pdp_allows(e) -> bool:
+        """Reference-PDP verdict of event ``e`` (role / method decoded from its message)."""
+        f = e["features"]
+        key = (int(round(float(f[5]) * (len(ROLES) - 1))), int(f[4]), e["dst"] - sim.res_lo)
+        if key not in allowed:
+            allowed[key] = bool(sim.policy_allows(ROLES[key[0]], key[1], sim.resource_uris[key[2]]))
+        return allowed[key]
+
     # Spare slots never touched by the run keep placeholder keys; that is fine — the
     # registry just preregisters them and serving re-keys slots dynamically anyway.
     return SyntheticStream(
@@ -1227,4 +1240,5 @@ def generate_streaming_data(num_events: int = 50000, **sim_kwargs) -> SyntheticS
         cfg_lo=sim.cfg_lo, cfg_num=sim.cfg_slots,
         res_lo=sim.res_lo, res_num=sim.num_resources,
         incident=col("incident"), theft_variant=col("theft_variant"),
+        policy_allow=torch.tensor([pdp_allows(e) for e in events], dtype=torch.bool),
     )

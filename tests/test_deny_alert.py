@@ -204,7 +204,7 @@ def test_replay_policy_gate_blocks_denied_commits():
     clean = np.array([not signal_dirty(ev["features"]) for ev in events])
     allow = np.arange(len(events)) % 3 != 0
 
-    def commits(policy_allow):
+    def commits(policy_allow, **kw):
         model, reg = _warmed()
         idx = {k: torch.tensor([reg.get(ev[k]) for ev in events])
                for k in ("key_user", "key_device", "key_dst", "key_source", "key_config")}
@@ -214,7 +214,7 @@ def test_replay_policy_gate_blocks_denied_commits():
             torch.tensor([ev["timestamp"] for ev in events]),
             torch.tensor([ev["features"] for ev in events], dtype=torch.float),
             torch.zeros(len(events), dtype=torch.long), DEVICE, config_nodes=idx["key_config"],
-            gate_by_label=False, policy_allow=policy_allow, batch_size=1, desc="gate",
+            gate_by_label=False, policy_allow=policy_allow, batch_size=1, desc="gate", **kw,
         )
         return sum(model.src_count.values()) - before
 
@@ -222,6 +222,9 @@ def test_replay_policy_gate_blocks_denied_commits():
     assert per_commit > 0 and clean.sum() > 0 and (clean & ~allow).any()
     assert commits(np.zeros(len(events), dtype=bool)) == 0
     assert commits(allow) == per_commit * (clean & allow).sum()
+    # Quarantine (diagnostic): shift >= 0 always holds, so nothing is committed; a huge bar never does.
+    assert commits(None, quarantine_shift=0.0) == 0
+    assert commits(None, quarantine_shift=1e9) == commits(None)
 
 
 def test_threshold_arm_round_trip(tmp_path):

@@ -146,8 +146,8 @@ def fit_thresholds(scores, labels, v_types, v_msg, cfg):
 
 def _replay(model, source_nodes, device_nodes, user, dst, t, msg, y, device, *,
             config_nodes=None, threshold=None, threshold_dirty=None, threshold_arm=None,
-            gate_by_label=False, policy_allow=None, batch_size=1, desc="replay",
-            return_edge_logits=False):
+            gate_by_label=False, policy_allow=None, quarantine_shift=None, batch_size=1,
+            desc="replay", return_edge_logits=False):
     """Offline replay mirroring the serving path; returns ``(scores, labels)``.
 
     ``source_nodes`` / ``config_nodes`` / ``device_nodes`` may be ``None`` (dataset without
@@ -160,6 +160,9 @@ def _replay(model, source_nodes, device_nodes, user, dst, t, msg, y, device, *,
         docstring (never the model's own score). ``policy_allow`` (optional bool ``[N]``, True =
         the PDP allows the request) additionally drops the events the policy denies, so a
         denied-but-signal-clean request (policy violation, benign denial) is never committed.
+        ``quarantine_shift`` (diagnostic, off by default) also drops the events of an entity
+        whose precursor shift is at least that many nats; unlike the gates above it reads the
+        model's own flags.
 
     Thresholds: with ``threshold_dirty`` the decision is signal-routed (signal-dirty events
     use ``threshold_dirty``, the rest ``threshold``); without it ``threshold`` applies to all.
@@ -176,6 +179,8 @@ def _replay(model, source_nodes, device_nodes, user, dst, t, msg, y, device, *,
     """
     model.eval()
     N = int(user.shape[0])
+    if policy_allow is not None:
+        policy_allow = np.asarray(policy_allow, dtype=bool)
     scores = np.empty(N, dtype=np.float64)
     labels = np.asarray(y.tolist(), dtype=np.int64)
     u_l, d_l, t_l, y_l = user.tolist(), dst.tolist(), t.tolist(), y.tolist()
@@ -264,7 +269,8 @@ def _replay(model, source_nodes, device_nodes, user, dst, t, msg, y, device, *,
                     do_update[j] = lab == 0
                 else:
                     do_update[j] = (not signal_dirty(msg_row)) and (
-                        policy_allow is None or bool(policy_allow[i]))
+                        policy_allow is None or bool(policy_allow[i])) and (
+                        quarantine_shift is None or shift < quarantine_shift)
 
                 # Calibration pass: no threshold yet, the label or the sensor arms the precursor.
                 if gate_by_label:
@@ -521,6 +527,8 @@ class StreamData:
     # Evaluation-only ground truth (synthetic stream): see SyntheticStream.incident.
     incident: torch.Tensor | None = None
     theft_variant: torch.Tensor | None = None
+    # Reference-PDP verdict per event (policy-aware commit gate); ``None`` = signal gate only.
+    policy_allow: torch.Tensor | None = None
 
 
 def stream_to_data(s) -> StreamData:
@@ -538,6 +546,7 @@ def stream_to_data(s) -> StreamData:
         usr_lo=s.user_lo, usr_num=s.user_num, dev_lo=s.dev_lo, dev_num=s.dev_num,
         cfg_lo=s.cfg_lo, cfg_num=s.cfg_num, src_lo=s.src_lo, src_num=s.src_num,
         incident=s.incident, theft_variant=s.theft_variant,
+        policy_allow=getattr(s, "policy_allow", None),
     )
 
 
@@ -1042,6 +1051,9 @@ def train_tgn(cfg: TGNConfig | None = None, *, dataset: "StreamData | None" = No
     def _slice(arr, lo, hi):
         return arr[lo:hi] if arr is not None else None
 
+    # Policy-aware commit gate of the offline replays (cfg.policy_gate); None = signal gate only.
+    allow_arr = data.policy_allow if cfg.policy_gate else None
+
     # Calibration replays with the test gate (gate_by_label=False), so the thresholds are
     # fitted on the score distribution they are applied to. The score-driven precursor needs
     # a threshold that does not exist yet, hence one fixed-point iteration: pass A (sensor
@@ -1074,6 +1086,10 @@ def train_tgn(cfg: TGNConfig | None = None, *, dataset: "StreamData | None" = No
         model.recent_alert = dict(snap["recent_alert"])
 
     model.recent_alert.clear()
+    # Leave train mode BEFORE the snapshot: TGNMemory.train(False) flushes its message store
+    # into the memory, and the first replay would otherwise do it (pass A only), so passes B and
+    # the test would start without the last training batch applied (tasks/todo.md, M1/M2).
+    model.eval()
     pre_cal_state = _snapshot_runtime()
 
     def _cal_replay(desc, thr=None, thr_dirty=None, thr_arm=None, gate_by_label=False, **kw):
@@ -1085,6 +1101,7 @@ def train_tgn(cfg: TGNConfig | None = None, *, dataset: "StreamData | None" = No
             msg[train_end:val_end], y[train_end:val_end], device, gate_by_label=gate_by_label,
             threshold=thr, threshold_dirty=thr_dirty, threshold_arm=thr_arm,
             config_nodes=_slice(config_arr, train_end, val_end),
+            policy_allow=_slice(allow_arr, train_end, val_end), quarantine_shift=cfg.quarantine_shift,
             batch_size=cfg.eval_batch_size, desc=desc, **kw,
         )
 
@@ -1180,6 +1197,7 @@ def train_tgn(cfg: TGNConfig | None = None, *, dataset: "StreamData | None" = No
         device, config_nodes=_slice(config_arr, val_end, n),
         threshold=threshold, threshold_dirty=threshold_dirty,
         threshold_arm=model.threshold_arm, gate_by_label=False,
+        policy_allow=_slice(allow_arr, val_end, n), quarantine_shift=cfg.quarantine_shift,
         batch_size=cfg.eval_batch_size, desc="Inferenza (replay test)",
         return_edge_logits=True,
     )

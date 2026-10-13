@@ -20,7 +20,7 @@ import numpy as np
 # Per-event tensors of a generated stream (``SyntheticStream``); everything else in it
 # (node features, keys, node-space layout) describes the entity space and must not be cut.
 _PER_EVENT = ("source", "config", "device", "user", "dst", "t", "msg", "y", "types", "scenario",
-              "incident", "theft_variant")
+              "incident", "theft_variant", "policy_allow")
 
 
 def tail_stream(stream, cfg, n_train: int):

@@ -10,16 +10,28 @@ advance: the cell with the highest VALIDATION lateral AUC. Test numbers are repo
 cell and never used to choose. The simulation is checked against the scores of the real run
 (default parameters) before any cell is trusted.
 
-Point 2 (commit gate). The offline replay commits every signal-clean event (proxy of OPA ALLOW);
-OPA would DENY the policy-violation and benign-denial classes, which are signal-clean. Arm ``B``
-re-runs the whole pipeline with a policy-aware gate (``not signal_dirty and policy_allows``), arm
-``A`` is the current gate and ``A2`` a replicate of ``A`` (same seed): ``A`` vs ``A2`` measures the
-run-to-run noise (CUDA scatter-add is not deterministic), ``A`` vs ``B`` the effect of the gate.
-The gate B uses no label: the allow mask is the reference policy applied to (role, method, uri).
+Point 2 (commit gate). The legacy offline replay commits every signal-clean event (proxy of OPA
+ALLOW); OPA would DENY the policy-violation and benign-denial classes, which are signal-clean.
+The arms are configurations of the SAME pipeline (``TGNConfig.policy_gate`` / ``quarantine_shift``):
+
+    A    legacy gate: signal-clean only                (policy_gate=False)
+    B    policy-aware gate: signal-clean AND PDP allow (policy_gate=True, the default)
+    Q    B plus quarantine of entities with a recent alert (diagnostic for the theft AUC;
+         it reads the model's own flags and makes the logits depend on the precursor)
+    A2/B2  replicas of A / B (same seed): run-to-run noise of the machine
+
+The allow mask is the reference policy applied to (role, method, uri), no label. For every arm
+the script also prints the AUC of lateral / theft events by their position in the incident: if
+the memory absorbs the attacker (the gate commits his signal-clean events), the first event is
+detected and the following ones are not.
+
+Each arm writes ``arm_<name>/arm.json`` as soon as it finishes and ``results.json`` is rewritten
+after every arm, so an interrupted run keeps what it computed. Arms are independent: run them as
+separate processes (``--arms B --out runs/B``) to use the machine in parallel.
 
     python tests/ablations/run_replay_audit.py --out runs/replay_audit            # full, GPU
     python tests/ablations/run_replay_audit.py --events 6000 --epochs 1 \
-        --ft-epochs 1 --arms A,B --cpu --out /tmp/audit_smoke                          # Mac smoke test
+        --ft-epochs 1 --arms A,B,Q --cpu --out /tmp/audit_smoke                        # Mac smoke test
 
 All runs use ``save=False``: the deployable artifact is never touched.
 """
@@ -38,8 +50,6 @@ from sklearn.metrics import roc_auc_score
 from graphagate import train_tgn as T
 from graphagate.calibration import routed_predict
 from graphagate.config import TGNConfig
-from graphagate.data.access_policy import NUM_BASE_ROUTES, build_resource_universe, policy_allows
-from graphagate.data.stream_synthetic import ROLES
 from graphagate.serve_tgn import (
     anomaly_score,
     combine_edge_logits,
@@ -54,39 +64,27 @@ SHIFTS = [1.0, 2.0, 3.0, 4.0, 6.0, 8.0]
 LATERAL, THEFT = 3, 4
 
 
-# ---------------------------------------------------------------- policy mask (gate B)
-def policy_allow_mask(cfg, data):
-    """Bool ``[N]``: the reference PDP allows the request (role, method, uri); no label used."""
-    route_methods, security_matrix, uris, _ = build_resource_universe(
-        cfg.num_resources - NUM_BASE_ROUTES, cfg.seed)
-    for r, uri in enumerate(uris):
-        assert data.keys[data.neg_lo + r] == uri, "resource catalogue != stream keys"
-    msg, dst = data.msg.numpy(), data.dst.numpy()
-    cache, out = {}, np.empty(len(dst), dtype=bool)
-    for i in range(len(dst)):
-        role = ROLES[int(round(float(msg[i, 5]) * (len(ROLES) - 1)))]
-        key = (role, int(msg[i, 4]), int(dst[i]) - data.neg_lo)
-        if key not in cache:
-            cache[key] = bool(policy_allows(role, key[1], uris[key[2]], route_methods, security_matrix))
-        out[i] = cache[key]
-    return out
+ARMS = {  # arm -> TGNConfig overrides
+    "A": dict(policy_gate=False),
+    "A2": dict(policy_gate=False),
+    "B": dict(policy_gate=True),
+    "B2": dict(policy_gate=True),
+    "Q": dict(policy_gate=True, quarantine_shift=0.5),
+}
 
 
 # ---------------------------------------------------------------- replay recorder
 class Recorder:
-    """Stands in for ``train_tgn._replay``: forces the edge logits out, records every call and
-    (arm B) injects the policy-aware commit gate into the non-label-gated replays."""
+    """Stands in for ``train_tgn._replay``: forces the edge logits out and records every call."""
 
-    def __init__(self, orig, data, allow=None):
-        self.orig, self.data, self.allow, self.calls, self.model = orig, data, allow, [], None
+    def __init__(self, orig, data):
+        self.orig, self.data, self.calls, self.model = orig, data, [], None
 
     def __call__(self, model, source_nodes, device_nodes, user, dst, t, msg, y, device, **kw):
         n = int(user.shape[0])
         # ``user`` is a view of the stream: its storage offset is the slice's start index.
         off = (user.data_ptr() - self.data.user.data_ptr()) // user.element_size()
         assert 0 <= off <= len(self.data.user) - n
-        if self.allow is not None and not kw.get("gate_by_label", False):
-            kw["policy_allow"] = self.allow[off:off + n]
         kw["return_edge_logits"] = True
         scores, labels, extra = self.orig(model, source_nodes, device_nodes, user, dst, t, msg, y,
                                           device, **kw)
@@ -97,9 +95,10 @@ class Recorder:
         return scores, labels, extra
 
 
-def run_arm(name, cfg, data, allow, out_dir):
+def run_arm(name, cfg, data, out_dir):
+    cfg = dataclasses.replace(cfg, **ARMS[name])
     orig = T._replay
-    rec = Recorder(orig, data, allow)
+    rec = Recorder(orig, data)
     T._replay = rec
     try:
         t0 = time.time()
@@ -108,7 +107,7 @@ def run_arm(name, cfg, data, allow, out_dir):
         print(f"[arm {name}] done in {time.time() - t0:.0f}s")
     finally:
         T._replay = orig
-    return m, rec
+    return m, rec, cfg
 
 
 # ---------------------------------------------------------------- scalar re-simulation
@@ -204,6 +203,7 @@ def precursor_sweep(m, rec, cfg, data, n_train, n_val):
     assert (first["off"], first["n"]) == (n_train, n_val), "first replay is not the val pass A"
     assert (last["off"], last["n"]) == (val_end, n - val_end), "last replay is not the test replay"
     assert cfg.edge_calibration and cfg.calib_iters >= 1, "the simulation assumes the defaults"
+    assert cfg.quarantine_shift is None, "quarantine makes the logits depend on the precursor"
 
     n_val_passes = 1 + cfg.calib_iters
     val_calls = rec.calls[:n_val_passes]
@@ -218,6 +218,9 @@ def precursor_sweep(m, rec, cfg, data, n_train, n_val):
         d = np.abs(val.passes[k] - val.passes[0])
         print(f"[check] val pass B{k} vs pass A (same snapshot, same gate) | combined logit: "
               f"max|d|={d.max():.3e} mean|d|={d.mean():.3e} frac(d>1e-4)={(d > 1e-4).mean():.4f}")
+        if d.max() > 1e-3:
+            print("[WARN] the replays of one slice disagree: the pre-calibration state is not "
+                  "restored exactly (PyG flush on the first eval()?)")
 
     # (2) the simulation must reproduce the real run at the default parameters
     base = calibrate_and_test(val, test, cfg, cfg.precursor_half_life, cfg.precursor_max_shift)
@@ -298,23 +301,54 @@ def print_arms(arms):
     print("\n" + f"{'metric':>12} | " + " ".join(f"{a:>10}" for a in arms))
     for k in keys:
         print(f"{k:>12} | " + " ".join(f"{arms[a][k]:10.4f}" for a in arms))
-    if "A" in arms and "B" in arms:
-        print("\nDelta B - A" + ("" if "A2" not in arms else "   (noise floor: |A2 - A|)"))
-        for k in keys:
-            d = arms["B"][k] - arms["A"][k]
-            nz = f"   |A2-A|={abs(arms['A2'][k] - arms['A'][k]):.4f}" if "A2" in arms else ""
-            print(f"{k:>12} | {d:+10.4f}{nz}")
+    for new, old, noise in (("B", "A", "A2"), ("Q", "B", "B2")):
+        if new in arms and old in arms:
+            print(f"\nDelta {new} - {old}" + (f"   (replica noise |{noise} - {old}|)" if noise in arms else ""))
+            for k in keys:
+                nz = f"   |{noise}-{old}|={abs(arms[noise][k] - arms[old][k]):.4f}" if noise in arms else ""
+                print(f"{k:>12} | {arms[new][k] - arms[old][k]:+10.4f}{nz}")
 
 
-def gate_counts(data, allow, n_train, n_val):
-    """Events the gate A commits although the PDP would deny them (label-free)."""
+def incident_positions(data, test_scores, n_train, n_val):
+    """AUC (benign vs attack events) by the event's position within its incident.
+
+    Position 0 is the first event of the incident in the whole stream (also when the incident
+    began before the test window); buckets are 0, 1 and >= 2. Lateral = type 3, theft = type 4.
+    """
+    n = len(data.dst)
+    val_end = n_train + n_val
+    inc = data.incident.numpy()
+    pos, seen = np.zeros(n, dtype=int), {}
+    for i in range(n):
+        if inc[i] >= 0:
+            pos[i] = seen.get(int(inc[i]), 0)
+            seen[int(inc[i])] = pos[i] + 1
+    types, labels, pos = data.types.numpy()[val_end:], data.y.numpy()[val_end:], pos[val_end:]
+    out = {}
+    for name, type_id in (("lateral", LATERAL), ("theft", THEFT)):
+        for bucket, mask in (("pos0", pos == 0), ("pos1", pos == 1), ("pos2+", pos >= 2)):
+            sel = (labels == 0) | ((types == type_id) & mask)
+            npos = int(((types == type_id) & mask).sum())
+            auc = float(roc_auc_score((types[sel] == type_id).astype(int), test_scores[sel])) if npos else float("nan")
+            out[f"{name}_{bucket}"] = dict(n=npos, auc=auc)
+    return out
+
+
+def print_positions(tag, pos):
+    print(f"[incident position {tag}] AUC (n): " + " | ".join(
+        f"{k} {v['auc']:.3f} ({v['n']})" for k, v in pos.items()))
+
+
+def gate_counts(data, n_train, n_val):
+    """Events the legacy gate commits although the PDP would deny them (label-free)."""
+    allow = data.policy_allow.numpy()
     dirty = T._rule_baseline(data.msg.numpy()).astype(bool)
     bad = (~dirty) & (~allow)
     types = data.types.numpy()
     for name, lo, hi in (("val", n_train, n_train + n_val), ("test", n_train + n_val, len(dirty))):
         sel = slice(lo, hi)
         c = int((~dirty[sel]).sum())
-        print(f"[gate] {name}: gate A commits {c}, of which PDP-denied {int(bad[sel].sum())} "
+        print(f"[gate] {name}: the signal gate commits {c}, of which PDP-denied {int(bad[sel].sum())} "
               f"({bad[sel].sum() / max(c, 1):.2%}) | types of those: "
               f"{dict(zip(*np.unique(types[sel][bad[sel]], return_counts=True)))}")
 
@@ -326,7 +360,7 @@ def main():
     ap.add_argument("--epochs", type=int, default=None)
     ap.add_argument("--ft-epochs", type=int, default=None)
     ap.add_argument("--seed", type=int, default=None)
-    ap.add_argument("--arms", default="A,A2,B", help="comma list of A, A2, B")
+    ap.add_argument("--arms", default="A,B", help="comma list of " + ", ".join(ARMS))
     ap.add_argument("--skip-sweep", action="store_true")
     ap.add_argument("--cpu", action="store_true",
                     help="hide MPS (the model needs ops MPS lacks: pdist, int64 scatter_reduce)")
@@ -340,7 +374,7 @@ def main():
     cfg = dataclasses.replace(TGNConfig(), **over)
     os.makedirs(a.out, exist_ok=True)
     arms_req = [x.strip() for x in a.arms.split(",") if x.strip()]
-    assert set(arms_req) <= {"A", "A2", "B"}, arms_req
+    assert set(arms_req) <= set(ARMS), arms_req
     print(f"[cfg] events={cfg.num_events} epochs={cfg.epochs}+{cfg.ft_epochs} seed={cfg.seed} "
           f"precursor={cfg.precursor_half_life / HOUR:g}h/{cfg.precursor_max_shift:g} "
           f"calib_iters={cfg.calib_iters} arms={arms_req}")
@@ -348,25 +382,36 @@ def main():
     data = T._synthetic_stream_data(cfg)
     n = len(data.dst)
     n_train, n_val = int(n * cfg.train_frac), int(n * cfg.val_frac)
-    allow = policy_allow_mask(cfg, data)
-    gate_counts(data, allow, n_train, n_val)
+    gate_counts(data, n_train, n_val)
 
-    results, arms, recs = {}, {}, {}
+    def save(results):
+        with open(os.path.join(a.out, "results.json"), "w") as f:
+            json.dump(results, f, indent=1, default=float)
+
+    results, arms, recs = dict(arms={}, positions={}), {}, {}
     for name in arms_req:
-        m, rec = run_arm(name, cfg, data, allow if name == "B" else None, a.out)
-        arms[name], recs[name] = arm_row(m), (m, rec)
+        m, rec, arm_cfg = run_arm(name, cfg, data, a.out)
+        arms[name], recs[name] = arm_row(m), (m, rec, arm_cfg)
+        pos = incident_positions(data, rec.calls[-1]["scores"], n_train, n_val)
+        print_positions(name, pos)
+        results["arms"][name], results["positions"][name] = arms[name], pos
+        with open(os.path.join(a.out, f"arm_{name}", "arm.json"), "w") as f:
+            json.dump(dict(arm=arms[name], positions=pos, cfg_overrides=ARMS[name],
+                           train_seconds=m.get("train_seconds")), f, indent=1, default=float)
+        save(results)  # an interrupted run keeps the arms already finished
     print_arms(arms)
-    results["arms"] = arms
 
-    if not a.skip_sweep:
-        base = "A" if "A" in recs else next(iter(recs))
-        m, rec = recs[base]
-        sw = precursor_sweep(m, rec, cfg, data, n_train, n_val)
+    sweepable = [x for x in ("B", "B2", "A", "A2") if x in recs]
+    if not a.skip_sweep and sweepable:
+        m, rec, arm_cfg = recs[sweepable[0]]
+        print(f"[sweep] on arm {sweepable[0]}")
+        sw = precursor_sweep(m, rec, arm_cfg, data, n_train, n_val)
         pick = print_sweep(sw)
-        results["sweep"] = dict(sw, pick=pick)
+        results["sweep"] = dict(sw, pick=pick, arm=sweepable[0])
+        save(results)
+    elif not a.skip_sweep:
+        print("[sweep] skipped: no arm without quarantine")
 
-    with open(os.path.join(a.out, "results.json"), "w") as f:
-        json.dump(results, f, indent=1, default=float)
     print(f"\n[done] {os.path.join(a.out, 'results.json')}")
 
 
