@@ -1089,7 +1089,8 @@ def train_tgn(cfg: TGNConfig | None = None, *, dataset: "StreamData | None" = No
     # Leave train mode BEFORE the snapshot: TGNMemory.train(False) flushes its message store
     # into the memory, and the first replay would otherwise do it (pass A only), so passes B and
     # the test would start without the last training batch applied (tasks/todo.md, M1/M2).
-    model.eval()
+    if cfg.flush_before_calibration:
+        model.eval()
     pre_cal_state = _snapshot_runtime()
 
     def _cal_replay(desc, thr=None, thr_dirty=None, thr_arm=None, gate_by_label=False, **kw):

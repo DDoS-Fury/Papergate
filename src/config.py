@@ -246,6 +246,10 @@ class TGNConfig:
     # AUC (tasks/replay_audit_results.md). Needs ``StreamData.policy_allow`` (synthetic stream);
     # external datasets without it fall back to the signal gate.
     policy_gate: bool = True
+    # Leave train mode before the pre-calibration snapshot, so PyG's message-store flush
+    # happens there and not inside the first calibration replay. False reproduces the old
+    # behaviour (ablation of the flush defect only; never use it for reported numbers).
+    flush_before_calibration: bool = True
     # Diagnostic arm, off by default: do not commit the events of an entity whose precursor
     # shift is >= this many nats (an alert is still recent). It gates on the model's own
     # flags, which the other arms never do; it makes the logits depend on the precursor, so the

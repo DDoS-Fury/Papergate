@@ -54,6 +54,8 @@ def main() -> int:
     p.add_argument("--train-frac", type=float, default=0.7)
     p.add_argument("--val-frac", type=float, default=0.1)
     p.add_argument("--eval-batch-size", type=int, default=1024)
+    p.add_argument("--no-flush-fix", action="store_true",
+                   help="ablation: old behaviour, PyG flush inside the first calibration replay")
     args = p.parse_args()
 
     print("--- LOADING PICODOMAIN STREAM ---")
@@ -68,6 +70,7 @@ def main() -> int:
         TGNConfig(), epochs=args.epochs, cost_ratio=args.cost_ratio,
         train_frac=args.train_frac, val_frac=args.val_frac,
         eval_batch_size=args.eval_batch_size,
+        flush_before_calibration=not args.no_flush_fix,
     )
 
     print("\n--- TRAIN + EVALUATE (PicoDomain external validity) ---")
