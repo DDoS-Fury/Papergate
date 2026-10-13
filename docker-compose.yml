@@ -231,6 +231,21 @@ services:
     entrypoint: ["python"]
     command: ["/app/tests/ablations/run_ablations.py"]
 
+  # Replay audit on the synthetic generator (200k events, 15+5 epochs, save=False): commit
+  # gate A / B / Q arms and the precursor sweep. One arm per call, e.g.
+  #   docker compose --profile replay-audit run --rm replay-audit --arms B --out /app/runs/B
+  replay-audit:
+    <<: *base
+    profiles: ["replay-audit"]
+    container_name: graphagate-replay-audit
+    volumes:
+      - ./public:/app/public
+      - ./src:/app/src
+      - ./tests:/app/tests
+      - ./runs:/app/runs
+    entrypoint: ["python", "/app/tests/ablations/run_replay_audit.py"]
+    command: ["--arms", "B", "--out", "/app/runs/B"]
+
   # Focused validation of the config node (v4): theft-rich stream (the incidents land
   # in the test split) + v4 vs config-node ablation comparison (~v3). save=False.
   config-eval:
