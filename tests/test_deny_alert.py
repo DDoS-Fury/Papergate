@@ -196,6 +196,34 @@ def test_opa_flow_matches_offline_replay():
     assert torch.equal(srv.memory.last_update, off.memory.last_update)
 
 
+def test_replay_policy_gate_blocks_denied_commits():
+    """``policy_allow`` drops PDP-denied requests from the commit gate on top of the signal gate:
+    all-False commits nothing, ``None`` is the signal gate alone, a mask commits the allowed
+    signal-clean subset only (the interaction counters count the commits)."""
+    events = list(_stream(60, seed=1, t0=T0))
+    clean = np.array([not signal_dirty(ev["features"]) for ev in events])
+    allow = np.arange(len(events)) % 3 != 0
+
+    def commits(policy_allow):
+        model, reg = _warmed()
+        idx = {k: torch.tensor([reg.get(ev[k]) for ev in events])
+               for k in ("key_user", "key_device", "key_dst", "key_source", "key_config")}
+        before = sum(model.src_count.values())
+        _replay(
+            model, idx["key_source"], idx["key_device"], idx["key_user"], idx["key_dst"],
+            torch.tensor([ev["timestamp"] for ev in events]),
+            torch.tensor([ev["features"] for ev in events], dtype=torch.float),
+            torch.zeros(len(events), dtype=torch.long), DEVICE, config_nodes=idx["key_config"],
+            gate_by_label=False, policy_allow=policy_allow, batch_size=1, desc="gate",
+        )
+        return sum(model.src_count.values()) - before
+
+    per_commit = commits(None) / clean.sum()   # counter bumps of one committed event
+    assert per_commit > 0 and clean.sum() > 0 and (clean & ~allow).any()
+    assert commits(np.zeros(len(events), dtype=bool)) == 0
+    assert commits(allow) == per_commit * (clean & allow).sum()
+
+
 def test_threshold_arm_round_trip(tmp_path):
     model, reg = _warmed()
     hp = dict(HP)

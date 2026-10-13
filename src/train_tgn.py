@@ -146,7 +146,8 @@ def fit_thresholds(scores, labels, v_types, v_msg, cfg):
 
 def _replay(model, source_nodes, device_nodes, user, dst, t, msg, y, device, *,
             config_nodes=None, threshold=None, threshold_dirty=None, threshold_arm=None,
-            gate_by_label=False, batch_size=1, desc="replay", return_edge_logits=False):
+            gate_by_label=False, policy_allow=None, batch_size=1, desc="replay",
+            return_edge_logits=False):
     """Offline replay mirroring the serving path; returns ``(scores, labels)``.
 
     ``source_nodes`` / ``config_nodes`` / ``device_nodes`` may be ``None`` (dataset without
@@ -156,7 +157,9 @@ def _replay(model, source_nodes, device_nodes, user, dst, t, msg, y, device, *,
     Memory commit gate:
       * ``gate_by_label=True``: ground-truth benign events (calibration replay);
       * ``gate_by_label=False``: signal-clean events, the OPA-ALLOW proxy of the module
-        docstring (never the model's own score).
+        docstring (never the model's own score). ``policy_allow`` (optional bool ``[N]``, True =
+        the PDP allows the request) additionally drops the events the policy denies, so a
+        denied-but-signal-clean request (policy violation, benign denial) is never committed.
 
     Thresholds: with ``threshold_dirty`` the decision is signal-routed (signal-dirty events
     use ``threshold_dirty``, the rest ``threshold``); without it ``threshold`` applies to all.
@@ -257,7 +260,11 @@ def _replay(model, source_nodes, device_nodes, user, dst, t, msg, y, device, *,
                 if threshold_dirty is not None and signal_dirty(msg_row):
                     eff_thr = threshold_dirty
                 # Commit gate: OPA-ALLOW proxy (signal-clean), not the model's own score.
-                do_update[j] = (lab == 0) if gate_by_label else (not signal_dirty(msg_row))
+                if gate_by_label:
+                    do_update[j] = lab == 0
+                else:
+                    do_update[j] = (not signal_dirty(msg_row)) and (
+                        policy_allow is None or bool(policy_allow[i]))
 
                 # Calibration pass: no threshold yet, the label or the sensor arms the precursor.
                 if gate_by_label:
