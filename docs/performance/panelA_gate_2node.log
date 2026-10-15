@@ -1,0 +1,329 @@
+ Container papergate-regen-report-run-31e7ce0ffd0a Creating 
+ Container papergate-regen-report-run-31e7ce0ffd0a Created 
+
+================================================================================
+=== PANEL A baseline: iforest | seed=1000 | 200000 ev ===
+================================================================================
+[cache] A_iforest_s1000_a85474dad6.json
+
+================================================================================
+=== PANEL A baseline: iforest_noprec | seed=1000 | 200000 ev ===
+================================================================================
+[cache] A_iforest_noprec_s1000_d5aeb91b1f.json
+
+================================================================================
+=== PANEL A baseline: lookup_rules | seed=1000 | 200000 ev ===
+================================================================================
+[cache] A_lookup_rules_s1000_be74ea0fa5.json
+
+================================================================================
+=== PANEL A baseline: lookup_rules_val | seed=1000 | 200000 ev ===
+================================================================================
+[cache] A_lookup_rules_val_s1000_cc8b17060f.json
+
+================================================================================
+=== PANEL A baseline: lookup_rules_all | seed=1000 | 200000 ev ===
+================================================================================
+[cache] A_lookup_rules_all_s1000_e9c4965b11.json
+
+================================================================================
+=== PANEL A baseline: tgn_2node | seed=1000 | 200000 ev ===
+================================================================================
+Generating synthetic streaming data (TGN params)...
+Using device: cuda
+--- TRAINING START: 2-NODE VANILLA TGN (User -> Resource) ---
+Epoch 01 | Loss: 1.9807
+Epoch 02 | Loss: 0.7577
+Epoch 03 | Loss: 0.5379
+Epoch 04 | Loss: 0.5692
+Epoch 05 | Loss: 0.4704
+Epoch 06 | Loss: 0.4977
+Epoch 07 | Loss: 0.4757
+Epoch 08 | Loss: 0.4373
+Epoch 09 | Loss: 0.4294
+Epoch 10 | Loss: 0.4186
+Epoch 11 | Loss: 0.4050
+Epoch 12 | Loss: 0.3966
+Epoch 13 | Loss: 0.4088
+Epoch 14 | Loss: 0.3858
+Epoch 15 | Loss: 0.3718
+
+Calibrated Threshold @ FPR 0.01: 0.0255
+
+Test 2-Node TGN | AUC: 0.8387 | AP: 0.6001
+At threshold 0.0255 | Precision: 0.0872 | Recall: 0.7502
+  policy      | n=  19 | AUC: 0.9943 | AP: 0.5808 | Recall@thr: 1.0000
+  contextual  | n=  66 | AUC: 0.9905 | AP: 0.7965 | Recall@thr: 0.9848
+  lateral     | n= 211 | AUC: 0.5843 | AP: 0.0072 | Recall@thr: 0.3365
+  cred-theft  | n= 179 | AUC: 0.5529 | AP: 0.0059 | Recall@thr: 0.3073
+  benign-denied | n= 670 | AUC: 0.9758 | AP: 0.8397 | Recall@thr: 0.9687
+
+================================================================================
+=== PANEL A baseline: iforest | seed=1001 | 200000 ev ===
+================================================================================
+[cache] A_iforest_s1001_46d3a26991.json
+
+================================================================================
+=== PANEL A baseline: iforest_noprec | seed=1001 | 200000 ev ===
+================================================================================
+[cache] A_iforest_noprec_s1001_68af5b06c6.json
+
+================================================================================
+=== PANEL A baseline: lookup_rules | seed=1001 | 200000 ev ===
+================================================================================
+[cache] A_lookup_rules_s1001_b707ca5a04.json
+
+================================================================================
+=== PANEL A baseline: lookup_rules_val | seed=1001 | 200000 ev ===
+================================================================================
+[cache] A_lookup_rules_val_s1001_346ee64082.json
+
+================================================================================
+=== PANEL A baseline: lookup_rules_all | seed=1001 | 200000 ev ===
+================================================================================
+[cache] A_lookup_rules_all_s1001_9775bc2ec1.json
+
+================================================================================
+=== PANEL A baseline: tgn_2node | seed=1001 | 200000 ev ===
+================================================================================
+Generating synthetic streaming data (TGN params)...
+Using device: cuda
+--- TRAINING START: 2-NODE VANILLA TGN (User -> Resource) ---
+Epoch 01 | Loss: 1.8447
+Epoch 02 | Loss: 0.7382
+Epoch 03 | Loss: 0.4155
+Epoch 04 | Loss: 0.4228
+Epoch 05 | Loss: 0.3787
+Epoch 06 | Loss: 0.3473
+Epoch 07 | Loss: 0.3389
+Epoch 08 | Loss: 0.3789
+Epoch 09 | Loss: 0.3251
+Epoch 10 | Loss: 0.3169
+Epoch 11 | Loss: 0.3659
+Epoch 12 | Loss: 0.3034
+Epoch 13 | Loss: 0.2833
+Epoch 14 | Loss: 0.2871
+Epoch 15 | Loss: 0.2819
+
+Calibrated Threshold @ FPR 0.01: 0.0578
+
+Test 2-Node TGN | AUC: 0.8277 | AP: 0.5497
+At threshold 0.0578 | Precision: 0.1278 | Recall: 0.6527
+  policy      | n=  17 | AUC: 0.9707 | AP: 0.4341 | Recall@thr: 0.9412
+  contextual  | n=  59 | AUC: 0.9667 | AP: 0.7287 | Recall@thr: 0.9492
+  lateral     | n= 194 | AUC: 0.5572 | AP: 0.0057 | Recall@thr: 0.1495
+  cred-theft  | n= 163 | AUC: 0.5542 | AP: 0.0050 | Recall@thr: 0.1350
+  benign-denied | n= 615 | AUC: 0.9682 | AP: 0.7676 | Recall@thr: 0.9122
+
+================================================================================
+=== PANEL A baseline: iforest | seed=1002 | 200000 ev ===
+================================================================================
+[cache] A_iforest_s1002_1e246d8409.json
+
+================================================================================
+=== PANEL A baseline: iforest_noprec | seed=1002 | 200000 ev ===
+================================================================================
+[cache] A_iforest_noprec_s1002_09538980a8.json
+
+================================================================================
+=== PANEL A baseline: lookup_rules | seed=1002 | 200000 ev ===
+================================================================================
+[cache] A_lookup_rules_s1002_41e3faf374.json
+
+================================================================================
+=== PANEL A baseline: lookup_rules_val | seed=1002 | 200000 ev ===
+================================================================================
+[cache] A_lookup_rules_val_s1002_c6662bc835.json
+
+================================================================================
+=== PANEL A baseline: lookup_rules_all | seed=1002 | 200000 ev ===
+================================================================================
+[cache] A_lookup_rules_all_s1002_225b387164.json
+
+================================================================================
+=== PANEL A baseline: tgn_2node | seed=1002 | 200000 ev ===
+================================================================================
+Generating synthetic streaming data (TGN params)...
+Using device: cuda
+--- TRAINING START: 2-NODE VANILLA TGN (User -> Resource) ---
+Epoch 01 | Loss: 1.8648
+Epoch 02 | Loss: 0.6798
+Epoch 03 | Loss: 0.4719
+Epoch 04 | Loss: 0.4208
+Epoch 05 | Loss: 0.3986
+Epoch 06 | Loss: 0.3807
+Epoch 07 | Loss: 0.3757
+Epoch 08 | Loss: 0.4240
+Epoch 09 | Loss: 0.4082
+Epoch 10 | Loss: 0.3505
+Epoch 11 | Loss: 0.3443
+Epoch 12 | Loss: 0.3252
+Epoch 13 | Loss: 0.3225
+Epoch 14 | Loss: 0.4427
+Epoch 15 | Loss: 0.3256
+
+Calibrated Threshold @ FPR 0.01: 0.1698
+
+Test 2-Node TGN | AUC: 0.7827 | AP: 0.4819
+At threshold 0.1698 | Precision: 0.1317 | Recall: 0.5840
+  policy      | n=  24 | AUC: 0.9651 | AP: 0.4474 | Recall@thr: 0.8750
+  contextual  | n= 100 | AUC: 0.9603 | AP: 0.4515 | Recall@thr: 0.9400
+  lateral     | n= 278 | AUC: 0.5548 | AP: 0.0081 | Recall@thr: 0.1547
+  cred-theft  | n= 262 | AUC: 0.5024 | AP: 0.0068 | Recall@thr: 0.1221
+  benign-denied | n= 610 | AUC: 0.9707 | AP: 0.7467 | Recall@thr: 0.9082
+
+================================================================================
+=== PANEL A baseline: iforest | seed=1003 | 200000 ev ===
+================================================================================
+[cache] A_iforest_s1003_e9f662175c.json
+
+================================================================================
+=== PANEL A baseline: iforest_noprec | seed=1003 | 200000 ev ===
+================================================================================
+[cache] A_iforest_noprec_s1003_dbc758dba1.json
+
+================================================================================
+=== PANEL A baseline: lookup_rules | seed=1003 | 200000 ev ===
+================================================================================
+[cache] A_lookup_rules_s1003_c2ecfdeabd.json
+
+================================================================================
+=== PANEL A baseline: lookup_rules_val | seed=1003 | 200000 ev ===
+================================================================================
+[cache] A_lookup_rules_val_s1003_6d6062eec8.json
+
+================================================================================
+=== PANEL A baseline: lookup_rules_all | seed=1003 | 200000 ev ===
+================================================================================
+[cache] A_lookup_rules_all_s1003_cc537f2708.json
+
+================================================================================
+=== PANEL A baseline: tgn_2node | seed=1003 | 200000 ev ===
+================================================================================
+Generating synthetic streaming data (TGN params)...
+Using device: cuda
+--- TRAINING START: 2-NODE VANILLA TGN (User -> Resource) ---
+Epoch 01 | Loss: 1.9125
+Epoch 02 | Loss: 0.6729
+Epoch 03 | Loss: 0.4740
+Epoch 04 | Loss: 0.4741
+Epoch 05 | Loss: 0.4280
+Epoch 06 | Loss: 0.3766
+Epoch 07 | Loss: 0.3805
+Epoch 08 | Loss: 0.3543
+Epoch 09 | Loss: 0.3450
+Epoch 10 | Loss: 0.3359
+Epoch 11 | Loss: 0.3232
+Epoch 12 | Loss: 0.3298
+Epoch 13 | Loss: 0.3304
+Epoch 14 | Loss: 0.3065
+Epoch 15 | Loss: 0.3008
+
+Calibrated Threshold @ FPR 0.01: 0.0495
+
+Test 2-Node TGN | AUC: 0.8392 | AP: 0.5822
+At threshold 0.0495 | Precision: 0.1566 | Recall: 0.6722
+  policy      | n=  26 | AUC: 0.9939 | AP: 0.2472 | Recall@thr: 1.0000
+  contextual  | n=  52 | AUC: 0.9978 | AP: 0.5155 | Recall@thr: 1.0000
+  lateral     | n= 180 | AUC: 0.5558 | AP: 0.0053 | Recall@thr: 0.1167
+  cred-theft  | n= 209 | AUC: 0.5548 | AP: 0.0075 | Recall@thr: 0.1053
+  benign-denied | n= 674 | AUC: 0.9848 | AP: 0.8171 | Recall@thr: 0.9585
+
+================================================================================
+=== PANEL A baseline: iforest | seed=1004 | 200000 ev ===
+================================================================================
+[cache] A_iforest_s1004_8b626bb9ad.json
+
+================================================================================
+=== PANEL A baseline: iforest_noprec | seed=1004 | 200000 ev ===
+================================================================================
+[cache] A_iforest_noprec_s1004_aa0ee88e9e.json
+
+================================================================================
+=== PANEL A baseline: lookup_rules | seed=1004 | 200000 ev ===
+================================================================================
+[cache] A_lookup_rules_s1004_29fd5f7135.json
+
+================================================================================
+=== PANEL A baseline: lookup_rules_val | seed=1004 | 200000 ev ===
+================================================================================
+[cache] A_lookup_rules_val_s1004_db392c5b63.json
+
+================================================================================
+=== PANEL A baseline: lookup_rules_all | seed=1004 | 200000 ev ===
+================================================================================
+[cache] A_lookup_rules_all_s1004_f78355cfbe.json
+
+================================================================================
+=== PANEL A baseline: tgn_2node | seed=1004 | 200000 ev ===
+================================================================================
+Generating synthetic streaming data (TGN params)...
+Using device: cuda
+--- TRAINING START: 2-NODE VANILLA TGN (User -> Resource) ---
+Epoch 01 | Loss: 1.8347
+Epoch 02 | Loss: 0.6391
+Epoch 03 | Loss: 0.4499
+Epoch 04 | Loss: 0.3824
+Epoch 05 | Loss: 0.4052
+Epoch 06 | Loss: 0.3327
+Epoch 07 | Loss: 0.4098
+Epoch 08 | Loss: 0.3473
+Epoch 09 | Loss: 0.3211
+Epoch 10 | Loss: 0.3144
+Epoch 11 | Loss: 0.2992
+Epoch 12 | Loss: 0.3020
+Epoch 13 | Loss: 0.3030
+Epoch 14 | Loss: 0.2771
+Epoch 15 | Loss: 0.2678
+
+Calibrated Threshold @ FPR 0.01: 0.0151
+
+Test 2-Node TGN | AUC: 0.8135 | AP: 0.5150
+At threshold 0.0151 | Precision: 0.1089 | Recall: 0.6565
+  policy      | n=  24 | AUC: 0.9707 | AP: 0.3637 | Recall@thr: 0.9583
+  contextual  | n=  73 | AUC: 0.9821 | AP: 0.6625 | Recall@thr: 0.9726
+  lateral     | n= 249 | AUC: 0.5723 | AP: 0.0101 | Recall@thr: 0.2329
+  cred-theft  | n= 223 | AUC: 0.5713 | AP: 0.0108 | Recall@thr: 0.2063
+  benign-denied | n= 639 | AUC: 0.9669 | AP: 0.7456 | Recall@thr: 0.9311
+
+================================================================================
+=== PANEL A: TGN | seed=1000 | default config, 200000 ev / 15 ep ===
+================================================================================
+[cache] A_tgn_s1000_729ef75db2.json
+
+================================================================================
+=== PANEL A: TGN | seed=1001 | default config, 200000 ev / 15 ep ===
+================================================================================
+[cache] A_tgn_s1001_f2f5ba4658.json
+
+================================================================================
+=== PANEL A: TGN | seed=1002 | default config, 200000 ev / 15 ep ===
+================================================================================
+[cache] A_tgn_s1002_d9d47f9363.json
+
+================================================================================
+=== PANEL A: TGN | seed=1003 | default config, 200000 ev / 15 ep ===
+================================================================================
+[cache] A_tgn_s1003_1b9e87656f.json
+
+================================================================================
+=== PANEL A: TGN | seed=1004 | default config, 200000 ev / 15 ep ===
+================================================================================
+[cache] A_tgn_s1004_e920a0c342.json
+
+################################################################################
+# PANEL A (E1)
+################################################################################
+  TGN                    agg_auc=0.886±0.018 | agg_ap=0.623±0.049 | agg_recall_global=0.639±0.029 | lat_auc=0.890±0.023 | lat_ap=0.116±0.053 | lat_recall_global=0.371±0.049 | theft_auc=0.589±0.081 | theft_ap=0.014±0.006 | theft_recall_global=0.070±0.026
+  iforest                agg_auc=0.769±0.032 | agg_ap=0.091±0.012 | agg_recall_global=0.061±0.014 | lat_auc=0.910±0.050 | lat_ap=0.067±0.017 | lat_recall_global=0.147±0.037 | theft_auc=0.695±0.059 | theft_ap=0.010±0.003 | theft_recall_global=0.007±0.008
+  iforest_noprec         agg_auc=0.715±0.032 | agg_ap=0.081±0.015 | agg_recall_global=0.054±0.015 | lat_auc=0.483±0.045 | lat_ap=0.006±0.001 | lat_recall_global=0.013±0.010 | theft_auc=0.752±0.068 | theft_ap=0.031±0.016 | theft_recall_global=0.088±0.029
+  lookup_rules           agg_auc=nan±nan | agg_ap=nan±nan | agg_recall_global=nan±nan | lat_auc=0.666±0.029 | lat_ap=0.009±0.002 | lat_recall_global=0.000±0.000 | theft_auc=0.826±0.024 | theft_ap=0.020±0.004 | theft_recall_global=0.000±0.000
+  lookup_rules_val       agg_auc=nan±nan | agg_ap=nan±nan | agg_recall_global=nan±nan | lat_auc=0.706±0.034 | lat_ap=0.012±0.004 | lat_recall_global=0.140±0.057 | theft_auc=0.869±0.020 | theft_ap=0.033±0.007 | theft_recall_global=0.426±0.027
+  lookup_rules_all       agg_auc=nan±nan | agg_ap=nan±nan | agg_recall_global=nan±nan | lat_auc=0.650±0.023 | lat_ap=0.014±0.003 | lat_recall_global=0.013±0.007 | theft_auc=0.508±0.009 | theft_ap=0.048±0.002 | theft_recall_global=0.071±0.008
+  tgn_2node              agg_auc=0.820±0.023 | agg_ap=0.546±0.048 | agg_recall_global=0.663±0.059 | lat_auc=0.565±0.013 | lat_ap=0.007±0.002 | lat_recall_global=0.198±0.088 | theft_auc=0.547±0.026 | theft_ap=0.007±0.002 | theft_recall_global=0.175±0.083
+
+E1 verdict (TGN beats comparator on lateral AND theft AUC): {'iforest': False, 'iforest_noprec': False, 'lookup_rules': False, 'lookup_rules_val': False, 'lookup_rules_all': True, 'tgn_2node': False}
+
+JSON -> /app/tasks/runs/panelA_gate
+LaTeX fragments -> /app/tasks/runs/panelA_gate/generated
+DONE_REGEN_REPORT_TABLES
