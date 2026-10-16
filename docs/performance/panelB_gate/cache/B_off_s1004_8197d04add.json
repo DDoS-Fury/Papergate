@@ -1,0 +1,274 @@
+{
+  "threshold": 0.9993195487318753,
+  "threshold_dirty": 0.9999998656177554,
+  "threshold_clean_unsup": 0.9993358678002924,
+  "agg_auc": 0.8885151313031019,
+  "agg_ap": 0.6436250677265475,
+  "agg_precision": 0.6709440879926672,
+  "agg_recall": 0.6059602649006622,
+  "agg_recall_global": 0.6109271523178808,
+  "lateral_recall_before": 0.0963855421686747,
+  "lateral_recall_after": 0.0963855421686747,
+  "fpr_before": 0.009795834192617035,
+  "fpr_after": 0.009254485460919778,
+  "per_type": {
+    "policy": {
+      "auc": 0.9994500584312916,
+      "ap": 0.7108549766466112,
+      "recall": 1.0,
+      "recall_global": 1.0,
+      "n": 24
+    },
+    "contextual": {
+      "auc": 0.970932080332903,
+      "ap": 0.7401139249787541,
+      "recall": 0.863013698630137,
+      "recall_global": 0.9452054794520548,
+      "n": 73
+    },
+    "lateral": {
+      "auc": 0.7720820381960922,
+      "ap": 0.0239535323114622,
+      "recall": 0.0963855421686747,
+      "recall_global": 0.0963855421686747,
+      "n": 249
+    },
+    "cred-theft": {
+      "auc": 0.6943787586918666,
+      "ap": 0.03844228991670477,
+      "recall": 0.06726457399103139,
+      "recall_global": 0.06726457399103139,
+      "n": 223
+    },
+    "benign-denied": {
+      "auc": 0.9880540604825996,
+      "ap": 0.9183672012252195,
+      "recall": 0.9483568075117371,
+      "recall_global": 0.9483568075117371,
+      "n": 639
+    }
+  },
+  "cold_start": {
+    "n_warmed": 249,
+    "n_cold": 0,
+    "recall_warmed": 0.0963855421686747,
+    "recall_cold": NaN,
+    "auc_warmed": 0.7720820381960922
+  },
+  "incident": {
+    "routed": {
+      "lateral": {
+        "n_incidents": 30,
+        "n_events": 249,
+        "blocked": 0.4666666666666667,
+        "served_median": 2.0,
+        "served_share": 0.550597643097643
+      },
+      "lateral (any chain event)": {
+        "n_incidents": 30,
+        "n_events": 249,
+        "blocked": 0.9666666666666667,
+        "served_median": 0.0,
+        "served_share": 0.19833573833573837
+      },
+      "cred-theft": {
+        "n_incidents": 51,
+        "n_events": 223,
+        "blocked": 0.23529411764705882,
+        "served_median": 3.0,
+        "served_share": 0.7647058823529411
+      },
+      "theft_variants": {
+        "none": {
+          "n_events": 11,
+          "auc": 0.9065739890136673,
+          "recall": 0.18181818181818182,
+          "n_incidents": 2,
+          "blocked": 1.0,
+          "served_median": 0.0,
+          "served_share": 0.0
+        },
+        "replay": {
+          "n_events": 3,
+          "auc": 0.9797380903279026,
+          "recall": 0.3333333333333333,
+          "n_incidents": 1,
+          "blocked": 1.0,
+          "served_median": 0.0,
+          "served_share": 0.0
+        },
+        "mimic": {
+          "n_events": 50,
+          "auc": 0.8497798515157765,
+          "recall": 0.16,
+          "n_incidents": 10,
+          "blocked": 0.8,
+          "served_median": 0.0,
+          "served_share": 0.2
+        },
+        "replay+mimic": {
+          "n_events": 16,
+          "auc": 0.6326981078572902,
+          "recall": 0.0,
+          "n_incidents": 3,
+          "blocked": 0.0,
+          "served_median": 6.0,
+          "served_share": 1.0
+        },
+        "known-src": {
+          "n_events": 23,
+          "auc": 0.5462119038439122,
+          "recall": 0.0,
+          "n_incidents": 5,
+          "blocked": 0.0,
+          "served_median": 5.0,
+          "served_share": 1.0
+        },
+        "replay+known-src": {
+          "n_events": 24,
+          "auc": 0.6828544974908916,
+          "recall": 0.0,
+          "n_incidents": 6,
+          "blocked": 0.0,
+          "served_median": 4.0,
+          "served_share": 1.0
+        },
+        "mimic+known-src": {
+          "n_events": 77,
+          "auc": 0.6000333446714143,
+          "recall": 0.05194805194805195,
+          "n_incidents": 18,
+          "blocked": 0.05555555555555555,
+          "served_median": 4.0,
+          "served_share": 0.9444444444444444
+        },
+        "replay+mimic+known-src": {
+          "n_events": 19,
+          "auc": 0.7457275509871812,
+          "recall": 0.0,
+          "n_incidents": 6,
+          "blocked": 0.0,
+          "served_median": 3.0,
+          "served_share": 1.0
+        }
+      }
+    },
+    "global": {
+      "lateral": {
+        "n_incidents": 30,
+        "n_events": 249,
+        "blocked": 0.4666666666666667,
+        "served_median": 2.0,
+        "served_share": 0.550597643097643
+      },
+      "lateral (any chain event)": {
+        "n_incidents": 30,
+        "n_events": 249,
+        "blocked": 1.0,
+        "served_median": 0.0,
+        "served_share": 0.15894179894179894
+      },
+      "cred-theft": {
+        "n_incidents": 51,
+        "n_events": 223,
+        "blocked": 0.23529411764705882,
+        "served_median": 3.0,
+        "served_share": 0.7647058823529411
+      },
+      "theft_variants": {
+        "none": {
+          "n_events": 11,
+          "auc": 0.9065739890136673,
+          "recall": 0.18181818181818182,
+          "n_incidents": 2,
+          "blocked": 1.0,
+          "served_median": 0.0,
+          "served_share": 0.0
+        },
+        "replay": {
+          "n_events": 3,
+          "auc": 0.9797380903279026,
+          "recall": 0.3333333333333333,
+          "n_incidents": 1,
+          "blocked": 1.0,
+          "served_median": 0.0,
+          "served_share": 0.0
+        },
+        "mimic": {
+          "n_events": 50,
+          "auc": 0.8497798515157765,
+          "recall": 0.16,
+          "n_incidents": 10,
+          "blocked": 0.8,
+          "served_median": 0.0,
+          "served_share": 0.2
+        },
+        "replay+mimic": {
+          "n_events": 16,
+          "auc": 0.6326981078572902,
+          "recall": 0.0,
+          "n_incidents": 3,
+          "blocked": 0.0,
+          "served_median": 6.0,
+          "served_share": 1.0
+        },
+        "known-src": {
+          "n_events": 23,
+          "auc": 0.5462119038439122,
+          "recall": 0.0,
+          "n_incidents": 5,
+          "blocked": 0.0,
+          "served_median": 5.0,
+          "served_share": 1.0
+        },
+        "replay+known-src": {
+          "n_events": 24,
+          "auc": 0.6828544974908916,
+          "recall": 0.0,
+          "n_incidents": 6,
+          "blocked": 0.0,
+          "served_median": 4.0,
+          "served_share": 1.0
+        },
+        "mimic+known-src": {
+          "n_events": 77,
+          "auc": 0.6000333446714143,
+          "recall": 0.05194805194805195,
+          "n_incidents": 18,
+          "blocked": 0.05555555555555555,
+          "served_median": 4.0,
+          "served_share": 0.9444444444444444
+        },
+        "replay+mimic+known-src": {
+          "n_events": 19,
+          "auc": 0.7457275509871812,
+          "recall": 0.0,
+          "n_incidents": 6,
+          "blocked": 0.0,
+          "served_median": 3.0,
+          "served_share": 1.0
+        }
+      }
+    }
+  },
+  "scenario": {
+    "fpr_plain": 0.005373432748781605,
+    "fpr_roaming": 0.042828965905888985,
+    "fpr_wiped": 0.009296148738379814,
+    "n_roaming": 3549,
+    "n_wiped": 753,
+    "fpr_new_user": 0.050505050505050504,
+    "n_new_user": 99,
+    "theft_recall": 0.06726457399103139,
+    "theft_auc": 0.6943787586918666,
+    "n_theft": 223,
+    "shared_lateral_recall": 0.07792207792207792,
+    "n_shared_lateral": 77
+  },
+  "train_seconds": 621.6556791149997,
+  "use_struct_head": true,
+  "use_hash_identity": true,
+  "use_hist_feats": true,
+  "use_precursor": true,
+  "use_config_node": false
+}
