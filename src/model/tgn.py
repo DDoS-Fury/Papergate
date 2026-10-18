@@ -173,6 +173,14 @@ class ZTATemporalGraphNetwork(nn.Module):
         z = self.gnn(x, last_update, edge_index, hist_t, hist_msg)
         return z
 
+    @staticmethod
+    def _as_int_list(x) -> list[int]:
+        if isinstance(x, list):
+            return x
+        if torch.is_tensor(x):
+            return x.tolist()
+        return [int(v) for v in x]
+
     def pair_delta_t(self, src_ids, dst_ids, t_vals, device):
         """Recency of each ``src→dst`` pair, capped at ``delta_t_cap``; never-seen pairs get the cap.
 
@@ -181,10 +189,16 @@ class ZTATemporalGraphNetwork(nn.Module):
         negatives are never-seen by construction). Shared by training, replay and serving.
         """
         cap = float(self.delta_t_cap)
-        out = []
-        for s, d, t in zip(src_ids, dst_ids, t_vals):
-            last = self.last_contact.get((int(s), int(d)))
-            out.append(cap if last is None else min(max(float(t) - float(last), 0.0), cap))
+        s_l = self._as_int_list(src_ids)
+        d_l = self._as_int_list(dst_ids)
+        t_l = t_vals if isinstance(t_vals, list) else (
+            t_vals.tolist() if torch.is_tensor(t_vals) else list(t_vals)
+        )
+        lc_get = self.last_contact.get
+        out = [
+            cap if (last := lc_get((s, d))) is None else min(max(float(t) - float(last), 0.0), cap)
+            for s, d, t in zip(s_l, d_l, t_l)
+        ]
         return torch.tensor(out, dtype=torch.float, device=device)
 
     def src_delta_t(self, src_ids, t_vals, device=None):
@@ -202,13 +216,15 @@ class ZTATemporalGraphNetwork(nn.Module):
 
     def _hist_triplet(self, src_ids, dst_ids, device):
         """``[log1p(pair_count), log1p(src_count), pair_count/(src_count+1)]`` per pair."""
-        pc = torch.tensor(
-            [self.pair_count.get((int(s), int(d)), 0) for s, d in zip(src_ids, dst_ids)],
+        s_l = self._as_int_list(src_ids)
+        d_l = self._as_int_list(dst_ids)
+        pc_get = self.pair_count.get
+        sc_get = self.src_count.get
+        counts = torch.tensor(
+            [[pc_get((s, d), 0), sc_get(s, 0)] for s, d in zip(s_l, d_l)],
             dtype=torch.float, device=device,
         )
-        sc = torch.tensor(
-            [self.src_count.get(int(s), 0) for s in src_ids], dtype=torch.float, device=device,
-        )
+        pc, sc = counts[:, 0], counts[:, 1]
         return torch.stack([torch.log1p(pc), torch.log1p(sc), pc / (sc + 1.0)], dim=-1)
 
     def compute_hist_feats(self, src_ids, dst_ids, device, aux_src_ids=None):
@@ -221,12 +237,24 @@ class ZTATemporalGraphNetwork(nn.Module):
         device (per-device habituality without a device→resource edge). ``aux_src_ids=None``
         zero-pads it. Counts are benign-gated.
         """
-        base = self._hist_triplet(src_ids, dst_ids, device)
         if aux_src_ids is None:
-            aux = torch.zeros_like(base)
-        else:
-            aux = self._hist_triplet(aux_src_ids, dst_ids, device)
-        return torch.cat([base, aux], dim=-1)
+            base = self._hist_triplet(src_ids, dst_ids, device)
+            return torch.cat([base, torch.zeros_like(base)], dim=-1)
+        s_l = self._as_int_list(src_ids)
+        d_l = self._as_int_list(dst_ids)
+        a_l = self._as_int_list(aux_src_ids)
+        pc_get = self.pair_count.get
+        sc_get = self.src_count.get
+        counts = torch.tensor(
+            [[pc_get((s, d), 0), sc_get(s, 0), pc_get((a, d), 0), sc_get(a, 0)]
+             for s, d, a in zip(s_l, d_l, a_l)],
+            dtype=torch.float, device=device,
+        )
+        pc, sc, apc, asc = counts[:, 0], counts[:, 1], counts[:, 2], counts[:, 3]
+        return torch.stack([
+            torch.log1p(pc), torch.log1p(sc), pc / (sc + 1.0),
+            torch.log1p(apc), torch.log1p(asc), apc / (asc + 1.0),
+        ], dim=-1)
 
     def score(self, z, nf, h_idx, src_local, dst_local, cur_msg, delta_t, delta_t_src, hist_feats):
         """Benign-vs-anomalous logit for ``src_local -> dst_local`` carrying ``cur_msg``.

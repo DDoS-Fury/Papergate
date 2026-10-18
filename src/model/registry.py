@@ -79,6 +79,10 @@ class NodeRegistry:
         used = list(self._idx_to_key.keys())
         if recency is None:
             return min(used)
+        if hasattr(recency, "index_select"):
+            import torch
+            idx_t = torch.tensor(used, dtype=torch.long, device=recency.device)
+            return used[int(recency.index_select(0, idx_t).argmin().item())]
         return min(used, key=lambda i: float(recency[i]))
 
     # --- (de)serialisation -------------------------------------------------
