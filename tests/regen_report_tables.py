@@ -30,6 +30,11 @@ Panels (all ``save=False`` — the deployable artifact in ``public/`` is untouch
   N* = the smallest N whose paired 95% CI of (AUC_N - AUC_full) has lower bound >=
   -``NON_INFERIORITY_MARGIN`` with half-width <= the margin, on lateral AND theft; a CI
   wider than the margin is "undetermined" (extend the seeds), never a pass.
+* **D (E4)** — component ablation of the full TGN: history features, kill-chain precursor,
+  structural-compatibility head, hashed identity, each switched off alone (``train_tgn``
+  flags). The full arm IS Panel A's TGN run (reloaded, as in Panel B); only the ablated
+  arms train. Paired full-minus-variant deltas with bootstrap 95% CI: a component
+  "contributes" on a metric only if the CI excludes 0 upward.
 
 Seeds: 1000-1009, *fresh* — the generator v5 was tuned against 1-9/42/7/123. Panel C uses
 the first five. Dev / smoke runs use 2000+ and must go through ``--out-dir``.
@@ -39,12 +44,15 @@ Run on the GPU box (about 15 min per TGN run; the fixed val/test replays dominat
     docker compose --profile regen-report up                                   # A (E1)
     docker compose run --rm regen-report /app/tests/regen_report_tables.py --panels B
     docker compose run --rm regen-report /app/tests/regen_report_tables.py --panels C
+    docker compose run --rm regen-report /app/tests/regen_report_tables.py --panels D
+
+Panels B and D read ``<out-dir>/panelA.json`` (copy it there when using a separate ``--out-dir``).
 
 Every training/baseline run is cached under ``<out-dir>/cache`` and reused on a rerun, so a
 crash after hours resumes instead of restarting. Delete the cache after changing code, or
 pass ``--fresh``.
 
-Outputs: ``panelA.json`` / ``panelB.json`` / ``panelC.json`` (per-seed dicts, cells,
+Outputs: ``panelA.json`` / ``panelB.json`` / ``panelC.json`` / ``panelD.json`` (per-seed dicts, cells,
 paired statistics, verdicts) and LaTeX fragments under ``<out-dir>/generated`` (default
 ``docs/paper/generated/``).
 """
@@ -157,6 +165,17 @@ PANEL_B_CELLS = {
     "ctx_recall": _pt("contextual", "recall"),
     "fpr_routed": ("fpr_after",),
 }
+
+# Panel D: each component off on its own (all other flags at their ``train_tgn`` default = on).
+ABLATION_VARIANTS = {
+    "no_hist": ("history features", dict(use_hist_feats=False)),
+    "no_precursor": ("precursor prior", dict(use_precursor=False)),
+    "no_struct": ("structural head", dict(use_struct_head=False)),
+    "no_hash": ("hashed identity", dict(use_hash_identity=False)),
+}
+PANEL_D_CELLS = {**PANEL_B_CELLS, "theft_auc": _pt("cred-theft", "auc"),
+                 "theft_ap": _pt("cred-theft", "ap"),
+                 "theft_recall_global": _pt("cred-theft", "recall_global")}
 
 # Panel A cells. The two dict kinds differ ONLY where the recall lives: the TGN's
 # ``per_type[..]["recall"]`` is the ROUTED (cost-sensitive) recall, so the global-1%-FPR
@@ -328,6 +347,32 @@ def run_panel_b(seeds, ov, fresh=False) -> dict:
     return payload
 
 
+def run_panel_d(seeds, variants, ov, fresh=False) -> dict:
+    """Component ablation (E4). "full" = Panel A's TGN run; each variant switches one component off."""
+    full_raw, _ = _load_panel_a(seeds, ov)
+    raw = {"full": full_raw}
+    for name in variants:
+        label, flags = ABLATION_VARIANTS[name]
+        raw[name] = []
+        for seed in seeds:
+            cfg = _cfg(seed, ov)
+            print("\n" + "=" * 80)
+            print(f"=== PANEL D: {label} OFF | seed={seed} | {cfg.num_events} ev / {cfg.epochs} ep ===")
+            print("=" * 80, flush=True)
+            raw[name].append(_cached(f"D_{name}", seed, ov,
+                                     lambda: train_tgn(cfg, save=False, use_config_node=True, **flags),
+                                     fresh=fresh))
+    summary = {name: _summarise(runs, PANEL_D_CELLS) for name, runs in raw.items()}
+    paired = {name: {c: paired_delta(summary["full"][c]["vals"], summary[name][c]["vals"])
+                     for c in PANEL_D_CELLS} for name in variants}
+    payload = {"meta": _meta(seeds, "component ablation, routed decision; 'full' arm = Panel A's TGN run", ov),
+               "raw": raw, "summary": summary, "paired_full_minus_variant": paired}
+    dump_json(payload, RUNS_DIR / "panelD.json")
+    _emit_panel_d_tex(summary, paired, variants)
+    _print_summary("PANEL D (E4) — component ablation", summary, list(PANEL_D_CELLS))
+    return payload
+
+
 # --- Panel C: data-budget curve ---------------------------------------------------------
 def _curve_vals(raw: dict) -> dict:
     """raw[method][N] = [per-seed run dict]  ->  vals[method][N][cell] = [per-seed float]."""
@@ -486,6 +531,47 @@ def _emit_panel_b_tex(summary: dict):
     (GEN_DIR / "tab_v3v4.tex").write_text("\n".join(lines) + "\n")
 
 
+def _emit_panel_d_tex(summary: dict, paired: dict, variants: list[str]):
+    rows = [
+        ("Aggregate AUC", "agg_auc"),
+        ("Aggregate AP", "agg_ap"),
+        ("Lateral --- AUC", "lat_auc"),
+        ("Lateral --- AP", "lat_ap"),
+        ("Lateral --- recall (@1\\%FPR)", "lat_recall_global"),
+        ("Theft --- AUC", "theft_auc"),
+        ("Benign FPR (routed)", "fpr_routed"),
+    ]
+    cols = ["full"] + list(variants)
+    head = ["% Generated by tests/regen_report_tables.py — do NOT edit by hand.",
+            "% Numeric source: tasks/runs/panelD.json",
+            "% Columns: Metric & " + " & ".join("full" if c == "full" else f"no {ABLATION_VARIANTS[c][0]}"
+                                                for c in cols)]
+    lines = list(head)
+    for label, key in rows:
+        lines.append(f"{label} & " + " & ".join(_cell(summary[c], key) for c in cols) + " \\\\")
+    GEN_DIR.mkdir(parents=True, exist_ok=True)
+    (GEN_DIR / "tab_ablation.tex").write_text("\n".join(lines) + "\n")
+
+    lines = head[:2] + ["% Paired per-seed full minus variant: mean [bootstrap 95% CI]; dagger = CI does not",
+                        "% exclude 0 upward (the component is not shown to help on that metric).",
+                        "% Columns: Metric & " + " & ".join(f"no {ABLATION_VARIANTS[c][0]}" for c in variants)]
+    for label, key in rows:
+        cells = []
+        for c in variants:
+            r = paired[c][key]
+            if math.isnan(r["mean_delta"]):
+                cells.append("---")
+                continue
+            lo, hi = r["ci95"]
+            if math.isnan(lo):          # <2 valid pairs: no CI, so no claim either way
+                cells.append(f"${r['mean_delta']:+.3f}$ [n/a]$^{{\\dagger}}$")
+                continue
+            dag = "" if lo > 0 else r"$^{\dagger}$"
+            cells.append(f"${r['mean_delta']:+.3f}$ [{lo:+.3f}, {hi:+.3f}]{dag}")
+        lines.append(f"{label} & " + " & ".join(cells) + " \\\\")
+    (GEN_DIR / "tab_ablation_paired.tex").write_text("\n".join(lines) + "\n")
+
+
 def _emit_panel_a_tex(tgn: dict, base_summary: dict):
     # Columns of tab:baselines are MODELS; rows are METRICS.
     metric_rows = [
@@ -548,11 +634,13 @@ def main():
     global RUNS_DIR, GEN_DIR
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--seeds", type=int, nargs="+", default=SEEDS, help="Panels A and B (default 1000-1009)")
-    ap.add_argument("--panels", choices=["A", "B", "C", "AB", "ABC"], default="A",
-                    help="A = E1 (default; B and C are gated on its result), B = E2, C = E3")
+    ap.add_argument("--panels", default="A",
+                    help="A = E1 (default; B, C and D are gated on its result), B = E2, C = E3, D = E4")
     ap.add_argument("--baselines", nargs="+", choices=list(BASELINES), default=LEAN_BASELINES)
     ap.add_argument("--budget-seeds", type=int, nargs="+", default=BUDGET_SEEDS, help="Panel C seeds")
     ap.add_argument("--budgets", type=int, nargs="+", default=BUDGETS, help="Panel C training budgets (events)")
+    ap.add_argument("--ablations", nargs="+", choices=list(ABLATION_VARIANTS), default=list(ABLATION_VARIANTS),
+                    help="Panel D: components to switch off (one run per component and seed)")
     ap.add_argument("--events", type=int, default=None, help="SMOKE ONLY: override num_events")
     ap.add_argument("--epochs", type=int, default=None, help="SMOKE ONLY: override epochs")
     ap.add_argument("--out-dir", type=Path, default=None,
@@ -560,10 +648,13 @@ def main():
     ap.add_argument("--fresh", action="store_true", help="ignore the run cache")
     args = ap.parse_args()
 
+    if not set(args.panels) <= set("ABCD"):
+        raise SystemExit(f"--panels takes letters from ABCD, got {args.panels!r}")
+
     ov = {k: v for k, v in (("num_events", args.events), ("epochs", args.epochs)) if v is not None}
     if ov and args.out_dir is None:
         raise SystemExit("--events/--epochs are smoke overrides and would overwrite the real "
-                         "panelA/B/C.json: pass --out-dir.")
+                         "panelA/B/C/D.json: pass --out-dir.")
     if args.out_dir is not None:
         RUNS_DIR, GEN_DIR = args.out_dir, args.out_dir / "generated"
     RUNS_DIR.mkdir(parents=True, exist_ok=True)
@@ -575,6 +666,9 @@ def main():
         run_panel_b(args.seeds, ov, args.fresh)
     if "C" in args.panels:
         run_panel_c(args.budget_seeds, args.budgets, ov, BUDGET_BASELINES, args.fresh)
+
+    if "D" in args.panels:
+        run_panel_d(args.seeds, args.ablations, ov, args.fresh)
 
     print(f"\nJSON -> {RUNS_DIR}\nLaTeX fragments -> {GEN_DIR}\nDONE_REGEN_REPORT_TABLES")
 

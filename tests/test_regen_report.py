@@ -187,3 +187,37 @@ def test_latex_cell_never_emits_pmnan():
     assert rr.latex_cell([0.5, float("nan")]) == "$0.500$"
     assert rr.latex_cell([0.4, 0.6], bold=True) == r"$\mathbf{0.500}\pm0.141$"
     assert rr._cell({"k": {"mean": float("nan"), "std": float("nan"), "vals": [float("nan")]}}, "k") == "---"
+
+
+def test_panel_d_toggles_one_component_per_arm_and_reuses_the_full_run(tmp_path, monkeypatch):
+    seeds, ov = [1, 2, 3], {"num_events": 10, "epochs": 1}
+
+    def fake_run(lat):
+        return {"agg_auc": 0.9, "agg_ap": 0.6, "agg_recall": 0.5, "lateral_recall_before": 0.3,
+                "fpr_after": 0.01,
+                "per_type": {c: {"auc": lat, "ap": 0.1, "recall": 0.2, "recall_global": 0.2}
+                             for c in ("lateral", "cred-theft", "policy", "contextual")}}
+
+    full = [fake_run(0.9 + 0.01 * i) for i in range(3)]
+    meta = rr._meta(seeds, "", ov)
+    (tmp_path / "panelA.json").write_text(__import__("json").dumps(
+        {"meta": meta, "tgn_row": {"raw": full}, "baselines": {"raw": {}}}))
+    monkeypatch.setattr(rr, "RUNS_DIR", tmp_path)
+    monkeypatch.setattr(rr, "GEN_DIR", tmp_path / "generated")
+    seen = []
+
+    def fake_train(cfg, **flags):
+        seen.append(flags)
+        return fake_run(0.7)
+
+    monkeypatch.setattr(rr, "train_tgn", fake_train)
+    out = rr.run_panel_d(seeds, ["no_precursor", "no_struct"], ov)
+
+    assert len(seen) == 6                                    # 2 variants x 3 seeds, no "full" retrain
+    assert all(f["use_config_node"] for f in seen)
+    assert {k for f in seen for k, v in f.items() if v is False and k != "save"} == {"use_precursor", "use_struct_head"}
+    assert out["summary"]["full"]["lat_auc"]["vals"] == pytest.approx([0.9, 0.91, 0.92])
+    assert out["paired_full_minus_variant"]["no_struct"]["lat_auc"]["significant"]
+    gen = tmp_path / "generated"
+    assert "no precursor prior" in (gen / "tab_ablation.tex").read_text()
+    assert (gen / "tab_ablation_paired.tex").read_text().count("\\\\") == 7

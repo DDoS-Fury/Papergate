@@ -308,6 +308,7 @@ services:
   #   docker compose --profile regen-report up
   #   docker compose run --rm regen-report /app/tests/regen_report_tables.py --panels B
   #   docker compose run --rm regen-report /app/tests/regen_report_tables.py --panels C
+  #   docker compose run --rm regen-report /app/tests/regen_report_tables.py --panels D   # component ablation
   regen-report:
     <<: *base
     profiles: ["regen-report"]
