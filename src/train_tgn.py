@@ -556,7 +556,7 @@ def _synthetic_stream_data(cfg: TGNConfig) -> StreamData:
 
 
 def train_tgn(cfg: TGNConfig | None = None, *, dataset: "StreamData | None" = None,
-              use_struct_head=True, use_hash_identity=True, use_hist_feats=True,
+              use_struct_head: bool | None = None, use_hash_identity=True, use_hist_feats=True,
               use_precursor=True, use_config_node=True, save=True, return_scores=False,
               log_dir: str | None = None):
     """Train + evaluate the streaming TGN; returns a metrics dict.
@@ -570,6 +570,8 @@ def train_tgn(cfg: TGNConfig | None = None, *, dataset: "StreamData | None" = No
     """
     if cfg is None:
         cfg = TGNConfig()
+    if use_struct_head is None:
+        use_struct_head = cfg.use_struct_head
 
     writer = None
     if SummaryWriter is not None:
@@ -1441,6 +1443,7 @@ def train_tgn(cfg: TGNConfig | None = None, *, dataset: "StreamData | None" = No
             "use_resource_risk": cfg.use_resource_risk,
             "use_source_internal": cfg.use_source_internal,
             "guest_device_fallback": cfg.guest_device_fallback,
+            "use_struct_head": use_struct_head,
             "use_precursor": use_precursor,
             "edge_calibration": cfg.edge_calibration,
             "edge_combine": cfg.edge_combine,

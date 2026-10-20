@@ -77,7 +77,8 @@ def build_model(hp: dict, device: torch.device) -> ZTATemporalGraphNetwork:
     model.precursor_half_life = float(hp.get("precursor_half_life", TGNConfig.precursor_half_life))
     model.precursor_max_shift = float(hp.get("precursor_max_shift", TGNConfig.precursor_max_shift))
     # Plain-attribute toggles are not in the state_dict: restore them from hp
-    # (default True = the training default).
+    # (default True = the training default and compatibility with old checkpoints).
+    model.use_struct_head = bool(hp.get("use_struct_head", True))
     model.use_precursor = bool(hp.get("use_precursor", True))
     model.edge_combine = str(hp.get("edge_combine", "max")) # old checkpoint: max
     # Must match training, else source nodes carry a feature the model never learned.
