@@ -186,7 +186,7 @@ class TGNConfig:
     struct_aux_weight: float = 0.0
     # Structural compatibility head used in the anomaly score. Off removes its contribution
     # from training and serving; the checkpoint persists this setting.
-    use_struct_head: bool = False
+    use_struct_head: bool = True
     # Δt clamp and never-seen sentinel (seconds, one week) for both recency inputs. A
     # constant sentinel, not t_now, keeps train/val/test and serving encodings stationary
     # (see ZTATemporalGraphNetwork.pair_delta_t).
