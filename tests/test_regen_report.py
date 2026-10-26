@@ -220,4 +220,4 @@ def test_panel_d_toggles_one_component_per_arm_and_reuses_the_full_run(tmp_path,
     assert out["paired_full_minus_variant"]["no_struct"]["lat_auc"]["significant"]
     gen = tmp_path / "generated"
     assert "no precursor prior" in (gen / "tab_ablation.tex").read_text()
-    assert (gen / "tab_ablation_paired.tex").read_text().count("\\\\") == 7
+    assert (gen / "tab_ablation_paired.tex").read_text().count("\\\\") == 8

@@ -1,26 +1,4 @@
 """Baseline *non-temporal* GNN — TGN ablation for ZTA anomaly detection.
-
-Why this file exists
---------------------
-An FAIR ablation of the TGN that isolates the TEMPORAL component alone. The
-baseline keeps the exact same **de-circularised** negative-sampling curriculum as
-the TGN — structural negative with a random destination + Gaussian-noise
-contextual negative, equal weights — and the same link-prediction idea; it
-removes only the TEMPORAL machinery (per-node recurrent memory + temporal
-neighbourhood), replaced by a GNN over a **static** graph aggregated from the
-benign train interactions. The delta versus the TGN therefore measures how much
-the temporal dynamics are worth, at equal curriculum.
-
-NB (de-circularisation): the negatives do not use habituality/authorization
-(`adj`/`auth_mask`) nor a hard-negative x10: a construction derived from habituality
-would mirror the test's definition of lateral movement (authorized but non-habitual
-access) and inflate recall circularly. The negative destination is drawn uniformly
-over the resources, as in the TGN.
-
-Protocol (identical to the TGN for 1:1 comparability, see tests/baselines/README.md):
-same data/seed, same chronological 70/10/20 split, training on benign only,
-threshold calibrated on the benign validation slice at ``target_fpr``, aggregate
-metrics + per-type breakdown on the test segment.
 """
 
 import random
@@ -40,8 +18,7 @@ from graphagate.eval_common import binary_metrics, causal_hist_features, causal_
 class StaticGNN(nn.Module):
     """2-layer GraphSAGE encoder on the static graph + link predictor MLP.
 
-    Deliberately *simple* compared to the TGN: no recurrent memory, no temporal
-    neighbourhood, no cosine structural head, no hashed-identity embeddings.
+    no recurrent memory, no temporal neighbourhood, no cosine structural head, no hashed-identity embeddings.
     The node embeddings ``z`` are a function of the static features propagated
     on the graph aggregated from the benign train events.
     """
