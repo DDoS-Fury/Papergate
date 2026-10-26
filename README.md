@@ -19,9 +19,9 @@ Graphagate is a streaming Temporal Graph Network (TGN) for anomaly detection in 
 
 ## Architecture Overview
 
-Graphagate models access requests as dynamic edges over a heterogeneous graph. Each access event $e_i = (t_i, s_i, c_i, d_i, u_i, r_i, \mathbf{m}_i)$ is unrolled into a causal 5-edge chain spanning five typed entity nodes:
+Graphagate models access requests as dynamic edges over a heterogeneous graph. Each access event $`e_i = (t_i, s_i, c_i, d_i, u_i, r_i, \mathbf{m}_i)`$ is unrolled into a causal 5-edge chain spanning five typed entity nodes:
 
-| Entity Type | Key Format | Semantics | Static Attributes ($\mathbf{f}_v \in \mathbb{R}^{16}$) |
+| Entity Type | Key Format | Semantics | Static Attributes ($`\mathbf{f}_v \in \mathbb{R}^{16}`$) |
 |---|---|---|---|
 | **Source** ($s$) | `src:<ip>` | Client network IP (RFC1918 internal / external) | Network locality flag |
 | **Config** ($c$) | `conf:<ja3>` | Client TLS profile (`conf:guest` fallback) | Software client profile |
@@ -31,11 +31,11 @@ Graphagate models access requests as dynamic edges over a heterogeneous graph. E
 
 ```mermaid
 flowchart LR
-    S["Source (IP)<br/><code>src:ip</code>"]
-    C["Config (JA3)<br/><code>conf:ja3</code>"]
-    D["Device (TPM / Cookie)<br/><code>tpm:id / ck:id</code>"]
-    U["User (Principal)<br/><code>user_id</code>"]
-    R["Resource (URI)<br/><code>route</code>"]
+    S["Source (IP)<br/>src:ip"]
+    C["Config (JA3)<br/>conf:ja3"]
+    D["Device (TPM / Cookie)<br/>tpm:id / ck:id"]
+    U["User (Principal)<br/>user_id"]
+    R["Resource (URI)<br/>route"]
 
     S -->|"binding (0)"| C
     C -->|"binding (0)"| D
@@ -44,7 +44,7 @@ flowchart LR
     U -->|"access (telemetry m)"| R
 ```
 
-The access edge ($u \to r$) carries dynamic request telemetry $\mathbf{m}_i \in \mathbb{R}^7$ (TLS validity flag, IDS probes $s_1\text{--}s_3$, HTTP method, normalized role, and clearance). The four structural binding edges carry zero-vectors $\mathbf{0}$, capturing relational pattern breaks (such as novel credential-device combinations or tool shifts).
+The access edge ($u \to r$) carries dynamic request telemetry $`\mathbf{m}_i \in \mathbb{R}^7`$ (TLS validity flag, IDS probes $s_1\text{--}s_3$, HTTP method, normalized role, and clearance). The four structural binding edges carry zero-vectors $\mathbf{0}$, capturing relational pattern breaks (such as novel credential-device combinations or tool shifts).
 
 ---
 
@@ -52,16 +52,16 @@ The access edge ($u \to r$) carries dynamic request telemetry $\mathbf{m}_i \in 
 
 ```mermaid
 flowchart TD
-    EV["Access Event (s, c, d, u, r, m_i)"]
-    REG["NodeRegistry (Slot Mapping & LRU)"]
-    NL["MessageNeighborLoader (Ring Buffer, K=30)"]
-    MEM["TGN Memory (GRU, s_v)"]
-    GNN["Graph Attention (TransformerConv, 3-Hop)"]
-    LP["Feature Head: LinkPredictor (MLP)"]
-    SH["Structural Head: Cosine Similarity"]
-    CAL["Score Calibration & Precursor Prior"]
+    EV["Access Event<br/>(s, c, d, u, r, m_i)"]
+    REG["NodeRegistry<br/>(Slot Mapping & LRU)"]
+    NL["MessageNeighborLoader<br/>(Ring Buffer, K=30)"]
+    MEM["TGN Memory<br/>(GRU, s_v)"]
+    GNN["Graph Attention<br/>(TransformerConv, 3-Hop)"]
+    LP["Feature Head:<br/>LinkPredictor (MLP)"]
+    SH["Structural Head:<br/>Cosine Similarity"]
+    CAL["Score Calibration<br/>& Precursor Prior"]
     GATE{"OPA Policy Gate"}
-    UPD["Memory & Neighbor Update"]
+    UPD["Memory &<br/>Neighbor Update"]
 
     EV --> REG --> NL
     NL --> MEM --> GNN
@@ -70,19 +70,19 @@ flowchart TD
     GNN --> SH --> CAL
     CAL --> GATE
     GATE -->|ALLOW| UPD
-    GATE -->|DENY| ALARM["Record Alert State Only"]
+    GATE -->|DENY| ALARM["Record Alert<br/>State Only"]
     UPD -.-> MEM
     UPD -.-> NL
 ```
 
-1. **Hashed Identity (`hash_emb`)**: Open-world entity keys are mapped via deterministic BLAKE2b hashing into embedding buckets, producing inductive identity representations $\mathbf{h}_v \in \mathbb{R}^{16}$ for entities unseen during training.
-2. **Recurrent Node Memory (`memory`)**: A GRU-based memory module updates continuous-time state $\mathbf{s}_v \in \mathbb{R}^{256}$ from interaction messages.
+1. **Hashed Identity (`hash_emb`)**: Open-world entity keys are mapped via deterministic BLAKE2b hashing into embedding buckets, producing inductive identity representations $`\mathbf{h}_v \in \mathbb{R}^{16}`$ for entities unseen during training.
+2. **Recurrent Node Memory (`memory`)**: A GRU-based memory module updates continuous-time state $`\mathbf{s}_v \in \mathbb{R}^{256}`$ from interaction messages.
 3. **Bounded Neighbor Store (`neighbor_loader`)**: Fixed-size in-RAM ring buffers store the last $K=30$ temporal interactions per node, enabling message passing over recent history without graph database lookups.
-4. **Temporal Attention Encoder (`gnn`)**: A 3-hop `TransformerConv` encoder with residual connections embeds historical interaction features and harmonic relative time encodings $\phi(\Delta t) \in \mathbb{R}^{32}$.
+4. **Temporal Attention Encoder (`gnn`)**: A 3-hop `TransformerConv` encoder with residual connections embeds historical interaction features and harmonic relative time encodings $`\phi(\Delta t) \in \mathbb{R}^{32}`$.
 5. **Dual Scoring Heads**:
-   - **Feature Head (`link_pred`)**: A residual MLP evaluating node representations, edge telemetry, static features, and causal interaction counters $\mathbf{c}_{vw} = [\log(1+n_{vw}), \log(1+n_v), \frac{n_{vw}}{n_v+1}]$ to detect policy and contextual anomalies.
-   - **Structural Head (`struct_proj`)**: Computes scaled cosine compatibility $\gamma \langle \hat{\mathbf{z}}_s, \hat{\mathbf{z}}_d \rangle$ between projected node representations, detecting unhabitual topological pairings (lateral pivots).
-6. **Tail Calibration & Precursor Prior**: Edge anomaly logits are calibrated against empirical validation quantiles, boosted by an exponential kill-chain prior for entities with recent alerts ($t_{1/2} = 72\text{h}$), and evaluated against operational operating thresholds.
+   - **Feature Head (`link_pred`)**: A residual MLP evaluating node representations, edge telemetry, static features, and causal interaction counters $`\mathbf{c}_{vw} = [\log(1+n_{vw}), \log(1+n_v), \frac{n_{vw}}{n_v+1}]`$ to detect policy and contextual anomalies.
+   - **Structural Head (`struct_proj`)**: Computes scaled cosine compatibility $`\gamma \langle \hat{\mathbf{z}}_s, \hat{\mathbf{z}}_d \rangle`$ between projected node representations, detecting unhabitual topological pairings (lateral pivots).
+6. **Tail Calibration & Precursor Prior**: Edge anomaly logits are calibrated against empirical validation quantiles, boosted by an exponential kill-chain prior for entities with recent alerts ($`t_{1/2} = 72\text{h}`$), and evaluated against operational operating thresholds.
 7. **Predict-Then-Update Gate**: Memory updates occur strictly after external policy evaluation (`OPA ALLOW`). Denied requests record alert state without polluting temporal memory or neighbor history.
 
 ---
@@ -92,13 +92,17 @@ flowchart TD
 The model trains under a one-class / semi-supervised regime using policy-compliant benign traffic ($y=0$):
 
 - **Loss Formulation**:
-  $$\mathcal{L} = \mathcal{L}_{\mathrm{NCE}}^{\mathrm{access}} + \mathcal{L}_{\mathrm{pos}}^{\mathrm{access}} + \mathcal{L}_{\mathrm{ctx}} + \sum_{(v, w) \in E^{\mathrm{bind}}} \left(\mathcal{L}_{\mathrm{NCE}}^{(v,w)} + \mathcal{L}_{\mathrm{pos}}^{(v,w)}\right)$$
+
+  $$
+  \mathcal{L} = \mathcal{L}_{\mathrm{NCE}}^{\mathrm{access}} + \mathcal{L}_{\mathrm{pos}}^{\mathrm{access}} + \mathcal{L}_{\mathrm{ctx}} + \sum_{(v, w) \in E^{\mathrm{bind}}} \left(\mathcal{L}_{\mathrm{NCE}}^{(v,w)} + \mathcal{L}_{\mathrm{pos}}^{(v,w)}\right)
+  $$
+
   - **InfoNCE Ranking**: Ranks the true destination against $K=5$ negative destinations (75% uniform random, 25% active batch destinations).
   - **Positive BCE Anchoring**: Prevents logit drift, anchoring nominal benign scores for quantile calibration.
   - **Contextual Regularization**: Applies Gaussian perturbations to access telemetry to penalize off-nominal attributes.
 - **Two-Stage Schedule**:
   - **Stage 1**: End-to-end training across memory, attention backbone, and scoring heads using AdamW with cosine annealing.
-  - **Stage 2**: Memory and attention layers are frozen; the link predictor MLP is fine-tuned at reduced learning rate ($\mathrm{lr} = 10^{-4}$).
+  - **Stage 2**: Memory and attention layers are frozen; the link predictor MLP is fine-tuned at reduced learning rate ($`\mathrm{lr} = 10^{-4}`$).
 
 ---
 
@@ -164,21 +168,21 @@ The inference microservice (`src/serve_api.py`) runs on FastAPI at port `8088` (
 sequenceDiagram
     autonumber
     participant Client as Client
-    participant PEP as Policy Enforcement Point
-    participant PDP as Policy Decision Point (OPA)
-    participant TGN as Graphagate (/infer, /update)
+    participant PEP as Policy Enforcement<br/>Point (PEP)
+    participant PDP as Policy Decision<br/>Point (OPA)
+    participant TGN as Graphagate<br/>(/infer, /update)
 
     Client->>PEP: Access Request
-    PEP->>TGN: POST /infer (s, c, d, u, r, telemetry)
+    PEP->>TGN: POST /infer<br/>(s, c, d, u, r, telemetry)
     TGN-->>PEP: { anomaly_score, is_anomaly, alarm }
-    PEP->>PDP: Authorize (Policy + Anomaly Score)
+    PEP->>PDP: Authorize<br/>(Policy + Anomaly Score)
     alt Permitted (OPA ALLOW)
         PDP-->>PEP: Permit
-        PEP->>TGN: POST /update (Commit to Memory)
+        PEP->>TGN: POST /update<br/>(Commit to Memory)
         PEP-->>Client: HTTP 200 OK
     else Denied (OPA DENY)
         PDP-->>PEP: Deny
-        PEP->>TGN: POST /deny (Record Alert Only)
+        PEP->>TGN: POST /deny<br/>(Record Alert Only)
         PEP-->>Client: HTTP 403 Forbidden
     end
 ```
